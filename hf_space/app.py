@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -14,6 +15,9 @@ def load_app(module_name: str, file_path: Path):
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Cannot load module from {file_path}")
     mod = importlib.util.module_from_spec(spec)
+    # Register module so Pydantic forward-ref resolution can find typing symbols
+    # under the module namespace during route/model construction.
+    sys.modules[module_name] = mod
     spec.loader.exec_module(mod)
     if not hasattr(mod, "app"):
         raise RuntimeError(f"Module {file_path} has no 'app'")
