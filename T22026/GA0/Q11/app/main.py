@@ -79,6 +79,10 @@ def sentiment_batch(req: SentencesRequest) -> SentimentResponse:
 def sentiment_batch_ga0_q11(req: SentencesRequest) -> SentimentResponse:
     return sentiment_batch(req)
 
+@app.post("/q11/sentiment", response_model=SentimentResponse)
+def sentiment_batch_q11_alias(req: SentencesRequest) -> SentimentResponse:
+    return sentiment_batch(req)
+
 
 @app.post("/t22026/ga0/q11/sentiment", response_model=SentimentResponse)
 def sentiment_batch_t22026_ga0_q11(req: SentencesRequest) -> SentimentResponse:
@@ -97,6 +101,11 @@ def q11_home() -> str:
 
 @app.get("/sentiment", response_class=HTMLResponse)
 def q11_sentiment_page() -> str:
+    return Q11_UI
+
+
+@app.get("/q11/sentiment", response_class=HTMLResponse)
+def q11_sentiment_page_alias() -> str:
     return Q11_UI
 
 

@@ -134,6 +134,16 @@ def home() -> str:
     return Q19_UI
 
 
+@app.get("/q19", response_class=HTMLResponse)
+def home_q19() -> str:
+    return Q19_UI
+
+
+@app.get("/q19/", response_class=HTMLResponse)
+def home_q19_slash() -> str:
+    return Q19_UI
+
+
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok", "service": APP_NAME, "version": APP_VERSION}
