@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: t22026-ga0-q19-api
+    env: python
+    rootDir: T22026/GA0/Q19
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 3
+    autoDeploy: true
+    healthCheckPath: /health
+    envVars:
+      - key: MAX_ZIP_MB
+        value: "40"
+      - key: Q19_WORK_ROOT
+        value: work
+      - key: CORS_ALLOW_ORIGINS
+        value: "*"
+
+

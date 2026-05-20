@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: t22026-ga0-q5-api
+    env: python
+    rootDir: T22026/GA0/Q05
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 2
+    autoDeploy: true
+    healthCheckPath: /health
+    envVars:
+      - key: EXEC_TIMEOUT_SECONDS
+        value: "4"
+      - key: MAX_CODE_CHARS
+        value: "12000"
+      - key: AIPIPE_MODEL
+        value: "openai/gpt-4.1-nano"
+      - key: CORS_ALLOW_ORIGINS
+        value: "*"
+
+
