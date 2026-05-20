@@ -71,3 +71,40 @@ This file stores durable context across terms, graded assignments (GA), and ques
 - Added zip safety checks, upload limits, and guaranteed cleanup.
 - Added frontend usage page and Render deploy assets.
 
+
+### 2026-05-21 (Term Correction + Stability Pass)
+- Renamed project term namespace from `T2026` to `T22026` across folders, routes, docs, and configs.
+- Performed cross-question API review for Q5/Q10/Q11/Q14/Q16/Q18/Q19.
+- Fixed Q14 file-serving path traversal guard and Q19 recursive file discovery correctness.
+- Normalized Render service naming consistency (`t22026-*`).
+
+### 2026-05-21 (GitHub + Deploy Automation)
+- Linked and pushed workspace to GitHub repo: `GyaanFlow/tds-roe-solver-api-t12026`.
+- Resolved remote history and README conflicts; established `main` as deployment branch.
+
+### 2026-05-21 (Hugging Face Spaces Migration)
+- Added unified Spaces deployment layer:
+  - root `Dockerfile`
+  - `hf_space/app.py` unified mount gateway
+  - `hf_space/requirements.txt`
+  - `hf_space/README.md`
+- Added root README metadata block required by Hugging Face Spaces.
+- Patched dynamic module loading (`sys.modules` registration) to fix Pydantic forward-ref runtime error.
+- Fixed HF container path/env issues:
+  - `Q10_CSV_PATH` absolute container path
+  - robust `/tmp` fallback for Q14/Q16/Q19 writable directories.
+- Verified unified health routes locally for all mounted question services.
+
+### 2026-05-21 (UI/UX + Compatibility Hotfixes)
+- Improved unified hub visual design for cleaner navigation.
+- Enhanced Q11, Q16, Q19 UI behavior from raw JSON blocks toward structured result displays.
+- Added backward-compatible aliases to prevent Render route regressions:
+  - Q11: `/q11/sentiment` GET/POST
+  - Q16: `/q16` and `/q16/` UI aliases
+  - Q19: `/q19` and `/q19/` UI aliases
+- Synced fixes to both GitHub and Hugging Face Space repos.
+
+### 2026-05-21 (Exam-Logic Revalidation)
+- Re-read `exam-tds-2026-05-ga0.js` patterns for Q11/Q16/Q19.
+- Confirmed checker expectations focus on strict payload schemas and final hash token correctness.
+- Planned final UI wording alignment to emphasize “submit this hash” for Q16/Q19.
