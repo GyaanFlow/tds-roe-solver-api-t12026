@@ -29,6 +29,7 @@ def main():
     
     # 1. Main Hub
     test_endpoint("GET", "/")
+    test_endpoint("GET", "/api/version")
     
     # 2. Q5 Code Interpreter
     test_endpoint("GET", "/q5/health")

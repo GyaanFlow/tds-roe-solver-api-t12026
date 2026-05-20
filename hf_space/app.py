@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 
 BASE = Path(__file__).resolve().parents[1]
@@ -33,6 +35,19 @@ q18 = load_app("q18_app", BASE / "T22026" / "GA0" / "Q18" / "app" / "main.py")
 q19 = load_app("q19_app", BASE / "T22026" / "GA0" / "Q19" / "app" / "main.py")
 
 app = FastAPI(title="T22026 GA0 Unified API Hub", version="1.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=os.getenv("CORS_ALLOW_ORIGINS", "*").split(","),
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.get("/api/version")
+def api_version():
+    return {"version": "mock-0.0.1"}
 
 
 @app.get("/", response_class=HTMLResponse)
