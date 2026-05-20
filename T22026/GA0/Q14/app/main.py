@@ -17,7 +17,12 @@ APP_VERSION = "1.0.0"
 GRID = 5
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "12"))
 OUTPUT_DIR = Path(os.getenv("Q14_OUTPUT_DIR", "output"))
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+try:
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+except Exception:
+    # Fallback for restricted/containerized filesystems.
+    OUTPUT_DIR = Path("/tmp/q14_output")
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 TILE_MAP: Dict[Tuple[int, int], Tuple[int, int]] = {
     (0, 0): (2, 1), (0, 1): (1, 1), (0, 2): (4, 1), (0, 3): (0, 3), (0, 4): (0, 1),
@@ -57,7 +62,7 @@ async function run(){
  const file=document.getElementById('f').files[0];
  if(!file){document.getElementById('out').textContent='Select a WEBP file first.';return;}
  const fd=new FormData(); fd.append('image',file);
- const r=await fetch('/ga0/q14/rebuild-grayscale',{method:'POST',body:fd});
+ const r=await fetch('ga0/q14/rebuild-grayscale',{method:'POST',body:fd});
  const j=await r.json();
  if(!r.ok){document.getElementById('out').textContent=JSON.stringify(j,null,2);return;}
  const lines=[
@@ -186,5 +191,6 @@ def rebuild_grayscale_ga0_q14(image: UploadFile = File(...)) -> dict:
 @app.post("/t22026/ga0/q14/rebuild-grayscale")
 def rebuild_grayscale_t22026_ga0_q14(image: UploadFile = File(...)) -> dict:
     return _rebuild_grayscale(image)
+
 
 
