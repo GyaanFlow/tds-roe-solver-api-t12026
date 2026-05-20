@@ -39,17 +39,35 @@ app = FastAPI(title="T22026 GA0 Unified API Hub", version="1.0.0")
 def home() -> str:
     return """
 <!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
-<title>T22026 API Hub</title><style>body{font-family:Segoe UI,Arial,sans-serif;background:linear-gradient(120deg,#f3f9ff,#f7fff5);margin:0}.wrap{max-width:1000px;margin:24px auto;padding:20px}.card{background:#fff;border-radius:14px;padding:18px;box-shadow:0 8px 24px rgba(0,0,0,.08)}a{display:block;margin:8px 0;color:#0f4c81;text-decoration:none;font-weight:600}</style></head>
-<body><div class='wrap'><div class='card'><h2>T22026 GA0 Unified API Hub</h2><p>All question APIs are mounted below:</p>
-<a href='/q5/'>Q5 UI</a>
-<a href='/q10/'>Q10 UI</a>
-<a href='/q11/'>Q11 UI</a>
-<a href='/q14/'>Q14 UI</a>
-<a href='/q16/'>Q16 UI</a>
-<a href='/q18/'>Q18 UI</a>
-<a href='/q19/'>Q19 UI</a>
-<p>Health endpoints: <code>/q5/health</code>, <code>/q10/health</code>, etc.</p>
-</div></div></body></html>
+<title>T22026 API Hub</title>
+<style>
+:root{--bg1:#e9f4ff;--bg2:#f4ffe9;--ink:#0f172a;--muted:#475569;--card:#ffffff;--accent:#0f4c81}
+*{box-sizing:border-box} body{margin:0;font-family:ui-sans-serif,Segoe UI,Arial;background:linear-gradient(120deg,var(--bg1),var(--bg2));color:var(--ink)}
+.wrap{max-width:1100px;margin:24px auto;padding:20px}
+.hero{background:var(--card);border-radius:18px;padding:22px;box-shadow:0 10px 30px rgba(2,8,23,.08)}
+.hero h1{margin:0 0 6px;font-size:1.7rem}.hero p{margin:0;color:var(--muted)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-top:18px}
+.tile{background:var(--card);border-radius:14px;padding:14px 14px 10px;box-shadow:0 8px 24px rgba(2,8,23,.06)}
+.tile h3{margin:0 0 8px;font-size:1.05rem}
+.tile a{display:inline-block;margin:4px 0;padding:7px 10px;border-radius:10px;text-decoration:none;background:#eef6ff;color:var(--accent);font-weight:600}
+.foot{margin-top:14px;color:var(--muted);font-size:.95rem}
+</style></head>
+<body><div class='wrap'>
+<div class='hero'>
+<h1>T22026 GA0 Unified API Hub</h1>
+<p>All questions are live here with interactive UIs and APIs. Open a card, test quickly, then use route aliases for submissions.</p>
+<div class='grid'>
+<div class='tile'><h3>Q5 Code Interpreter</h3><a href='/q5/'>Open UI</a> <a href='/q5/health'>Health</a></div>
+<div class='tile'><h3>Q10 Student API</h3><a href='/q10/'>Open UI</a> <a href='/q10/health'>Health</a></div>
+<div class='tile'><h3>Q11 Sentiment</h3><a href='/q11/'>Open UI</a> <a href='/q11/health'>Health</a></div>
+<div class='tile'><h3>Q14 Image Rebuild</h3><a href='/q14/'>Open UI</a> <a href='/q14/health'>Health</a></div>
+<div class='tile'><h3>Q16 Move/Rename</h3><a href='/q16/'>Open UI</a> <a href='/q16/health'>Health</a></div>
+<div class='tile'><h3>Q18 Proxy Helper</h3><a href='/q18/'>Open UI</a> <a href='/q18/health'>Health</a></div>
+<div class='tile'><h3>Q19 Replace/Hash</h3><a href='/q19/'>Open UI</a> <a href='/q19/health'>Health</a></div>
+</div>
+<p class='foot'>If one question fails, check its health endpoint first. Upload-based routes (Q14/Q16/Q19) run in temporary storage and auto-clean.</p>
+</div>
+</div></body></html>
 """
 
 

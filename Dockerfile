@@ -14,6 +14,7 @@ COPY . /app
 ENV Q14_OUTPUT_DIR=/tmp/q14_output
 ENV Q16_WORK_ROOT=/tmp/q16_work
 ENV Q19_WORK_ROOT=/tmp/q19_work
+ENV Q10_CSV_PATH=/app/T22026/GA0/Q10/q-fastapi.csv
 ENV CORS_ALLOW_ORIGINS=*
 
 RUN mkdir -p /tmp/q14_output /tmp/q16_work /tmp/q19_work
