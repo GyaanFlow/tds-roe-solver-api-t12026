@@ -81,7 +81,7 @@ def process_files(base_dir: Path) -> tuple[int, int, str, str]:
         new_content = re.sub(r"IITM", "IIT Madras", content, flags=re.IGNORECASE)
         if new_content != content:
             modified += 1
-            p.write_text(new_content, encoding="utf-8", newline="")
+            p.write_bytes(new_content.encode("utf-8"))
 
     h = hashlib.sha256()
     for p in txt_files:

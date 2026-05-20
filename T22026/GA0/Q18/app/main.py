@@ -107,7 +107,7 @@ def get_session(session_id: str) -> SessionData:
 Q18_UI = """
 <!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
 <title>Q18 API</title><style>body{font-family:Segoe UI,Arial,sans-serif;background:linear-gradient(120deg,#effaf7,#edf2ff);margin:0}.wrap{max-width:980px;margin:24px auto;padding:20px}.card{background:#fff;border-radius:14px;padding:18px;box-shadow:0 8px 24px rgba(0,0,0,.08)}input{width:100%;padding:10px;border:1px solid #cfd8e3;border-radius:10px}button{background:#0f4c81;color:#fff;border:0;padding:10px 14px;border-radius:10px;cursor:pointer}pre{background:#0b1020;color:#d1e7ff;padding:12px;border-radius:10px;overflow:auto}</style></head><body><div class='wrap'><div class='card'><h2>T22026 GA0 Q18: Robust Proxy Helper</h2><p>Create a session with your email. Use returned <code>base_url_to_submit</code>.</p><p>Routes: <code>/q18/setup</code>, <code>/ga0/q18/setup</code>, <code>/t22026/ga0/q18/setup</code></p>
-<input id='email' placeholder='you@example.com'><br><br><input id='token' placeholder='optional ngrok token'><br><br><button onclick='run()'>Generate Session</button><pre id='out'>Waiting...</pre></div></div><script>async function run(){const body={email:document.getElementById('email').value.trim(),ngrok_token:document.getElementById('token').value.trim()||null};const r=await fetch('/ga0/q18/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});document.getElementById('out').textContent=JSON.stringify(await r.json(),null,2);}</script></body></html>
+<input id='email' placeholder='you@example.com'><br><br><input id='token' placeholder='optional ngrok token'><br><br><button onclick='run()'>Generate Session</button><pre id='out'>Waiting...</pre></div></div><script>async function run(){const body={email:document.getElementById('email').value.trim(),ngrok_token:document.getElementById('token').value.trim()||null};const r=await fetch('ga0/q18/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});document.getElementById('out').textContent=JSON.stringify(await r.json(),null,2);}</script></body></html>
 """
 
 
@@ -151,12 +151,14 @@ def setup(req: Q18SetupRequest, request: Request) -> Q18SetupResponse:
 
 
 @app.options("/q18/session/{session_id}/{path:path}")
+@app.options("/session/{session_id}/{path:path}")
 def proxy_preflight(session_id: str, path: str):
     s = get_session(session_id)
     return Response(status_code=200, headers=make_proxy_headers(s.email))
 
 
 @app.api_route("/q18/session/{session_id}/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"])
+@app.api_route("/session/{session_id}/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"])
 async def proxy(session_id: str, path: str, request: Request):
     s = get_session(session_id)
     out_headers = make_proxy_headers(s.email)
@@ -183,4 +185,5 @@ async def proxy(session_id: str, path: str, request: Request):
         if path == "api/version":
             return JSONResponse(status_code=200, content={"version": "mock-0.0.1"}, headers=out_headers)
         raise HTTPException(status_code=502, detail="Upstream ollama unavailable.")
+
 

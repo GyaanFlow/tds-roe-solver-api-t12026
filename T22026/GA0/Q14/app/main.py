@@ -100,7 +100,7 @@ def process_image(src_bytes: bytes) -> tuple[bytes, bytes | None, tuple[int, int
     for y in range(height):
         for x in range(width):
             r, g, b, a = pixels[x, y]
-            gray = int(round(0.2126 * r + 0.7152 * g + 0.0722 * b))
+            gray = int(0.2126 * r + 0.7152 * g + 0.0722 * b + 0.5)
             if gray < 0:
                 gray = 0
             elif gray > 255:

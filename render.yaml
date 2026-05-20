@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: tds-roe-solver-api
+    env: docker
+    plan: free
+    region: oregon
+    envVars:
+      - key: CORS_ALLOW_ORIGINS
+        value: "*"
+      - key: Q10_CSV_PATH
+        value: "/app/T22026/GA0/Q10/q-fastapi.csv"
+      - key: Q14_OUTPUT_DIR
+        value: "/tmp/q14_output"
+      - key: Q16_WORK_ROOT
+        value: "/tmp/q16_work"
+      - key: Q19_WORK_ROOT
+        value: "/tmp/q19_work"
+    healthCheckPath: /q10/health

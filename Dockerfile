@@ -20,4 +20,4 @@ ENV CORS_ALLOW_ORIGINS=*
 RUN mkdir -p /tmp/q14_output /tmp/q16_work /tmp/q19_work
 
 EXPOSE 7860
-CMD ["uvicorn", "hf_space.app:app", "--host", "0.0.0.0", "--port", "7860"]
+CMD ["sh", "-c", "uvicorn hf_space.app:app --host 0.0.0.0 --port ${PORT:-7860}"]

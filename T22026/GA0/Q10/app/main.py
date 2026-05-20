@@ -125,12 +125,13 @@ def get_students_t22026_ga0_q10(class_: Optional[List[str]] = Query(default=None
 
 
 Q10_UI = """
-<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Q10 API</title><style>body{font-family:Segoe UI,Arial,sans-serif;background:linear-gradient(120deg,#fff8ef,#e9f7ff);margin:0}.wrap{max-width:960px;margin:24px auto;padding:20px}.card{background:#fff;border-radius:14px;padding:18px;box-shadow:0 8px 24px rgba(0,0,0,.08)}input{width:100%;padding:10px;border:1px solid #cfd8e3;border-radius:10px}button{background:#1d4ed8;color:#fff;border:0;padding:10px 14px;border-radius:10px;cursor:pointer}pre{background:#0b1020;color:#d1e7ff;padding:12px;border-radius:10px;overflow:auto}</style></head><body><div class='wrap'><div class='card'><h2>T22026 GA0 Q10: Student API</h2><p>Routes: <code>/api</code>, <code>/ga0/q10/api</code>, <code>/t22026/ga0/q10/api</code></p><p>Optional class filter (comma-separated):</p><input id='cls' placeholder='1A,1B'><br><br><button onclick='run()'>Fetch</button><pre id='out'>Waiting...</pre></div></div><script>async function run(){const v=document.getElementById('cls').value.trim();let url='/ga0/q10/api';if(v){url+='?'+v.split(',').map(x=>'class='+encodeURIComponent(x.trim())).join('&')}const r=await fetch(url);document.getElementById('out').textContent=JSON.stringify(await r.json(),null,2);}</script></body></html>
+<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Q10 API</title><style>body{font-family:Segoe UI,Arial,sans-serif;background:linear-gradient(120deg,#fff8ef,#e9f7ff);margin:0}.wrap{max-width:960px;margin:24px auto;padding:20px}.card{background:#fff;border-radius:14px;padding:18px;box-shadow:0 8px 24px rgba(0,0,0,.08)}input{width:100%;padding:10px;border:1px solid #cfd8e3;border-radius:10px}button{background:#1d4ed8;color:#fff;border:0;padding:10px 14px;border-radius:10px;cursor:pointer}pre{background:#0b1020;color:#d1e7ff;padding:12px;border-radius:10px;overflow:auto}</style></head><body><div class='wrap'><div class='card'><h2>T22026 GA0 Q10: Student API</h2><p>Routes: <code>/api</code>, <code>/ga0/q10/api</code>, <code>/t22026/ga0/q10/api</code></p><p>Optional class filter (comma-separated):</p><input id='cls' placeholder='1A,1B'><br><br><button onclick='run()'>Fetch</button><pre id='out'>Waiting...</pre></div></div><script>async function run(){const v=document.getElementById('cls').value.trim();let url='ga0/q10/api';if(v){url+='?'+v.split(',').map(x=>'class='+encodeURIComponent(x.trim())).join('&')}const r=await fetch(url);document.getElementById('out').textContent=JSON.stringify(await r.json(),null,2);}</script></body></html>
 """
 
 @app.get("/", response_class=HTMLResponse)
 def q10_home() -> str:
     return Q10_UI
+
 
 
 

@@ -71,15 +71,6 @@ def _flatten_files(extract_dir: Path, flat_dir: Path) -> int:
         for fname in files:
             src = Path(root) / fname
             dest = flat_dir / fname
-            if dest.exists():
-                base, suf = dest.stem, dest.suffix
-                i = 1
-                while True:
-                    candidate = flat_dir / f"{base}_{i}{suf}"
-                    if not candidate.exists():
-                        dest = candidate
-                        break
-                    i += 1
             shutil.move(str(src), str(dest))
             moved += 1
     return moved
@@ -87,23 +78,16 @@ def _flatten_files(extract_dir: Path, flat_dir: Path) -> int:
 
 def _rename_advance_digits(flat_dir: Path) -> int:
     renamed = 0
-    for p in sorted(flat_dir.iterdir(), key=lambda x: x.name):
+    # Sort in reverse order to prevent intermediate digit shift collisions (e.g. file1 -> file2 when file2 exists)
+    for p in sorted(flat_dir.iterdir(), key=lambda x: x.name, reverse=True):
         if not p.is_file():
             continue
         new_name = p.name.translate(DIGIT_MAP)
         target = flat_dir / new_name
-        if target.exists() and target.resolve() != p.resolve():
-            base, suf = Path(new_name).stem, Path(new_name).suffix
-            i = 1
-            while True:
-                candidate = flat_dir / f"{base}_{i}{suf}"
-                if not candidate.exists():
-                    target = candidate
-                    break
-                i += 1
         p.rename(target)
         renamed += 1
     return renamed
+
 
 
 def _compute_answer(flat_dir: Path) -> tuple[str, str]:
