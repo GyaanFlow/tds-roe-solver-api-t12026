@@ -88,11 +88,332 @@ def sentiment_batch_q11_alias(req: SentencesRequest) -> SentimentResponse:
 def sentiment_batch_t22026_ga0_q11(req: SentencesRequest) -> SentimentResponse:
     return sentiment_batch(req)
 
-Q11_UI = """
-<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Q11 API</title><style>body{font-family:Segoe UI,Arial,sans-serif;background:linear-gradient(120deg,#eefcf6,#e9f1ff);margin:0}.wrap{max-width:960px;margin:24px auto;padding:20px}.card{background:#fff;border-radius:14px;padding:18px;box-shadow:0 8px 24px rgba(0,0,0,.08)}textarea{width:100%;padding:10px;border:1px solid #cfd8e3;border-radius:10px}button{background:#047857;color:#fff;border:0;padding:10px 14px;border-radius:10px;cursor:pointer}.grid{display:grid;gap:10px;margin-top:12px}.item{padding:10px;border-radius:10px;background:#f8fafc;border:1px solid #e2e8f0}.tag{padding:3px 8px;border-radius:999px;font-size:12px;font-weight:700}.happy{background:#dcfce7;color:#166534}.sad{background:#fee2e2;color:#991b1b}.neutral{background:#e2e8f0;color:#334155}</style></head><body><div class='wrap'><div class='card'><h2>T22026 GA0 Q11: Sentiment API</h2><p>Routes: <code>/sentiment</code>, <code>/ga0/q11/sentiment</code>, <code>/t22026/ga0/q11/sentiment</code></p><p>Enter one sentence per line:</p><textarea id='txt' rows='8'>I love this
-This is bad
-It is okay</textarea><br><br><button onclick='run()'>Analyze</button><div id='out' class='grid'></div></div></div><script>async function run(){const s=document.getElementById('txt').value.split(/\\r?\\n/).filter(Boolean);const r=await fetch('ga0/q11/sentiment',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sentences:s})});const data=await r.json();const out=document.getElementById('out');if(!r.ok){out.innerHTML='<div class=\"item\">'+(data.detail||'Request failed')+'</div>';return;}out.innerHTML=(data.results||[]).map(x=>`<div class=\"item\"><div>${x.sentence}</div><div style=\"margin-top:6px\"><span class=\"tag ${x.sentiment}\">${x.sentiment}</span></div></div>`).join('');}</script></body></html>
+Q11_UI = """<!doctype html>
+<html>
+<head>
+  <meta charset='utf-8'>
+  <meta name='viewport' content='width=device-width,initial-scale=1'>
+  <title>Q11 - FastAPI Batch Sentiment Solver</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --primary: #10b981;
+      --primary-hover: #059669;
+      --primary-glow: rgba(16, 185, 129, 0.25);
+      --bg: #090d16;
+      --card-bg: rgba(17, 24, 39, 0.7);
+      --border: rgba(255, 255, 255, 0.08);
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+    }
+    body {
+      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: radial-gradient(circle at top left, #090d16, #062016, #090d16);
+      color: var(--text);
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .wrap {
+      width: 100%;
+      max-width: 800px;
+      padding: 24px;
+      box-sizing: border-box;
+    }
+    .card {
+      background: var(--card-bg);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      padding: 32px;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.35);
+    }
+    h2 {
+      margin-top: 0;
+      font-weight: 700;
+      font-size: 1.8rem;
+      background: linear-gradient(to right, #34d399, #10b981);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 8px;
+    }
+    p {
+      color: var(--text-muted);
+      font-size: 0.95rem;
+      line-height: 1.5;
+    }
+    .routes {
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 12px;
+      padding: 12px;
+      font-size: 0.85rem;
+      margin-bottom: 24px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    .routes code {
+      color: #34d399;
+    }
+    .submit-container {
+      background: rgba(16, 185, 129, 0.1);
+      border: 1px solid rgba(16, 185, 129, 0.25);
+      border-radius: 16px;
+      padding: 20px;
+      margin-bottom: 28px;
+      text-align: center;
+    }
+    .submit-title {
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #a7f3d0;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+    .submit-url-box {
+      background: rgba(15, 23, 42, 0.7);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      padding: 12px;
+      font-family: monospace;
+      font-size: 0.95rem;
+      color: #34d399;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      word-break: break-all;
+    }
+    .btn-copy {
+      background: #059669;
+      color: white;
+      border: none;
+      padding: 6px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-size: 0.8rem;
+      font-weight: 600;
+      transition: all 0.2s;
+    }
+    .btn-copy:hover {
+      background: #047857;
+    }
+    .form-group {
+      margin-bottom: 24px;
+    }
+    label {
+      display: block;
+      font-weight: 500;
+      margin-bottom: 8px;
+      font-size: 0.9rem;
+      color: #e2e8f0;
+    }
+    textarea {
+      width: 100%;
+      padding: 14px 16px;
+      background: rgba(15, 23, 42, 0.5);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      color: var(--text);
+      font-family: inherit;
+      font-size: 0.95rem;
+      transition: all 0.3s;
+      box-sizing: border-box;
+      resize: vertical;
+    }
+    textarea:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px var(--primary-glow);
+    }
+    button.btn-solve {
+      width: 100%;
+      background: linear-gradient(135deg, #10b981, #059669);
+      color: #fff;
+      border: 0;
+      padding: 14px;
+      font-size: 1rem;
+      font-weight: 600;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: all 0.3s;
+      box-shadow: 0 4px 12px rgba(16, 185, 129, 0.2);
+    }
+    button.btn-solve:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(16, 185, 129, 0.35);
+    }
+    button.btn-solve:active {
+      transform: translateY(0);
+    }
+    .results-area {
+      margin-top: 28px;
+      display: none;
+    }
+    .grid {
+      display: grid;
+      gap: 12px;
+      margin-top: 16px;
+      max-height: 320px;
+      overflow-y: auto;
+      padding-right: 4px;
+    }
+    .item {
+      padding: 16px;
+      border-radius: 12px;
+      background: rgba(15, 23, 42, 0.4);
+      border: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+    }
+    .sentence-text {
+      font-size: 0.9rem;
+      line-height: 1.4;
+    }
+    .tag {
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      border: 1px solid transparent;
+    }
+    .happy {
+      background: rgba(16, 185, 129, 0.15);
+      color: #34d399;
+      border-color: rgba(16, 185, 129, 0.3);
+    }
+    .sad {
+      background: rgba(239, 68, 68, 0.15);
+      color: #fca5a5;
+      border-color: rgba(239, 68, 68, 0.3);
+    }
+    .neutral {
+      background: rgba(148, 163, 184, 0.15);
+      color: #cbd5e1;
+      border-color: rgba(148, 163, 184, 0.3);
+    }
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: #10b981;
+      color: white;
+      padding: 12px 24px;
+      border-radius: 8px;
+      font-weight: 600;
+      box-shadow: 0 4px 12px rgba(16, 185, 129, 0.2);
+      transform: translateY(100px);
+      opacity: 0;
+      transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .toast.show {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  </style>
+</head>
+<body>
+  <div class='wrap'>
+    <div class='card'>
+      <h2>T22026 GA0 Q11: Sentiment API Service</h2>
+      <p>FastAPI microservice running robust batch sentiment analysis using VADER Sentiment Intensity Analyzer.</p>
+      
+      <div class='routes'>
+        <span>Local Route: <code>/sentiment</code></span>
+        <span>GA Route: <code>/ga0/q11/sentiment</code></span>
+      </div>
+
+      <div class='submit-container'>
+        <div class='submit-title'>Submit this endpoint URL on the exam page</div>
+        <div class='submit-url-box'>
+          <span id='sub-url'></span>
+          <button class='btn-copy' onclick='copyEndpoint()'>Copy URL</button>
+        </div>
+        <p style="margin: 8px 0 0; font-size: 0.85rem; color: #10b981; font-weight: 600;">✅ SUBMIT THIS URL FOR Q11</p>
+      </div>
+
+      <div class='form-group'>
+        <label for='txt'>Interactive Sandbox: Test Sentences (one per line)</label>
+        <textarea id='txt' rows='6'>I absolutely love this product, it changed my life!
+This is the worst experience I've ever had.
+The weather today is quite average.</textarea>
+      </div>
+
+      <button class='btn-solve' onclick='run()'>Analyze Sentiment Batch</button>
+
+      <div id='res-area' class='results-area'>
+        <h3 style="margin: 0; font-size: 1.1rem;">Analysis Results</h3>
+        <div id='out' class='grid'></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast">Copied to clipboard!</div>
+
+  <script>
+    document.getElementById('sub-url').textContent = window.location.origin + '/ga0/q11/sentiment';
+
+    function copyEndpoint() {
+      const url = document.getElementById('sub-url').textContent;
+      navigator.clipboard.writeText(url);
+      showToast();
+    }
+
+    function showToast() {
+      const t = document.getElementById('toast');
+      t.classList.add('show');
+      setTimeout(() => t.classList.remove('show'), 2000);
+    }
+
+    async function run() {
+      const text = document.getElementById('txt').value;
+      const sentences = text.split('\\n').map(x => x.trim()).filter(Boolean);
+      
+      try {
+        const r = await fetch('/ga0/q11/sentiment', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sentences: sentences })
+        });
+        
+        const data = await r.json();
+        const out = document.getElementById('out');
+        
+        if (!r.ok) {
+          out.innerHTML = `<div class="item sad" style="justify-content: center;">${data.detail || 'Request failed'}</div>`;
+          document.getElementById('res-area').style.display = 'block';
+          return;
+        }
+        
+        out.innerHTML = (data.results || []).map(x => `
+          <div class="item">
+            <div class="sentence-text">${x.sentence}</div>
+            <span class="tag ${x.sentiment}">${x.sentiment}</span>
+          </div>
+        `).join('');
+        
+        document.getElementById('res-area').style.display = 'block';
+      } catch (err) {
+        alert('Analysis failed: ' + err.message);
+      }
+    }
+  </script>
+</body>
+</html>
 """
+
 
 @app.get("/", response_class=HTMLResponse)
 def q11_home() -> str:

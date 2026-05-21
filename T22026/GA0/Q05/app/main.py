@@ -184,8 +184,330 @@ def code_interpreter_t22026_ga0_q5(req: CodeRequest, x_aipipe_token: Optional[st
     # Fully qualified term+GA+question route for long-term compatibility.
     return code_interpreter(req=req, x_aipipe_token=x_aipipe_token)
 
-Q5_UI = """
-<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Q5 API</title><style>body{font-family:Segoe UI,Arial,sans-serif;background:linear-gradient(120deg,#f8ffef,#e9f6ff);margin:0}.wrap{max-width:960px;margin:24px auto;padding:20px}.card{background:#fff;border-radius:14px;padding:18px;box-shadow:0 8px 24px rgba(0,0,0,.08)}textarea,input{width:100%;padding:10px;border:1px solid #cfd8e3;border-radius:10px}button{background:#0f766e;color:#fff;border:0;padding:10px 14px;border-radius:10px;cursor:pointer}pre{background:#0b1020;color:#d1e7ff;padding:12px;border-radius:10px;overflow:auto}</style></head><body><div class='wrap'><div class='card'><h2>T22026 GA0 Q5: Code Interpreter API</h2><p>Routes: <code>/code-interpreter</code>, <code>/ga0/q5/code-interpreter</code>, <code>/t22026/ga0/q5/code-interpreter</code></p><p>Provide AIPipe token and Python code.</p><input id='tok' placeholder='AIPipe token'><br><br><textarea id='code' rows='8'>print('hello from q5')</textarea><br><br><button onclick='run()'>Run</button><pre id='out'>Waiting...</pre></div></div><script>async function run(){const r=await fetch('ga0/q5/code-interpreter',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({aipipe_token:document.getElementById('tok').value,code:document.getElementById('code').value})});document.getElementById('out').textContent=JSON.stringify(await r.json(),null,2);}</script></body></html>
+Q5_UI = """<!doctype html>
+<html>
+<head>
+  <meta charset='utf-8'>
+  <meta name='viewport' content='width=device-width,initial-scale=1'>
+  <title>Q5 - Code Interpreter Service</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --primary: #0d9488;
+      --primary-hover: #0f766e;
+      --bg: #0f172a;
+      --card-bg: rgba(30, 41, 59, 0.7);
+      --border: rgba(255, 255, 255, 0.08);
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+    }
+    body {
+      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: radial-gradient(circle at top left, #0f172a, #042f2e, #0f172a);
+      color: var(--text);
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .wrap {
+      width: 100%;
+      max-width: 700px;
+      padding: 24px;
+      box-sizing: border-box;
+    }
+    .card {
+      background: var(--card-bg);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      padding: 32px;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+    }
+    h2 {
+      margin-top: 0;
+      font-weight: 700;
+      font-size: 1.8rem;
+      background: linear-gradient(to right, #2dd4bf, #3b82f6);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 8px;
+    }
+    p {
+      color: var(--text-muted);
+      font-size: 0.95rem;
+      line-height: 1.5;
+    }
+    .routes {
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 12px;
+      padding: 12px;
+      font-size: 0.85rem;
+      margin-bottom: 24px;
+    }
+    .routes code {
+      color: #38bdf8;
+    }
+    .form-group {
+      margin-bottom: 20px;
+    }
+    label {
+      display: block;
+      font-weight: 500;
+      margin-bottom: 8px;
+      font-size: 0.9rem;
+      color: #e2e8f0;
+    }
+    input[type='text'], textarea {
+      width: 100%;
+      padding: 12px 16px;
+      background: rgba(15, 23, 42, 0.5);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      color: var(--text);
+      font-size: 0.95rem;
+      transition: all 0.3s;
+      box-sizing: border-box;
+      font-family: inherit;
+    }
+    textarea {
+      font-family: 'Courier New', Courier, monospace;
+      font-size: 0.9rem;
+      resize: vertical;
+    }
+    input[type='text']:focus, textarea:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(13, 148, 136, 0.15);
+    }
+    button.btn-solve {
+      width: 100%;
+      background: linear-gradient(135deg, #0d9488, #0f766e);
+      color: #fff;
+      border: 0;
+      padding: 14px;
+      font-size: 1rem;
+      font-weight: 600;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: all 0.3s;
+      box-shadow: 0 4px 12px rgba(13, 148, 136, 0.2);
+    }
+    button.btn-solve:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(13, 148, 136, 0.35);
+    }
+    #out {
+      margin-top: 24px;
+      transition: all 0.3s ease;
+    }
+    .error-card {
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid rgba(239, 68, 68, 0.2);
+      color: #fca5a5;
+      padding: 16px;
+      border-radius: 12px;
+      font-size: 0.95rem;
+    }
+    .success-card {
+      background: rgba(16, 185, 129, 0.1);
+      border: 1px solid rgba(16, 185, 129, 0.25);
+      border-radius: 16px;
+      padding: 20px;
+    }
+    .out-title {
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #2dd4bf;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+    .console-value {
+      font-family: monospace;
+      font-size: 0.95rem;
+      background: rgba(15, 23, 42, 0.7);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      padding: 14px;
+      border-radius: 8px;
+      color: #38bdf8;
+      word-break: break-all;
+      white-space: pre-wrap;
+    }
+    .submit-container {
+      background: rgba(13, 148, 136, 0.1);
+      border: 1px solid rgba(13, 148, 136, 0.25);
+      border-radius: 16px;
+      padding: 20px;
+      margin-bottom: 28px;
+      text-align: center;
+    }
+    .submit-title {
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #2dd4bf;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+    .submit-url-box {
+      background: rgba(15, 23, 42, 0.7);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      padding: 12px;
+      font-family: monospace;
+      font-size: 0.95rem;
+      color: #2dd4bf;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      word-break: break-all;
+    }
+    .btn-copy {
+      background: #0d9488;
+      color: white;
+      border: none;
+      padding: 6px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 0.8rem;
+      font-weight: 600;
+      transition: all 0.2s;
+    }
+    .btn-copy:hover {
+      background: #0f766e;
+    }
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: #10b981;
+      color: white;
+      padding: 12px 24px;
+      border-radius: 8px;
+      font-weight: 600;
+      box-shadow: 0 4px 12px rgba(16, 185, 129, 0.2);
+      transform: translateY(100px);
+      opacity: 0;
+      transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+      z-index: 1000;
+    }
+    .toast.show {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  </style>
+</head>
+<body>
+  <div class='wrap'>
+    <div class='card'>
+      <h2>Q5: Code Interpreter Service</h2>
+      <p>Execute arbitrary Python code and dynamically trace line numbers for primary execution errors using deep traceback parsing.</p>
+      
+      <div class="routes">
+        API Route: <code>POST /ga0/q5/code-interpreter</code>
+      </div>
+
+      <div class='submit-container'>
+        <div class='submit-title'>Submit this endpoint URL on the exam page</div>
+        <div class='submit-url-box'>
+          <span id='sub-url'></span>
+          <button class='btn-copy' onclick='copyEndpoint()'>Copy URL</button>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="tok">AIPipe Token (Optional)</label>
+        <input type="text" id="tok" placeholder="aipipe_xxxxxxxx">
+      </div>
+
+      <div class="form-group">
+        <label for="code">Python Source Code</label>
+        <textarea id="code" rows="8"># Test program
+a = 10
+b = 0
+result = a / b  # Division by zero
+print(result)</textarea>
+      </div>
+
+      <button class="btn-solve" onclick='run()'>⚡ Execute & Analyze Traceback</button>
+
+      <div id='out'></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script>
+    function updateSubmitURL() {
+      const subUrl = window.location.origin + '/q5/ga0/q5/code-interpreter';
+      document.getElementById('sub-url').innerText = subUrl;
+    }
+    window.addEventListener('DOMContentLoaded', updateSubmitURL);
+
+    function copyEndpoint() {
+      const el = document.getElementById('sub-url');
+      navigator.clipboard.writeText(el.innerText).then(() => {
+        showToast('✅ Endpoint URL copied to clipboard!');
+      });
+    }
+
+    function showToast(msg) {
+      const t = document.getElementById('toast');
+      t.innerText = msg;
+      t.classList.add('show');
+      setTimeout(() => t.classList.remove('show'), 3000);
+    }
+
+    async function run() {
+      const tok = document.getElementById('tok').value.trim();
+      const code = document.getElementById('code').value;
+      const out = document.getElementById('out');
+      
+      out.innerHTML = `<div style="text-align: center; color: var(--text-muted); padding: 12px;">⏳ Compiling and executing code...</div>`;
+      
+      try {
+        const r = await fetch('ga0/q5/code-interpreter', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ aipipe_token: tok || null, code: code })
+        });
+        const j = await r.json();
+        
+        if (!r.ok) {
+          out.innerHTML = `<div class="error-card">❌ Error: \${j.detail || 'Failed to interpret code.'}</div>`;
+          return;
+        }
+        
+        if (j.error && j.error.length > 0) {
+          out.innerHTML = \`
+            <div class="error-card">
+              <div class="out-title" style="color: #ef4444;">⚠️ Runtime Error (Failing Line: \${j.error.join(', ')})</div>
+              <div class="console-value" style="color: #fca5a5; border-color: rgba(239, 68, 68, 0.2);">\${j.result}</div>
+            </div>
+          \`;
+        } else {
+          out.innerHTML = \`
+            <div class="success-card">
+              <div class="out-title">✅ Execution Success</div>
+              <div class="console-value">\${j.result || '[No output]'}</div>
+            </div>
+          \`;
+        }
+      } catch (err) {
+        out.innerHTML = `<div class="error-card">❌ Exception: \${err.message}</div>`;
+      }
+    }
+  </script>
+</body>
+</html>
 """
 
 @app.get('/', response_class=HTMLResponse)
