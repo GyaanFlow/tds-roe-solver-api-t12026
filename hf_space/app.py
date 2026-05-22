@@ -32,7 +32,6 @@ q11 = load_app("q11_app", BASE / "T22026" / "GA0" / "Q11" / "app" / "main.py")
 q14 = load_app("q14_app", BASE / "T22026" / "GA0" / "Q14" / "app" / "main.py")
 q16 = load_app("q16_app", BASE / "T22026" / "GA0" / "Q16" / "app" / "main.py")
 q18 = load_app("q18_app", BASE / "T22026" / "GA0" / "Q18" / "app" / "main.py")
-q19 = load_app("q19_app", BASE / "T22026" / "GA0" / "Q19" / "app" / "main.py")
 q25 = load_app("q25_app", BASE / "T22026" / "GA0" / "Q25" / "app" / "main.py")
 
 app = FastAPI(title="T22026 GA0 Unified API Hub", version="1.0.0")
@@ -325,22 +324,6 @@ def home() -> str:
         </div>
       </div>
 
-      <!-- Q19 -->
-      <div class="tile">
-        <div>
-          <div class="tile-header">
-            <span class="tile-title">Q19: Replace & Hash</span>
-            <span class="status-badge active">Active</span>
-          </div>
-          <p class="tile-desc">
-            Large-scale string replacement batch engine converting matching abbreviations to full IIT Madras text.
-          </p>
-        </div>
-        <div class="tile-actions">
-          <a href="/q19/" class="btn">Open Playground</a>
-          <a href="/q19/health" class="btn btn-secondary">Health</a>
-        </div>
-      </div>
     </div>
 
     <!-- Q25 -->
@@ -376,5 +359,4 @@ app.mount("/q11", q11)
 app.mount("/q14", q14)
 app.mount("/q16", q16)
 app.mount("/q18", q18)
-app.mount("/q19", q19)
 app.mount("/q25", q25)

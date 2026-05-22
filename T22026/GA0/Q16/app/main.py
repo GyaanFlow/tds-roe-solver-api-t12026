@@ -278,8 +278,8 @@ Q16_UI = """<!doctype html>
           <div class="file-upload-icon">📦</div>
           <div id="file-label" style="font-weight: 500;">Click to select file</div>
           <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">accepts .zip files</div>
-          <input type='file' id='zip' accept='.zip' onchange="updateFileLabel(this)">
         </div>
+        <input type='file' id='zip' accept='.zip' style="display: none;" onchange="updateFileLabel(this)">
       </div>
 
       <button class="btn-solve" onclick='run()'>⚡ Reassemble & Compute Hash</button>
@@ -316,8 +316,10 @@ Q16_UI = """<!doctype html>
       fd.append('email', e);
       fd.append('zip_file', f);
       
+      const base = window.location.href.replace(/\/$/, '');
+      const prefix = base.endsWith('/q16') ? base : (window.location.origin + '/q16');
       try {
-        const r = await fetch('ga0/q16/solve', { method: 'POST', body: fd });
+        const r = await fetch(prefix + '/ga0/q16/solve', { method: 'POST', body: fd });
         const j = await r.json();
         
         if (!r.ok) {

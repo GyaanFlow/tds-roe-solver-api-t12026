@@ -103,8 +103,5 @@ def main():
             else:
                 print("[FAIL] Q18 session version proxy/fallback failed!")
 
-    # 8. Q19 Replace/Hash Zip
-    test_endpoint("GET", "/q19/health")
-
 if __name__ == "__main__":
     main()

@@ -473,8 +473,10 @@ print(result)</textarea>
       
       out.innerHTML = `<div style="text-align: center; color: var(--text-muted); padding: 12px;">⏳ Compiling and executing code...</div>`;
       
+      const base = window.location.href.replace(/\/$/, '');
+      const prefix = base.endsWith('/q5') ? base : (window.location.origin + '/q5');
       try {
-        const r = await fetch('ga0/q5/code-interpreter', {
+        const r = await fetch(prefix + '/ga0/q5/code-interpreter', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ aipipe_token: tok || null, code: code })

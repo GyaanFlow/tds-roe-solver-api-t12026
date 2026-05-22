@@ -477,8 +477,10 @@ Q18_UI = """<!doctype html>
         return;
       }
       
+      const base = window.location.href.replace(/\/$/, '');
+      const prefix = base.endsWith('/q18') ? base : (window.location.origin + '/q18');
       try {
-        const response = await fetch('ga0/q18/setup', {
+        const response = await fetch(prefix + '/ga0/q18/setup', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email: email })
