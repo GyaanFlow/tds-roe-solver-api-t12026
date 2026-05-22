@@ -323,37 +323,37 @@ Q16_UI = """<!doctype html>
         const j = await r.json();
         
         if (!r.ok) {
-          out.innerHTML = `<div class="error-card">❌ Error: \${j.detail || 'Failed to process files.'}</div>`;
+          out.innerHTML = `<div class="error-card">❌ Error: ${j.detail || 'Failed to process files.'}</div>`;
           return;
         }
         
-        out.innerHTML = \`
+        out.innerHTML = `
           <div class="success-grid">
             <div class="result-tile">
               <span>REQUEST ID</span>
-              <strong>\${j.request_id}</strong>
+              <strong>${j.request_id}</strong>
             </div>
             <div class="result-tile">
               <span>EMAIL</span>
-              <strong>\${j.email}</strong>
+              <strong>${j.email}</strong>
             </div>
             <div class="result-tile">
               <span>FILES MOVED</span>
-              <strong>\${j.files_moved}</strong>
+              <strong>${j.files_moved}</strong>
             </div>
             <div class="result-tile">
               <span>FILES RENAMED</span>
-              <strong>\${j.files_renamed}</strong>
+              <strong>${j.files_renamed}</strong>
             </div>
           </div>
           <div class="hash-card">
             <div class="hash-title">✅ SUBMIT THIS HASH FOR Q16</div>
-            <div class="hash-value" id="hash-text">\${j.answer_sha256}</div>
+            <div class="hash-value" id="hash-text">${j.answer_sha256}</div>
             <button class="copy-btn" onclick="copyHash()">📋 Copy Hash</button>
           </div>
-        \`;
+        `;
       } catch (err) {
-        out.innerHTML = `<div class="error-card">❌ Exception: \${err.message}</div>`;
+        out.innerHTML = `<div class="error-card">❌ Exception: ${err.message}</div>`;
       }
     }
 

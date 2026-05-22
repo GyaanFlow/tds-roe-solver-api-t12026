@@ -484,27 +484,27 @@ print(result)</textarea>
         const j = await r.json();
         
         if (!r.ok) {
-          out.innerHTML = `<div class="error-card">❌ Error: \${j.detail || 'Failed to interpret code.'}</div>`;
+          out.innerHTML = `<div class="error-card">❌ Error: ${j.detail || 'Failed to interpret code.'}</div>`;
           return;
         }
         
         if (j.error && j.error.length > 0) {
-          out.innerHTML = \`
+          out.innerHTML = `
             <div class="error-card">
-              <div class="out-title" style="color: #ef4444;">⚠️ Runtime Error (Failing Line: \${j.error.join(', ')})</div>
-              <div class="console-value" style="color: #fca5a5; border-color: rgba(239, 68, 68, 0.2);">\${j.result}</div>
+              <div class="out-title" style="color: #ef4444;">⚠️ Runtime Error (Failing Line: ${j.error.join(', ')})</div>
+              <div class="console-value" style="color: #fca5a5; border-color: rgba(239, 68, 68, 0.2);">${j.result}</div>
             </div>
-          \`;
+          `;
         } else {
-          out.innerHTML = \`
+          out.innerHTML = `
             <div class="success-card">
               <div class="out-title">✅ Execution Success</div>
-              <div class="console-value">\${j.result || '[No output]'}</div>
+              <div class="console-value">${j.result || '[No output]'}</div>
             </div>
-          \`;
+          `;
         }
       } catch (err) {
-        out.innerHTML = `<div class="error-card">❌ Exception: \${err.message}</div>`;
+        out.innerHTML = `<div class="error-card">❌ Exception: ${err.message}</div>`;
       }
     }
   </script>
