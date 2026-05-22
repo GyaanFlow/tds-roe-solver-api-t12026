@@ -449,8 +449,10 @@ Q14_UI = """<!doctype html>
       const fd = new FormData();
       fd.append('image', file);
       
+      const base = window.location.href.replace(/\/$/, '');
+      const prefix = base.endsWith('/q14') ? base : (window.location.origin + '/q14');
       try {
-        const response = await fetch('rebuild-grayscale', {
+        const response = await fetch(prefix + '/rebuild-grayscale', {
           method: 'POST',
           body: fd
         });
@@ -477,8 +479,11 @@ Q14_UI = """<!doctype html>
         previewContainer.style.display = 'grid';
         
         // Show reconstructed image
-        reconImg.src = data.png_url;
-        dlBtn.href = data.png_url;
+        // Resolve absolute URL from the relative file path (works whether mounted or standalone)
+        const absBase = window.location.origin + window.location.pathname.replace(/\/$/, '') + '/';
+        const imgAbsUrl = absBase + data.png_url;
+        reconImg.src = imgAbsUrl;
+        dlBtn.href = imgAbsUrl;
         
       } catch (err) {
         out.textContent = 'Network or server error: ' + err.message;
@@ -592,8 +597,8 @@ def _rebuild_grayscale(image: UploadFile) -> dict:
         "request_id": rid,
         "input": {"filename": image.filename, "bytes": len(data), "size": {"width": size[0], "height": size[1]}},
         "processing": {"grid": GRID, "tile_width": tile[0], "tile_height": tile[1], "grayscale": "luminance(0.2126,0.7152,0.0722)"},
-        "png_url": f"/files/{png_name}",
-        "webp_url": f"/files/{webp_name}" if webp_name else None,
+        "png_url": f"files/{png_name}",
+        "webp_url": f"files/{webp_name}" if webp_name else None,
     }
 
 

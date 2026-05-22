@@ -415,7 +415,10 @@ Q10_UI = """<!doctype html>
   <div id="toast" class="toast">Copied to clipboard!</div>
 
   <script>
-    document.getElementById('sub-url').textContent = window.location.origin + '/ga0/q10/api';
+    // Build correct submit URL accounting for sub-mount prefix
+    const base = window.location.href.replace(/\/$/, '');
+    const prefix = base.endsWith('/q10') ? base : (window.location.origin + '/q10');
+    document.getElementById('sub-url').textContent = prefix + '/ga0/q10/api';
 
     function copyEndpoint() {
       const url = document.getElementById('sub-url').textContent;
@@ -440,9 +443,11 @@ Q10_UI = """<!doctype html>
 
     async function run() {
       const v = document.getElementById('cls').value.trim();
-      let url = '/ga0/q10/api';
+      const base = window.location.href.replace(/\/$/, '');
+      const prefix = base.endsWith('/q10') ? base : (window.location.origin + '/q10');
+      let url = prefix + '/ga0/q10/api';
       if (v) {
-        url += '?' + v.split(',').map(x => 'class=' + encodeURIComponent(x.strip ? x.strip() : x.trim())).join('&');
+        url += '?' + v.split(',').map(x => 'class=' + encodeURIComponent(x.trim())).join('&');
       }
       try {
         const r = await fetch(url);

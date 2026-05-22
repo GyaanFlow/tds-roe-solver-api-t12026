@@ -363,7 +363,10 @@ The weather today is quite average.</textarea>
   <div id="toast" class="toast">Copied to clipboard!</div>
 
   <script>
-    document.getElementById('sub-url').textContent = window.location.origin + '/ga0/q11/sentiment';
+    // Build correct submit URL accounting for sub-mount prefix
+    const base = window.location.href.replace(/\/$/, '');
+    const prefix = base.endsWith('/q11') ? base : (window.location.origin + '/q11');
+    document.getElementById('sub-url').textContent = prefix + '/ga0/q11/sentiment';
 
     function copyEndpoint() {
       const url = document.getElementById('sub-url').textContent;
@@ -381,8 +384,10 @@ The weather today is quite average.</textarea>
       const text = document.getElementById('txt').value;
       const sentences = text.split('\\n').map(x => x.trim()).filter(Boolean);
       
+      const base = window.location.href.replace(/\/$/, '');
+      const prefix = base.endsWith('/q11') ? base : (window.location.origin + '/q11');
       try {
-        const r = await fetch('/ga0/q11/sentiment', {
+        const r = await fetch(prefix + '/ga0/q11/sentiment', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sentences: sentences })
