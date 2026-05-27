@@ -339,19 +339,17 @@ Q14_UI = """<!doctype html>
             Submission Instructions
           </h3>
           <ol>
-            <li>Download the puzzle <strong>jigsaw.webp</strong> below.</li>
-            <li>Drag & drop the <strong>jigsaw.webp</strong> to the box below.</li>
-            <li>Our secure sandbox swaps the tiles back into perfect alignment and losslessly converts them to grayscale.</li>
-            <li>Download the reconstructed PNG and upload it to the exam page field with ID <strong>q-image-grayscale-rebuild</strong>.</li>
+            <li>Go to your active <strong>IITM TDS exam page</strong> and find the <strong>"Reconstruct and desaturate an image"</strong> (Q14) question section.</li>
+            <li>Click the <strong>"Download jigsaw.webp"</strong> button there to get your unique, dynamically seeded scrambled puzzle.</li>
+            <li>Drag & drop that downloaded <strong>jigsaw.webp</strong> to the upload box below.</li>
+            <li>Our secure sandbox will instantly swap the scrambled tiles and losslessly convert the image to perfect grayscale.</li>
+            <li>Download the resulting reconstructed PNG and upload it back to the exam page field with ID <strong>q-image-grayscale-rebuild</strong>.</li>
           </ol>
         </div>
       </div>
 
-      <div style="text-align: center; margin-bottom: 25px;">
-        <a href="jigsaw.webp" download class="btn btn-secondary">
-          <svg style="width:16px;height:16px;" viewBox="0 0 24 24"><path fill="currentColor" d="M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z"/></svg>
-          Download jigsaw.webp
-        </a>
+      <div class="alert-banner" style="margin: 0 0 25px 0; background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.25); color: #fcd34d;">
+        <span>⚠️ <strong>Important:</strong> Do not use a static jigsaw.webp. The puzzle is dynamically generated based on your exam session email seed, so you must download it directly from your exam screen.</span>
       </div>
 
       <div class="dropzone" id="dropzone">
@@ -442,6 +440,13 @@ Q14_UI = """<!doctype html>
 
     async function handleUpload(file) {
       if (!file) return;
+      
+      // Update original scrambled image preview dynamically
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        document.getElementById('origImg').src = e.target.result;
+      };
+      reader.readAsDataURL(file);
       
       resultsCard.style.display = 'block';
       out.textContent = 'Uploading scrambled puzzle for reassembly...';
