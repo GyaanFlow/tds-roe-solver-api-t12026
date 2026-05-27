@@ -419,7 +419,7 @@ Q5_UI = """<!doctype html>
       <p>Execute arbitrary Python code and dynamically trace line numbers for primary execution errors using deep traceback parsing.</p>
       
       <div class="routes">
-        Exam Canonical Route: <code>POST /q5/q-code-interpreter-ai-analysis/code-interpreter</code>
+        Exam Canonical Route: <code>POST /q-code-interpreter-ai-analysis/code-interpreter</code>
       </div>
       <div class="routes" style="margin-top:6px;font-size:0.8rem;opacity:0.7">
         Also available: <code>POST /q5/code-interpreter</code>
@@ -457,8 +457,9 @@ print(result)</textarea>
 
   <script>
     function updateSubmitURL() {
-      // The exam appends /code-interpreter to the submitted URL, so submit the base path.
-      const subUrl = window.location.origin + '/q5/q-code-interpreter-ai-analysis';
+      // Exam appends /code-interpreter to the submitted URL.
+      // Submit the base: https://{host}/q-code-interpreter-ai-analysis
+      const subUrl = window.location.origin + '/q-code-interpreter-ai-analysis';
       document.getElementById('sub-url').innerText = subUrl;
     }
     window.addEventListener('DOMContentLoaded', updateSubmitURL);
@@ -484,9 +485,9 @@ print(result)</textarea>
       
       out.innerHTML = `<div style="text-align: center; color: var(--text-muted); padding: 12px;">⏳ Compiling and executing code...</div>`;
       
-      const prefix = window.location.origin + '/q5';
+      const path = window.location.pathname.endsWith('/') ? window.location.pathname : window.location.pathname + '/';
       try {
-        const r = await fetch(prefix + '/code-interpreter', {
+        const r = await fetch(window.location.origin + path + 'code-interpreter', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ aipipe_token: tok || null, code: code })

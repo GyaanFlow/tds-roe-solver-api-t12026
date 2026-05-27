@@ -449,10 +449,9 @@ Q14_UI = """<!doctype html>
       const fd = new FormData();
       fd.append('image', file);
       
-      const base = window.location.href.replace(/\/$/, '');
-      const prefix = base.endsWith('/q14') ? base : (window.location.origin + '/q14');
+      const path = window.location.pathname.endsWith('/') ? window.location.pathname : window.location.pathname + '/';
       try {
-        const response = await fetch(prefix + '/rebuild-grayscale', {
+        const response = await fetch(window.location.origin + path + 'rebuild-grayscale', {
           method: 'POST',
           body: fd
         });

@@ -341,7 +341,7 @@ Q11_UI = """<!doctype html>
       <p>FastAPI microservice running robust batch sentiment analysis using VADER Sentiment Intensity Analyzer.</p>
       
       <div class='routes'>
-        <span>Exam Canonical: <code>/q11/q-fastapi-sentiment-batch/sentiment</code></span>
+        <span>Exam Canonical: <code>/q-fastapi-sentiment-batch/sentiment</code></span>
         <span>Also: <code>/q11/sentiment</code></span>
       </div>
 
@@ -373,8 +373,8 @@ The weather today is quite average.</textarea>
   <div id="toast" class="toast">Copied to clipboard!</div>
 
   <script>
-    // Exam validator calls POST {url} directly — so submit the full /sentiment path
-    const prefix = window.location.origin + '/q11';
+    // Exam validator calls POST {url} directly — submit the full /sentiment path
+    const prefix = window.location.origin;
     document.getElementById('sub-url').textContent = prefix + '/q-fastapi-sentiment-batch/sentiment';
 
     function copyEndpoint() {
@@ -391,11 +391,11 @@ The weather today is quite average.</textarea>
 
     async function run() {
       const text = document.getElementById('txt').value;
-      const sentences = text.split('\\n').map(x => x.trim()).filter(Boolean);
+      const sentences = text.split('\n').map(x => x.trim()).filter(Boolean);
       
-      const prefix = window.location.origin + '/q11';
+      const path = window.location.pathname.endsWith('/') ? window.location.pathname : window.location.pathname + '/';
       try {
-        const r = await fetch(prefix + '/sentiment', {
+        const r = await fetch(window.location.origin + path + 'sentiment', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sentences: sentences })

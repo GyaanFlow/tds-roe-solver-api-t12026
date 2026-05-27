@@ -263,8 +263,9 @@ Q16_UI = """<!doctype html>
       <h2>Q16: Move, Rename & Hash Solver</h2>
       <p>Upload the task zip file, enter your registered student email, and compute the correct directory hash instantly.</p>
       
-      <div class="routes">
-        API Route: <code>POST /ga0/q16/solve</code>
+      <div class='routes'>
+        <span>Exam Canonical: <code>/q-move-rename-files/ga0/q16/solve</code></span>
+        <span>Also: <code>/q16/ga0/q16/solve</code></span>
       </div>
 
       <div class="form-group">
@@ -316,10 +317,9 @@ Q16_UI = """<!doctype html>
       fd.append('email', e);
       fd.append('zip_file', f);
       
-      const base = window.location.href.replace(/\/$/, '');
-      const prefix = base.endsWith('/q16') ? base : (window.location.origin + '/q16');
+      const path = window.location.pathname.endsWith('/') ? window.location.pathname : window.location.pathname + '/';
       try {
-        const r = await fetch(prefix + '/ga0/q16/solve', { method: 'POST', body: fd });
+        const r = await fetch(window.location.origin + path + 'ga0/q16/solve', { method: 'POST', body: fd });
         const j = await r.json();
         
         if (!r.ok) {

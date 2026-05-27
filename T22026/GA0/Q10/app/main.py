@@ -376,7 +376,7 @@ Q10_UI = """<!doctype html>
       <p>FastAPI microservice loaded with 2,000 student records. Provides instant dynamic filtering by class.</p>
       
       <div class='routes'>
-        <span>Exam Canonical: <code>/q10/q-fastapi/api</code></span>
+        <span>Exam Canonical: <code>/q-fastapi/api</code></span>
         <span>Also: <code>/q10/api</code></span>
       </div>
 
@@ -422,8 +422,8 @@ Q10_UI = """<!doctype html>
   <div id="toast" class="toast">Copied to clipboard!</div>
 
   <script>
-    // Exam expects the full /api URL; validator calls GET {url}?class=...
-    const prefix = window.location.origin + '/q10';
+    // Exam validator calls GET {url}?class=... directly on the submitted URL.
+    const prefix = window.location.origin;
     document.getElementById('sub-url').textContent = prefix + '/q-fastapi/api';
 
     function copyEndpoint() {
@@ -448,8 +448,9 @@ Q10_UI = """<!doctype html>
     }
 
     async function run() {
-      const prefix = window.location.origin + '/q10';
-      let url = prefix + '/api';
+      const v = document.getElementById('cls').value;
+      const path = window.location.pathname.endsWith('/') ? window.location.pathname : window.location.pathname + '/';
+      let url = window.location.origin + path + 'api';
       if (v) {
         url += '?' + v.split(',').map(x => 'class=' + encodeURIComponent(x.trim())).join('&');
       }

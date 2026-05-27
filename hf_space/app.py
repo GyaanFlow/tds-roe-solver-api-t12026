@@ -232,6 +232,9 @@ def home() -> str:
           <p class="tile-desc">
             Python execution sandbox with secure traceback-based error line number extraction.
           </p>
+          <p style="font-size:0.78rem; color:#818cf8; font-family:monospace; margin-bottom:6px;">
+            Exam URL: <strong>/q-code-interpreter-ai-analysis</strong>
+          </p>
         </div>
         <div class="tile-actions">
           <a href="/q5/" class="btn">Open Playground</a>
@@ -249,6 +252,9 @@ def home() -> str:
           <p class="tile-desc">
             FastAPI database server filtering students dynamically with Multi-Query list matching.
           </p>
+          <p style="font-size:0.78rem; color:#818cf8; font-family:monospace; margin-bottom:6px;">
+            Exam URL: <strong>/q-fastapi/api</strong>
+          </p>
         </div>
         <div class="tile-actions">
           <a href="/q10/" class="btn">Open Playground</a>
@@ -265,6 +271,9 @@ def home() -> str:
           </div>
           <p class="tile-desc">
             High-performance natural language pipeline classifying sentiment into happy, sad, and neutral.
+          </p>
+          <p style="font-size:0.78rem; color:#818cf8; font-family:monospace; margin-bottom:6px;">
+            Exam URL: <strong>/q-fastapi-sentiment-batch/sentiment</strong>
           </p>
         </div>
         <div class="tile-actions">
@@ -337,6 +346,9 @@ def home() -> str:
           <p class="tile-desc">
             Per-region latency analytics engine: avg, p95, uptime, and threshold breach counting.
           </p>
+          <p style="font-size:0.78rem; color:#f59e0b; font-family:monospace; margin-bottom:6px;">
+            ⚠️ Deploy to Vercel — exam checks vercel.app hostname
+          </p>
         </div>
         <div class="tile-actions">
           <a href="/q25/" class="btn">Open Playground</a>
@@ -353,6 +365,7 @@ def home() -> str:
 </html>"""
 
 
+# ── Numbered mounts (original, kept for backwards compatibility) ─────────────
 app.mount("/q5", q5)
 app.mount("/q10", q10)
 app.mount("/q11", q11)
@@ -360,3 +373,18 @@ app.mount("/q14", q14)
 app.mount("/q16", q16)
 app.mount("/q18", q18)
 app.mount("/q25", q25)
+
+# ── Exam-canonical mounts (question-ID style, no /qN prefix) ─────────────────
+# The exam validator submits URLs in this form:
+#   Q5  → POST  {host}/q-code-interpreter-ai-analysis/code-interpreter
+#   Q10 → GET   {host}/q-fastapi/api?class=...
+#   Q11 → POST  {host}/q-fastapi-sentiment-batch/sentiment
+#   Q18 → GET   {host}/q-ollama/api/version  (session-based proxy)
+#   Q25 → POST  {host}/q-vercel-latency/api/latency  (needs Vercel host)
+app.mount("/q-code-interpreter-ai-analysis", q5)
+app.mount("/q-fastapi", q10)
+app.mount("/q-fastapi-sentiment-batch", q11)
+app.mount("/q-image-grayscale-rebuild", q14)
+app.mount("/q-move-rename-files", q16)
+app.mount("/q-ollama", q18)
+app.mount("/q-vercel-latency", q25)

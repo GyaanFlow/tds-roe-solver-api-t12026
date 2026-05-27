@@ -427,9 +427,9 @@ Q18_UI = """<!doctype html>
 
       <div class="form-group">
         <label class="form-label" for="ngrokUrl">Your full Tunnel URL:</label>
-        <input type="url" id="ngrokUrl" placeholder="https://xxxx-xx-xx-xx.ngrok-free.app/q18/session/SESSION_ID">
+        <input type="url" id="ngrokUrl" placeholder="https://xxxx-xx-xx-xx.ngrok-free.app/q-ollama/session/SESSION_ID">
         <div style="font-size: 0.8rem; color: #a78bfa; margin-top: 6px;">
-          Note: This must contain <code>/q18/session/SESSION_ID</code> suffix!
+          Note: This must contain <code>/q-ollama/session/SESSION_ID</code> (or <code>/q18/session/SESSION_ID</code>) suffix!
         </div>
       </div>
 
@@ -477,10 +477,9 @@ Q18_UI = """<!doctype html>
         return;
       }
       
-      const base = window.location.href.replace(/\/$/, '');
-      const prefix = base.endsWith('/q18') ? base : (window.location.origin + '/q18');
+      const path = window.location.pathname.endsWith('/') ? window.location.pathname : window.location.pathname + '/';
       try {
-        const response = await fetch(prefix + '/ga0/q18/setup', {
+        const response = await fetch(window.location.origin + path + 'ga0/q18/setup', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email: email })
@@ -498,11 +497,11 @@ Q18_UI = """<!doctype html>
         
         // Show local proxy path
         const origin = window.location.origin;
-        const completeLocalPath = origin + '/q18/session/' + data.session_id;
+        const completeLocalPath = origin + path + 'session/' + data.session_id;
         document.getElementById('localProxyUrl').textContent = completeLocalPath;
         
         // Auto-fill playground URL
-        document.getElementById('ngrokUrl').value = 'https://[your-ngrok-id].ngrok-free.app/q18/session/' + data.session_id;
+        document.getElementById('ngrokUrl').value = 'https://[your-ngrok-id].ngrok-free.app' + path + 'session/' + data.session_id;
         
       } catch (err) {
         alert('Network error registering session: ' + err.message);

@@ -516,7 +516,7 @@ Q25_UI = """<!doctype html>
       
       <div class='routes'>
         <span>Exam Endpoint: <code>POST /api/latency</code> (deploy to Vercel)</span>
-        <span>Solver Route: <code>/q25/api/latency</code></span>
+        <span>Solver Route: <code>/q-vercel-latency/api/latency</code></span>
       </div>
 
       <div class='submit-container'>
@@ -659,7 +659,7 @@ Q25_UI = """<!doctype html>
       
       try {
         const path = window.location.pathname.endsWith('/') ? window.location.pathname : window.location.pathname + '/';
-        const r = await fetch(window.location.origin + '/q25/analyze', {
+        const r = await fetch(window.location.origin + path + 'analyze', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ regions: regs, threshold_ms: thresh })
