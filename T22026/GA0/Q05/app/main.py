@@ -439,9 +439,7 @@ Q5_UI = """<!doctype html>
 
   <script>
     function updateSubmitURL() {
-      // Exam appends /code-interpreter to the submitted URL.
-      // Submit the base: https://{host}/q-code-interpreter-ai-analysis
-      const subUrl = window.location.origin + '/q-code-interpreter-ai-analysis';
+      const subUrl = window.location.origin + '/q-code-interpreter-ai-analysis/code-interpreter';
       document.getElementById('sub-url').innerText = subUrl;
     }
     window.addEventListener('DOMContentLoaded', updateSubmitURL);
