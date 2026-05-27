@@ -119,13 +119,20 @@ def get_students(class_: Optional[List[str]] = Query(default=None, alias="class"
 
 @app.get("/ga0/q10/api", response_model=StudentsResponse)
 def get_students_ga0_q10(class_: Optional[List[str]] = Query(default=None, alias="class")) -> StudentsResponse:
-    # Strict routed alias for exam-style endpoint naming.
     return get_students(class_=class_)
 
 
 @app.get("/t22026/ga0/q10/api", response_model=StudentsResponse)
 def get_students_t22026_ga0_q10(class_: Optional[List[str]] = Query(default=None, alias="class")) -> StudentsResponse:
-    # Fully qualified term+GA+question route for long-term compatibility.
+    return get_students(class_=class_)
+
+
+# ── Exam-canonical route ──────────────────────────────────────────────────────
+# The exam validator takes the submitted URL and calls GET {url}?class=...
+# Students should submit: https://<host>/q10/q-fastapi/api
+# The exam then calls:    GET   https://<host>/q10/q-fastapi/api?class=1A&class=1B
+@app.get("/q-fastapi/api", response_model=StudentsResponse)
+def get_students_exam_canonical(class_: Optional[List[str]] = Query(default=None, alias="class")) -> StudentsResponse:
     return get_students(class_=class_)
 
 
@@ -369,8 +376,8 @@ Q10_UI = """<!doctype html>
       <p>FastAPI microservice loaded with 2,000 student records. Provides instant dynamic filtering by class.</p>
       
       <div class='routes'>
-        <span>Local Endpoint: <code>/api</code></span>
-        <span>GA Routing: <code>/ga0/q10/api</code></span>
+        <span>Exam Canonical: <code>/q10/q-fastapi/api</code></span>
+        <span>Also: <code>/q10/api</code></span>
       </div>
 
       <div class='submit-container'>
@@ -415,10 +422,9 @@ Q10_UI = """<!doctype html>
   <div id="toast" class="toast">Copied to clipboard!</div>
 
   <script>
-    // Build correct submit URL accounting for sub-mount prefix
-    const base = window.location.href.replace(/\/$/, '');
-    const prefix = base.endsWith('/q10') ? base : (window.location.origin + '/q10');
-    document.getElementById('sub-url').textContent = prefix + '/ga0/q10/api';
+    // Exam expects the full /api URL; validator calls GET {url}?class=...
+    const prefix = window.location.origin + '/q10';
+    document.getElementById('sub-url').textContent = prefix + '/q-fastapi/api';
 
     function copyEndpoint() {
       const url = document.getElementById('sub-url').textContent;
@@ -442,10 +448,8 @@ Q10_UI = """<!doctype html>
     }
 
     async function run() {
-      const v = document.getElementById('cls').value.trim();
-      const base = window.location.href.replace(/\/$/, '');
-      const prefix = base.endsWith('/q10') ? base : (window.location.origin + '/q10');
-      let url = prefix + '/ga0/q10/api';
+      const prefix = window.location.origin + '/q10';
+      let url = prefix + '/api';
       if (v) {
         url += '?' + v.split(',').map(x => 'class=' + encodeURIComponent(x.trim())).join('&');
       }

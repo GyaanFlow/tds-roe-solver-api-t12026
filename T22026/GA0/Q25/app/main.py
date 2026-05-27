@@ -265,8 +265,19 @@ def analyze(req: AnalyzeRequest) -> dict:
 def analyze_ga0(req: AnalyzeRequest) -> dict:
     return analyze(req)
 
+
 @app.post("/api/latency")
 def analyze_api(req: AnalyzeRequest) -> dict:
+    return analyze(req)
+
+
+# ── Exam-canonical route ──────────────────────────────────────────────────────
+# The exam validator takes the submitted URL and calls POST {url} directly.
+# NOTE: exam also checks hostname contains 'vercel.app' — deploy to Vercel for full credit.
+# Students should submit: https://<vercel-host>/api/latency
+# Or using this canonical: https://<host>/q25/q-vercel-latency/api/latency
+@app.post("/q-vercel-latency/api/latency")
+def analyze_exam_canonical(req: AnalyzeRequest) -> dict:
     return analyze(req)
 
 Q25_UI = """<!doctype html>
@@ -504,8 +515,8 @@ Q25_UI = """<!doctype html>
       <p>Calculate average latency, 95th percentile breaches, and average uptime statistics losslessly from telemetry logs.</p>
       
       <div class='routes'>
-        <span>Local Route: <code>/api/latency</code></span>
-        <span>GA Route: <code>/ga0/q25/analyze</code></span>
+        <span>Exam Endpoint: <code>POST /api/latency</code> (deploy to Vercel)</span>
+        <span>Solver Route: <code>/q25/api/latency</code></span>
       </div>
 
       <div class='submit-container'>
@@ -514,7 +525,7 @@ Q25_UI = """<!doctype html>
           <span id='sub-url'></span>
           <button class='btn-copy' onclick='copyEndpoint()'>Copy URL</button>
         </div>
-        <p style="margin: 8px 0 0; font-size: 0.85rem; color: #10b981; font-weight: 600;">✅ SUBMIT THIS URL FOR Q25</p>
+        <p style="margin: 8px 0 0; font-size: 0.85rem; color: #f59e0b; font-weight: 600;">⚠️ Q25 REQUIRES VERCEL DEPLOYMENT — submit your Vercel URL</p>
       </div>
 
       <div class="action-grid">
@@ -568,14 +579,12 @@ Q25_UI = """<!doctype html>
 
   <script>
     function updateUrls() {
-      const base = window.location.origin.endsWith('/') ? window.location.origin.slice(0,-1) : window.location.origin;
-      
-      // Calculate dynamic mounted prefix path
-      const path = window.location.pathname.endsWith('/') ? window.location.pathname : window.location.pathname + '/';
-      const cleanPath = path.replace(/\\/$/,''); // Remove trailing slash
-      
-      const targetUrl = base + cleanPath + '/ga0/q25/analyze';
-      document.getElementById('sub-url').textContent = targetUrl;
+      // NOTE: Q25 exam validator checks hostname must contain 'vercel.app'
+      // Deploy to Vercel and submit: https://your-app.vercel.app/api/latency
+      // This solver URL is only for testing:
+      const base = window.location.origin;
+      const solverUrl = base + '/q25/api/latency';
+      document.getElementById('sub-url').textContent = solverUrl;
     }
     window.addEventListener('DOMContentLoaded', updateUrls);
 
@@ -650,7 +659,7 @@ Q25_UI = """<!doctype html>
       
       try {
         const path = window.location.pathname.endsWith('/') ? window.location.pathname : window.location.pathname + '/';
-        const r = await fetch(path + 'ga0/q25/analyze', {
+        const r = await fetch(window.location.origin + '/q25/analyze', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ regions: regs, threshold_ms: thresh })

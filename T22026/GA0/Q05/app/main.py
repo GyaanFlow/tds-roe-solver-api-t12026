@@ -175,13 +175,20 @@ def code_interpreter(req: CodeRequest, x_aipipe_token: Optional[str] = Header(de
 
 @app.post("/ga0/q5/code-interpreter", response_model=CodeResponse)
 def code_interpreter_ga0_q5(req: CodeRequest, x_aipipe_token: Optional[str] = Header(default=None)) -> CodeResponse:
-    # Strict routed alias for exam-style endpoint naming.
     return code_interpreter(req=req, x_aipipe_token=x_aipipe_token)
 
 
 @app.post("/t22026/ga0/q5/code-interpreter", response_model=CodeResponse)
 def code_interpreter_t22026_ga0_q5(req: CodeRequest, x_aipipe_token: Optional[str] = Header(default=None)) -> CodeResponse:
-    # Fully qualified term+GA+question route for long-term compatibility.
+    return code_interpreter(req=req, x_aipipe_token=x_aipipe_token)
+
+
+# ── Exam-canonical route ──────────────────────────────────────────────────────
+# The exam validator accepts a URL and appends /code-interpreter to it.
+# Students should submit: https://<host>/q5/q-code-interpreter-ai-analysis
+# The exam then calls:    POST  https://<host>/q5/q-code-interpreter-ai-analysis/code-interpreter
+@app.post("/q-code-interpreter-ai-analysis/code-interpreter", response_model=CodeResponse)
+def code_interpreter_exam_canonical(req: CodeRequest, x_aipipe_token: Optional[str] = Header(default=None)) -> CodeResponse:
     return code_interpreter(req=req, x_aipipe_token=x_aipipe_token)
 
 Q5_UI = """<!doctype html>
@@ -412,7 +419,10 @@ Q5_UI = """<!doctype html>
       <p>Execute arbitrary Python code and dynamically trace line numbers for primary execution errors using deep traceback parsing.</p>
       
       <div class="routes">
-        API Route: <code>POST /ga0/q5/code-interpreter</code>
+        Exam Canonical Route: <code>POST /q5/q-code-interpreter-ai-analysis/code-interpreter</code>
+      </div>
+      <div class="routes" style="margin-top:6px;font-size:0.8rem;opacity:0.7">
+        Also available: <code>POST /q5/code-interpreter</code>
       </div>
 
       <div class='submit-container'>
@@ -447,7 +457,8 @@ print(result)</textarea>
 
   <script>
     function updateSubmitURL() {
-      const subUrl = window.location.origin + '/q5/ga0/q5/code-interpreter';
+      // The exam appends /code-interpreter to the submitted URL, so submit the base path.
+      const subUrl = window.location.origin + '/q5/q-code-interpreter-ai-analysis';
       document.getElementById('sub-url').innerText = subUrl;
     }
     window.addEventListener('DOMContentLoaded', updateSubmitURL);
@@ -473,10 +484,9 @@ print(result)</textarea>
       
       out.innerHTML = `<div style="text-align: center; color: var(--text-muted); padding: 12px;">⏳ Compiling and executing code...</div>`;
       
-      const base = window.location.href.replace(/\/$/, '');
-      const prefix = base.endsWith('/q5') ? base : (window.location.origin + '/q5');
+      const prefix = window.location.origin + '/q5';
       try {
-        const r = await fetch(prefix + '/ga0/q5/code-interpreter', {
+        const r = await fetch(prefix + '/code-interpreter', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ aipipe_token: tok || null, code: code })

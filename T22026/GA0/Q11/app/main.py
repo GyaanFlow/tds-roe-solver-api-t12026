@@ -79,6 +79,7 @@ def sentiment_batch(req: SentencesRequest) -> SentimentResponse:
 def sentiment_batch_ga0_q11(req: SentencesRequest) -> SentimentResponse:
     return sentiment_batch(req)
 
+
 @app.post("/q11/sentiment", response_model=SentimentResponse)
 def sentiment_batch_q11_alias(req: SentencesRequest) -> SentimentResponse:
     return sentiment_batch(req)
@@ -86,6 +87,15 @@ def sentiment_batch_q11_alias(req: SentencesRequest) -> SentimentResponse:
 
 @app.post("/t22026/ga0/q11/sentiment", response_model=SentimentResponse)
 def sentiment_batch_t22026_ga0_q11(req: SentencesRequest) -> SentimentResponse:
+    return sentiment_batch(req)
+
+
+# ── Exam-canonical route ──────────────────────────────────────────────────────
+# The exam validator takes the submitted URL and calls POST {url} directly.
+# Students should submit: https://<host>/q11/q-fastapi-sentiment-batch/sentiment
+# The exam then calls:    POST  https://<host>/q11/q-fastapi-sentiment-batch/sentiment
+@app.post("/q-fastapi-sentiment-batch/sentiment", response_model=SentimentResponse)
+def sentiment_batch_exam_canonical(req: SentencesRequest) -> SentimentResponse:
     return sentiment_batch(req)
 
 Q11_UI = """<!doctype html>
@@ -331,8 +341,8 @@ Q11_UI = """<!doctype html>
       <p>FastAPI microservice running robust batch sentiment analysis using VADER Sentiment Intensity Analyzer.</p>
       
       <div class='routes'>
-        <span>Local Route: <code>/sentiment</code></span>
-        <span>GA Route: <code>/ga0/q11/sentiment</code></span>
+        <span>Exam Canonical: <code>/q11/q-fastapi-sentiment-batch/sentiment</code></span>
+        <span>Also: <code>/q11/sentiment</code></span>
       </div>
 
       <div class='submit-container'>
@@ -363,10 +373,9 @@ The weather today is quite average.</textarea>
   <div id="toast" class="toast">Copied to clipboard!</div>
 
   <script>
-    // Build correct submit URL accounting for sub-mount prefix
-    const base = window.location.href.replace(/\/$/, '');
-    const prefix = base.endsWith('/q11') ? base : (window.location.origin + '/q11');
-    document.getElementById('sub-url').textContent = prefix + '/ga0/q11/sentiment';
+    // Exam validator calls POST {url} directly — so submit the full /sentiment path
+    const prefix = window.location.origin + '/q11';
+    document.getElementById('sub-url').textContent = prefix + '/q-fastapi-sentiment-batch/sentiment';
 
     function copyEndpoint() {
       const url = document.getElementById('sub-url').textContent;
@@ -384,10 +393,9 @@ The weather today is quite average.</textarea>
       const text = document.getElementById('txt').value;
       const sentences = text.split('\\n').map(x => x.trim()).filter(Boolean);
       
-      const base = window.location.href.replace(/\/$/, '');
-      const prefix = base.endsWith('/q11') ? base : (window.location.origin + '/q11');
+      const prefix = window.location.origin + '/q11';
       try {
-        const r = await fetch(prefix + '/ga0/q11/sentiment', {
+        const r = await fetch(prefix + '/sentiment', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sentences: sentences })
