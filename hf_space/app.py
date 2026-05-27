@@ -237,8 +237,8 @@ def home() -> str:
           </p>
         </div>
         <div class="tile-actions">
-          <a href="/q5/" class="btn">Open Playground</a>
-          <a href="/q5/health" class="btn btn-secondary">Health</a>
+          <a href="/q-code-interpreter-ai-analysis/" class="btn">Open Playground</a>
+          <a href="/q-code-interpreter-ai-analysis/health" class="btn btn-secondary">Health</a>
         </div>
       </div>
 
@@ -257,8 +257,8 @@ def home() -> str:
           </p>
         </div>
         <div class="tile-actions">
-          <a href="/q10/" class="btn">Open Playground</a>
-          <a href="/q10/health" class="btn btn-secondary">Health</a>
+          <a href="/q-fastapi/" class="btn">Open Playground</a>
+          <a href="/q-fastapi/health" class="btn btn-secondary">Health</a>
         </div>
       </div>
 
@@ -277,8 +277,8 @@ def home() -> str:
           </p>
         </div>
         <div class="tile-actions">
-          <a href="/q11/" class="btn">Open Playground</a>
-          <a href="/q11/health" class="btn btn-secondary">Health</a>
+          <a href="/q-fastapi-sentiment-batch/" class="btn">Open Playground</a>
+          <a href="/q-fastapi-sentiment-batch/health" class="btn btn-secondary">Health</a>
         </div>
       </div>
 
@@ -294,8 +294,8 @@ def home() -> str:
           </p>
         </div>
         <div class="tile-actions">
-          <a href="/q14/" class="btn">Open Playground</a>
-          <a href="/q14/health" class="btn btn-secondary">Health</a>
+          <a href="/q-image-grayscale-rebuild/" class="btn">Open Playground</a>
+          <a href="/q-image-grayscale-rebuild/health" class="btn btn-secondary">Health</a>
         </div>
       </div>
 
@@ -311,8 +311,8 @@ def home() -> str:
           </p>
         </div>
         <div class="tile-actions">
-          <a href="/q16/" class="btn">Open Playground</a>
-          <a href="/q16/health" class="btn btn-secondary">Health</a>
+          <a href="/q-move-rename-files/" class="btn">Open Playground</a>
+          <a href="/q-move-rename-files/health" class="btn btn-secondary">Health</a>
         </div>
       </div>
 
@@ -328,8 +328,8 @@ def home() -> str:
           </p>
         </div>
         <div class="tile-actions">
-          <a href="/q18/" class="btn">Open Playground</a>
-          <a href="/q18/health" class="btn btn-secondary">Health</a>
+          <a href="/q-ollama/" class="btn">Open Playground</a>
+          <a href="/q-ollama/health" class="btn btn-secondary">Health</a>
         </div>
       </div>
 
@@ -351,8 +351,8 @@ def home() -> str:
           </p>
         </div>
         <div class="tile-actions">
-          <a href="/q25/" class="btn">Open Playground</a>
-          <a href="/q25/health" class="btn btn-secondary">Health</a>
+          <a href="/q-vercel-latency/" class="btn">Open Playground</a>
+          <a href="/q-vercel-latency/health" class="btn btn-secondary">Health</a>
         </div>
       </div>
     </div>
@@ -364,15 +364,6 @@ def home() -> str:
 </body>
 </html>"""
 
-
-# ── Numbered mounts (original, kept for backwards compatibility) ─────────────
-app.mount("/q5", q5)
-app.mount("/q10", q10)
-app.mount("/q11", q11)
-app.mount("/q14", q14)
-app.mount("/q16", q16)
-app.mount("/q18", q18)
-app.mount("/q25", q25)
 
 # ── Exam-canonical mounts (question-ID style, no /qN prefix) ─────────────────
 # The exam validator submits URLs in this form:

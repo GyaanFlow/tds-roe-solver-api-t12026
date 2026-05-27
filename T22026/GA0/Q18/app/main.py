@@ -429,7 +429,7 @@ Q18_UI = """<!doctype html>
         <label class="form-label" for="ngrokUrl">Your full Tunnel URL:</label>
         <input type="url" id="ngrokUrl" placeholder="https://xxxx-xx-xx-xx.ngrok-free.app/q-ollama/session/SESSION_ID">
         <div style="font-size: 0.8rem; color: #a78bfa; margin-top: 6px;">
-          Note: This must contain <code>/q-ollama/session/SESSION_ID</code> (or <code>/q18/session/SESSION_ID</code>) suffix!
+          Note: This must contain <code>/q-ollama/session/SESSION_ID</code> suffix!
         </div>
       </div>
 
@@ -543,7 +543,7 @@ Q18_UI = """<!doctype html>
         }
         
         // Check 2: Session path
-        if (parsedUrl.pathname.includes('/q18/session/') || parsedUrl.pathname.includes('/session/')) {
+        if (parsedUrl.pathname.includes('/q-ollama/session/') || parsedUrl.pathname.includes('/q18/session/') || parsedUrl.pathname.includes('/session/')) {
           checks[1].status = true;
         }
         

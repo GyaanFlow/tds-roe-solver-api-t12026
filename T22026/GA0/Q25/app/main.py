@@ -583,7 +583,7 @@ Q25_UI = """<!doctype html>
       // Deploy to Vercel and submit: https://your-app.vercel.app/api/latency
       // This solver URL is only for testing:
       const base = window.location.origin;
-      const solverUrl = base + '/q25/api/latency';
+      const solverUrl = base + '/q-vercel-latency/api/latency';
       document.getElementById('sub-url').textContent = solverUrl;
     }
     window.addEventListener('DOMContentLoaded', updateUrls);

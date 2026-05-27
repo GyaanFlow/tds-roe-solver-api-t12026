@@ -421,9 +421,6 @@ Q5_UI = """<!doctype html>
       <div class="routes">
         Exam Canonical Route: <code>POST /q-code-interpreter-ai-analysis/code-interpreter</code>
       </div>
-      <div class="routes" style="margin-top:6px;font-size:0.8rem;opacity:0.7">
-        Also available: <code>POST /q5/code-interpreter</code>
-      </div>
 
       <div class='submit-container'>
         <div class='submit-title'>Submit this endpoint URL on the exam page</div>

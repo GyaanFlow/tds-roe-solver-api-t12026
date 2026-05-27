@@ -265,7 +265,6 @@ Q16_UI = """<!doctype html>
       
       <div class='routes'>
         <span>Exam Canonical: <code>/q-move-rename-files/ga0/q16/solve</code></span>
-        <span>Also: <code>/q16/ga0/q16/solve</code></span>
       </div>
 
       <div class="form-group">

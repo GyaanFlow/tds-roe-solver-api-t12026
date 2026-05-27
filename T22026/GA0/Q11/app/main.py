@@ -342,7 +342,6 @@ Q11_UI = """<!doctype html>
       
       <div class='routes'>
         <span>Exam Canonical: <code>/q-fastapi-sentiment-batch/sentiment</code></span>
-        <span>Also: <code>/q11/sentiment</code></span>
       </div>
 
       <div class='submit-container'>

@@ -377,7 +377,6 @@ Q10_UI = """<!doctype html>
       
       <div class='routes'>
         <span>Exam Canonical: <code>/q-fastapi/api</code></span>
-        <span>Also: <code>/q10/api</code></span>
       </div>
 
       <div class='submit-container'>
