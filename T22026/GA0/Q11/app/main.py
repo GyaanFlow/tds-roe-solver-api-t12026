@@ -354,17 +354,6 @@ Q11_UI = """<!doctype html>
       </div>
 
       <div class='form-group'>
-        <label for='txt'>Interactive Sandbox: Test Sentences (one per line)</label>
-        <textarea id='txt' rows='6'>I absolutely love this product, it changed my life!
-This is the worst experience I've ever had.
-The weather today is quite average.</textarea>
-      </div>
-
-      <button class='btn-solve' onclick='run()'>Analyze Sentiment Batch</button>
-
-      <div id='res-area' class='results-area'>
-        <h3 style="margin: 0; font-size: 1.1rem;">Analysis Results</h3>
-        <div id='out' class='grid'></div>
       </div>
     </div>
   </div>
@@ -386,40 +375,6 @@ The weather today is quite average.</textarea>
       const t = document.getElementById('toast');
       t.classList.add('show');
       setTimeout(() => t.classList.remove('show'), 2000);
-    }
-
-    async function run() {
-      const text = document.getElementById('txt').value;
-      const sentences = text.split('\n').map(x => x.trim()).filter(Boolean);
-      
-      const path = window.location.pathname.endsWith('/') ? window.location.pathname : window.location.pathname + '/';
-      try {
-        const r = await fetch(window.location.origin + path + 'sentiment', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sentences: sentences })
-        });
-        
-        const data = await r.json();
-        const out = document.getElementById('out');
-        
-        if (!r.ok) {
-          out.innerHTML = `<div class="item sad" style="justify-content: center;">${data.detail || 'Request failed'}</div>`;
-          document.getElementById('res-area').style.display = 'block';
-          return;
-        }
-        
-        out.innerHTML = (data.results || []).map(x => `
-          <div class="item">
-            <div class="sentence-text">${x.sentence}</div>
-            <span class="tag ${x.sentiment}">${x.sentiment}</span>
-          </div>
-        `).join('');
-        
-        document.getElementById('res-area').style.display = 'block';
-      } catch (err) {
-        alert('Analysis failed: ' + err.message);
-      }
     }
   </script>
 </body>
