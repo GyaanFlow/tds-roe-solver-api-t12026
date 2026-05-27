@@ -431,22 +431,7 @@ Q5_UI = """<!doctype html>
       </div>
 
       <div class="form-group">
-        <label for="tok">AIPipe Token (Optional)</label>
-        <input type="text" id="tok" placeholder="aipipe_xxxxxxxx">
       </div>
-
-      <div class="form-group">
-        <label for="code">Python Source Code</label>
-        <textarea id="code" rows="8"># Test program
-a = 10
-b = 0
-result = a / b  # Division by zero
-print(result)</textarea>
-      </div>
-
-      <button class="btn-solve" onclick='run()'>⚡ Execute & Analyze Traceback</button>
-
-      <div id='out'></div>
     </div>
   </div>
 
@@ -473,47 +458,6 @@ print(result)</textarea>
       t.innerText = msg;
       t.classList.add('show');
       setTimeout(() => t.classList.remove('show'), 3000);
-    }
-
-    async function run() {
-      const tok = document.getElementById('tok').value.trim();
-      const code = document.getElementById('code').value;
-      const out = document.getElementById('out');
-      
-      out.innerHTML = `<div style="text-align: center; color: var(--text-muted); padding: 12px;">⏳ Compiling and executing code...</div>`;
-      
-      const path = window.location.pathname.endsWith('/') ? window.location.pathname : window.location.pathname + '/';
-      try {
-        const r = await fetch(window.location.origin + path + 'code-interpreter', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ aipipe_token: tok || null, code: code })
-        });
-        const j = await r.json();
-        
-        if (!r.ok) {
-          out.innerHTML = `<div class="error-card">❌ Error: ${j.detail || 'Failed to interpret code.'}</div>`;
-          return;
-        }
-        
-        if (j.error && j.error.length > 0) {
-          out.innerHTML = `
-            <div class="error-card">
-              <div class="out-title" style="color: #ef4444;">⚠️ Runtime Error (Failing Line: ${j.error.join(', ')})</div>
-              <div class="console-value" style="color: #fca5a5; border-color: rgba(239, 68, 68, 0.2);">${j.result}</div>
-            </div>
-          `;
-        } else {
-          out.innerHTML = `
-            <div class="success-card">
-              <div class="out-title">✅ Execution Success</div>
-              <div class="console-value">${j.result || '[No output]'}</div>
-            </div>
-          `;
-        }
-      } catch (err) {
-        out.innerHTML = `<div class="error-card">❌ Exception: ${err.message}</div>`;
-      }
     }
   </script>
 </body>
