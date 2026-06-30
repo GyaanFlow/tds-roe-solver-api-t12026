@@ -1,4 +1,15 @@
+---
+title: TDS ROE Solver API T12026
+emoji: 🚀
+colorFrom: blue
+colorTo: green
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # TDS Exam Workspace
+
 
 Future-proof workspace for term-wise, GA-wise, and question-wise tracking.
 
