@@ -5,3 +5,6 @@ requests==2.32.3
 pillow==10.4.0
 python-multipart==0.0.9
 vaderSentiment==3.3.2
+pyjwt[crypto]==2.9.0
+redis==5.0.8
+prometheus-client==0.20.0

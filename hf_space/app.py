@@ -36,8 +36,36 @@ q25 = load_app("q25_app", BASE / "T22026" / "GA0" / "Q25" / "app" / "main.py")
 
 app = FastAPI(title="T22026 GA0 Unified API Hub", version="1.0.0")
 
+import re
+
+class MultiTenantASGIMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            path = scope.get("path", "")
+            match = re.match(r"^/ga2/([^/]+@[^/]+)(/.*)?$", path)
+            if match:
+                email = match.group(1).strip()
+                rest = match.group(2) or "/"
+                scope["path"] = f"/ga2{rest}"
+                scope["tenant_email"] = email
+        await self.app(scope, receive, send)
+
+app.add_middleware(MultiTenantASGIMiddleware)
+
+class ConditionalCORSMiddleware(CORSMiddleware):
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            path = scope.get("path", "")
+            if path.startswith("/ga2"):
+                await self.app(scope, receive, send)
+                return
+        await super().__call__(scope, receive, send)
+
 app.add_middleware(
-    CORSMiddleware,
+    ConditionalCORSMiddleware,
     allow_origins=os.getenv("CORS_ALLOW_ORIGINS", "*").split(","),
     allow_credentials=False,
     allow_methods=["*"],
@@ -379,3 +407,7 @@ app.mount("/q-image-grayscale-rebuild", q14)
 app.mount("/q-move-rename-files", q16)
 app.mount("/q-ollama", q18)
 app.mount("/q-vercel-latency", q25)
+
+# Mount GA2 Multi-Tenant Service Hub
+ga2 = load_app("ga2_app", BASE / "T22026" / "GA2" / "app.py")
+app.mount("/ga2", ga2)

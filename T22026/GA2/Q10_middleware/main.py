@@ -1,0 +1,98 @@
+from __future__ import annotations
+
+"""
+Q10: Composable Middleware Stack — /ping endpoint
+Middleware layers (applied in order, outermost first):
+  1. CORS guard: allow only the tenant-specific origin (or exam origins)
+  2. X-Context-Id injector: generate + propagate
+  3. Rate limiter: N requests / 10s sliding window per X-Client-Id
+  4. Handler: {"message": "pong", "context_id": <id>}
+
+Thread-safe sliding window rate limiter.
+"""
+
+
+import time
+import uuid
+import threading
+from fastapi import APIRouter, Header, Request, Response
+from fastapi.responses import JSONResponse
+from typing import Dict, List, Optional
+from T22026.GA2.shared.tenant import current_email, get_q10_middleware_params
+
+router = APIRouter(tags=["Q10 Middleware"])
+
+_store_lock  = threading.Lock()
+_windows: Dict[str, List[float]] = {}
+
+EXAM_ORIGINS = {"https://exam.sanand.workers.dev", "https://sanand0.github.io"}
+
+
+def _check_rate(client_id: str, bucket: int) -> bool:
+    now = time.monotonic()
+    with _store_lock:
+        ts = _windows.get(client_id, [])
+        ts = [t for t in ts if now - t < 10.0]
+        if len(ts) >= bucket:
+            _windows[client_id] = ts
+            return False
+        ts.append(now)
+        _windows[client_id] = ts
+    return True
+
+
+@router.options("/ping")
+async def options_ping(request: Request):
+    email   = current_email.get()
+    params  = get_q10_middleware_params(email)
+    origin  = request.headers.get("Origin")
+    allowed = params["allowedOrigin"]
+
+    if origin and (origin == allowed or origin in EXAM_ORIGINS):
+        return Response(
+            status_code=200,
+            headers={
+                "Access-Control-Allow-Origin":  origin,
+                "Access-Control-Allow-Methods": "GET, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type, X-Client-Id, X-Context-Id",
+            },
+        )
+    return Response(status_code=403)
+
+
+@router.get("/ping")
+async def ping(
+    request:     Request,
+    x_client_id:  Optional[str] = Header(None, alias="X-Client-Id"),
+    x_context_id: Optional[str] = Header(None, alias="X-Context-Id"),
+):
+    email   = current_email.get()
+    params  = get_q10_middleware_params(email)
+    allowed = params["allowedOrigin"]
+    bucket  = params["bucket"]
+    origin  = request.headers.get("Origin")
+
+    # 1. CORS gate
+    if origin and (origin not in EXAM_ORIGINS and origin != allowed):
+        return JSONResponse(status_code=403, content={"detail": "CORS forbidden"})
+
+    # 2. Context ID
+    ctx_id  = x_context_id or str(uuid.uuid4())
+
+    # 3. Rate limit
+    client  = x_client_id or "anon"
+    if not _check_rate(client, bucket):
+        hdrs = {
+            "X-Context-Id": ctx_id,
+            "Retry-After":  "10",
+        }
+        if origin and (origin == allowed or origin in EXAM_ORIGINS):
+            hdrs["Access-Control-Allow-Origin"] = origin
+        return JSONResponse(status_code=429, content={"detail": "Too Many Requests"}, headers=hdrs)
+
+    # 4. Build response
+    hdrs: dict = {"X-Context-Id": ctx_id}
+    if origin and (origin == allowed or origin in EXAM_ORIGINS):
+        hdrs["Access-Control-Allow-Origin"] = origin
+
+    return JSONResponse(content={"message": "pong", "context_id": ctx_id}, headers=hdrs)
