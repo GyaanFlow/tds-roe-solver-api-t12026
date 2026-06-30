@@ -39,8 +39,8 @@ _AMT_NEAR_PAT = re.compile(
 )
 _AMT_ANY_PAT  = re.compile(r'\b([0-9]+(?:\.[0-9]{1,2})?)\b')
 _VENDOR_PATS  = [
-    re.compile(r'(?:vendor|seller|merchant|billed\s+by|from|issued\s+by):\s*([^\n\r,]+)', re.IGNORECASE),
-    re.compile(r'(?:invoice\s+from)\s+([^\n\r,]+)', re.IGNORECASE),
+    re.compile(r'(?:vendor|seller|merchant|billed\s+by|from|issued\s+by)\s*(?::|is|was)?\s*([^\n\r,.]+)', re.IGNORECASE),
+    re.compile(r'(?:invoice\s+from)\s+([^\n\r,.]+)', re.IGNORECASE),
 ]
 
 

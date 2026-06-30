@@ -16,7 +16,7 @@ from T22026.GA2.shared.tenant import current_email, get_q02_jwt_parameters
 router = APIRouter(tags=["Q02 OAuth"])
 
 # The public key from the exam (hardcoded — matches grader's IdP)
-_PUBLIC_KEY = """-----BEGIN PUBLIC KEY-----
+PUBLIC_KEY = """-----BEGIN PUBLIC KEY-----
 MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2okOHspNjgA+2rTLbeuY
 cxiP/hG8C6Sb9iwg3yiLAA4HCnpITcbWCSelbvbYGuc3EbNy4xFyf5Cbj5DHJMID
 EkryOgyd2giIIIBOUBj8S63uGcnRpOBh9NFatfNwheKuzsPuVNldu6A9cNteNpXc
@@ -39,7 +39,7 @@ async def verify_token(req: VerifyRequest):
     try:
         payload = jwt.decode(
             req.token,
-            _PUBLIC_KEY,
+            PUBLIC_KEY,
             algorithms=["RS256"],
             audience=params["aud"],
             issuer=params["iss"],

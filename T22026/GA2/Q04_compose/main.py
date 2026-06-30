@@ -22,27 +22,27 @@ router = APIRouter(tags=["Q04 Redis"])
 # Redis client — lazy, thread-safe singleton
 # ---------------------------------------------------------------------------
 _redis_lock = threading.Lock()
-_redis_client = None
+r_client = None
 _fallback: dict[str, int] = {}   # in-process fallback for local dev
 
 
 def _get_redis():
-    global _redis_client
-    if _redis_client is not None:
-        return _redis_client
+    global r_client
+    if r_client is not None:
+        return r_client
     with _redis_lock:
-        if _redis_client is not None:
-            return _redis_client
+        if r_client is not None:
+            return r_client
         try:
             import redis
             host = os.getenv("REDIS_HOST", "redis")
             port = int(os.getenv("REDIS_PORT", "6379"))
             r = redis.Redis(host=host, port=port, db=0, socket_timeout=2, socket_connect_timeout=2, decode_responses=True)
             r.ping()         # validate connection
-            _redis_client = r
+            r_client = r
         except Exception:
-            _redis_client = None   # mark as unavailable
-    return _redis_client
+            r_client = None   # mark as unavailable
+    return r_client
 
 
 def _incr(key: str) -> int:

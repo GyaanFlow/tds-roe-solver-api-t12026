@@ -54,7 +54,7 @@ async def options_ping(request: Request):
             headers={
                 "Access-Control-Allow-Origin":  origin,
                 "Access-Control-Allow-Methods": "GET, OPTIONS",
-                "Access-Control-Allow-Headers": "Content-Type, X-Client-Id, X-Context-Id",
+                "Access-Control-Allow-Headers": "Content-Type, X-Client-Id, X-Request-ID",
             },
         )
     return Response(status_code=403)
@@ -64,7 +64,7 @@ async def options_ping(request: Request):
 async def ping(
     request:     Request,
     x_client_id:  Optional[str] = Header(None, alias="X-Client-Id"),
-    x_context_id: Optional[str] = Header(None, alias="X-Context-Id"),
+    x_request_id: Optional[str] = Header(None, alias="X-Request-ID"),
 ):
     email   = current_email.get()
     params  = get_q10_middleware_params(email)
@@ -76,14 +76,14 @@ async def ping(
     if origin and (origin not in EXAM_ORIGINS and origin != allowed):
         return JSONResponse(status_code=403, content={"detail": "CORS forbidden"})
 
-    # 2. Context ID
-    ctx_id  = x_context_id or str(uuid.uuid4())
+    # 2. Request ID
+    req_id  = x_request_id or str(uuid.uuid4())
 
     # 3. Rate limit
     client  = x_client_id or "anon"
     if not _check_rate(client, bucket):
         hdrs = {
-            "X-Context-Id": ctx_id,
+            "X-Request-ID": req_id,
             "Retry-After":  "10",
         }
         if origin and (origin == allowed or origin in EXAM_ORIGINS):
@@ -91,8 +91,9 @@ async def ping(
         return JSONResponse(status_code=429, content={"detail": "Too Many Requests"}, headers=hdrs)
 
     # 4. Build response
-    hdrs: dict = {"X-Context-Id": ctx_id}
+    hdrs: dict = {"X-Request-ID": req_id}
     if origin and (origin == allowed or origin in EXAM_ORIGINS):
         hdrs["Access-Control-Allow-Origin"] = origin
 
-    return JSONResponse(content={"message": "pong", "context_id": ctx_id}, headers=hdrs)
+    return JSONResponse(content={"message": "pong", "request_id": req_id, "email": email}, headers=hdrs)
+
