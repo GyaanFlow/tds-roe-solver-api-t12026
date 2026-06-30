@@ -3,12 +3,6 @@ from __future__ import annotations
 """
 T22026/GA2/app.py — Unified GA2 sub-application
 Mounted at /ga2 by the root hf_space/app.py.
-
-The root-level MultiTenantASGIMiddleware already rewrites paths and
-populates scope["tenant_email"] before this app receives the request.
-
-This app's HTTP middleware picks up that email and injects it into the
-thread-local ContextVar so every handler can call current_email.get().
 """
 
 import uuid
@@ -49,7 +43,6 @@ async def _inject_tenant(request: Request, call_next):
     token = current_email.set(email)
     try:
         response = await call_next(request)
-        # Record Q06 observability events
         if "/q6/" in rewritten or rewritten.endswith("/q6"):
             from T22026.GA2.Q06_observability.main import record_request
             req_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
@@ -75,7 +68,7 @@ app.include_router(q10_router, prefix="/q10")
 
 
 # ---------------------------------------------------------------------------
-# Dashboard / status page
+# Dashboard
 # ---------------------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 def ga2_home():
@@ -87,26 +80,25 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>GA2 API Hub — TDS 2026-05</title>
+  <title>GA2 URL Generator — TDS 2026-05</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
     :root {
-      --bg:        #06080f;
-      --surface:   #0d1117;
-      --surface2:  #161b26;
-      --border:    #21262d;
-      --text:      #e6edf3;
-      --muted:     #8b949e;
-      --accent:    #7ee8a2;
-      --blue:      #58a6ff;
-      --purple:    #bc8cff;
-      --orange:    #ffa657;
-      --red:       #ff7b72;
-      --yellow:    #e3b341;
-      --grad1:     linear-gradient(135deg, #1a1f35 0%, #0d1117 100%);
+      --bg:       #06080f;
+      --surface:  #0d1117;
+      --s2:       #161b26;
+      --s3:       #1c2333;
+      --border:   #21262d;
+      --text:     #e6edf3;
+      --muted:    #8b949e;
+      --accent:   #7ee8a2;
+      --blue:     #58a6ff;
+      --purple:   #bc8cff;
+      --orange:   #ffa657;
+      --red:      #ff7b72;
+      --yellow:   #e3b341;
     }
 
     body {
@@ -114,376 +106,463 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       background: var(--bg);
       color: var(--text);
       min-height: 100vh;
-      overflow-x: hidden;
     }
 
-    /* ----- HEADER ----- */
-    header {
-      padding: 2.5rem 2rem 1.5rem;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      text-align: center;
+    /* ── HERO ── */
+    .hero {
+      background: linear-gradient(160deg, #0d1b2e 0%, #06080f 60%);
       border-bottom: 1px solid var(--border);
-      background: var(--grad1);
+      padding: 3rem 1.5rem 2.5rem;
+      text-align: center;
       position: relative;
       overflow: hidden;
     }
-    header::before {
+    .hero::before {
       content: '';
-      position: absolute;
-      inset: 0;
-      background: radial-gradient(ellipse 80% 60% at 50% -20%, rgba(126,232,162,.12), transparent);
+      position: absolute; inset: 0;
+      background: radial-gradient(ellipse 80% 55% at 50% -10%, rgba(126,232,162,.13), transparent);
       pointer-events: none;
     }
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      background: rgba(126,232,162,.1);
-      border: 1px solid rgba(126,232,162,.3);
-      color: var(--accent);
-      border-radius: 99px;
-      padding: 4px 14px;
-      font-size: .75rem;
-      font-weight: 600;
-      letter-spacing: .04em;
-      margin-bottom: 1rem;
+    .live-pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: rgba(126,232,162,.1); border: 1px solid rgba(126,232,162,.3);
+      color: var(--accent); border-radius: 99px; padding: 4px 14px;
+      font-size: .72rem; font-weight: 700; letter-spacing: .06em; margin-bottom: 1.2rem;
     }
-    .badge::before { content: '●'; font-size: .6rem; animation: pulse 2s infinite; }
-    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
-    header h1 {
-      font-size: clamp(1.6rem, 4vw, 2.6rem);
-      font-weight: 800;
-      background: linear-gradient(135deg, #fff 0%, var(--accent) 100%);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
+    .live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: blink 1.8s infinite; }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.25} }
+    .hero h1 {
+      font-size: clamp(1.8rem,4.5vw,3rem); font-weight: 800;
+      background: linear-gradient(135deg,#fff 0%, var(--accent) 100%);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+      margin-bottom: .6rem;
     }
-    header p { color: var(--muted); margin-top: .5rem; font-size: .95rem; max-width: 560px; }
+    .hero p { color: var(--muted); font-size: .95rem; max-width: 540px; margin: 0 auto; line-height: 1.6; }
 
-    /* ----- EMAIL LOOKUP ----- */
-    .lookup {
-      max-width: 900px;
-      margin: 2rem auto;
-      padding: 0 1.5rem;
+    /* ── EMAIL INPUT CARD ── */
+    .email-wrap {
+      max-width: 780px; margin: 2rem auto; padding: 0 1.25rem;
     }
-    .lookup-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      padding: 1.4rem 1.8rem;
-      display: flex;
-      gap: 1rem;
-      align-items: center;
-      flex-wrap: wrap;
+    .email-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 16px; padding: 1.6rem 2rem;
     }
-    .lookup-card label { font-size: .85rem; color: var(--muted); white-space: nowrap; }
-    .lookup-card input {
-      flex: 1;
-      min-width: 220px;
-      background: var(--surface2);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: .55rem 1rem;
-      color: var(--text);
-      font-size: .9rem;
-      font-family: 'JetBrains Mono', monospace;
-      outline: none;
+    .email-card label {
+      display: block; font-size: .78rem; font-weight: 600;
+      color: var(--muted); letter-spacing: .05em; text-transform: uppercase; margin-bottom: .6rem;
+    }
+    .email-row { display: flex; gap: .75rem; flex-wrap: wrap; }
+    .email-row input {
+      flex: 1; min-width: 240px;
+      background: var(--s2); border: 1.5px solid var(--border);
+      border-radius: 10px; padding: .7rem 1.1rem;
+      color: var(--text); font-size: .95rem;
+      font-family: 'JetBrains Mono', monospace; outline: none;
       transition: border-color .2s;
     }
-    .lookup-card input:focus { border-color: var(--accent); }
-    .lookup-card button {
-      background: var(--accent);
-      color: #06080f;
-      border: none;
-      border-radius: 8px;
-      padding: .55rem 1.4rem;
-      font-weight: 700;
-      font-size: .9rem;
-      cursor: pointer;
-      transition: opacity .15s, transform .12s;
-      white-space: nowrap;
+    .email-row input:focus { border-color: var(--accent); }
+    .email-row input::placeholder { color: #3d444d; }
+    .gen-btn {
+      background: var(--accent); color: #06080f;
+      border: none; border-radius: 10px; padding: .7rem 1.6rem;
+      font-size: .9rem; font-weight: 800; cursor: pointer;
+      transition: opacity .15s, transform .12s; white-space: nowrap;
     }
-    .lookup-card button:hover { opacity: .85; transform: translateY(-1px); }
+    .gen-btn:hover { opacity: .85; transform: translateY(-1px); }
 
-    /* ----- GRID ----- */
-    .grid {
-      max-width: 900px;
-      margin: 0 auto 3rem;
-      padding: 0 1.5rem;
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-      gap: 1rem;
+    /* ── SECTION HEADING ── */
+    .section {
+      max-width: 780px; margin: 0 auto; padding: 0 1.25rem 3rem;
     }
-    .card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      padding: 1.3rem 1.4rem;
-      display: flex;
-      flex-direction: column;
-      gap: .6rem;
-      transition: border-color .2s, transform .15s, box-shadow .2s;
-      text-decoration: none;
-      color: inherit;
-      position: relative;
-      overflow: hidden;
+    .section-title {
+      font-size: .72rem; font-weight: 700; letter-spacing: .1em;
+      text-transform: uppercase; color: var(--muted);
+      display: flex; align-items: center; gap: 8px;
+      margin: 1.8rem 0 1rem;
     }
-    .card::before {
-      content: '';
-      position: absolute;
-      inset: 0;
-      background: var(--card-glow, transparent);
-      opacity: 0;
-      transition: opacity .25s;
-    }
-    .card:hover { border-color: var(--card-accent, var(--border)); transform: translateY(-3px); box-shadow: 0 8px 30px rgba(0,0,0,.4); }
-    .card:hover::before { opacity: 1; }
-    .card-header { display: flex; align-items: center; gap: .75rem; }
-    .q-badge {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: .72rem;
-      font-weight: 700;
-      background: var(--card-badge-bg, rgba(88,166,255,.12));
-      color: var(--card-accent, var(--blue));
-      border: 1px solid var(--card-accent, var(--blue));
-      border-radius: 6px;
-      padding: 2px 8px;
-      white-space: nowrap;
-    }
-    .card h3 { font-size: .95rem; font-weight: 600; }
-    .card p { font-size: .8rem; color: var(--muted); line-height: 1.55; flex: 1; }
-    .endpoints { display: flex; flex-wrap: wrap; gap: 4px; margin-top: .3rem; }
-    .ep-tag {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: .68rem;
-      background: var(--surface2);
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      padding: 2px 7px;
-      color: var(--muted);
-    }
-    .card-status {
-      display: flex;
-      align-items: center;
-      gap: .5rem;
-      font-size: .78rem;
-      color: var(--muted);
-      border-top: 1px solid var(--border);
-      padding-top: .7rem;
-      margin-top: .2rem;
-    }
-    .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); display: inline-block; animation: pulse 2s infinite; }
+    .section-title::after { content:''; flex:1; height:1px; background: var(--border); }
 
-    /* ----- PARAM TABLE ----- */
-    #params-section {
-      max-width: 900px;
-      margin: 0 auto 2rem;
-      padding: 0 1.5rem;
-      display: none;
+    /* ── URL TABLE ── */
+    #url-section { display: none; }
+    .url-table {
+      display: flex; flex-direction: column; gap: .55rem;
     }
-    .params-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      overflow: hidden;
-    }
-    .params-header {
-      background: var(--surface2);
-      padding: .9rem 1.4rem;
-      font-size: .85rem;
-      font-weight: 600;
-      color: var(--muted);
-      display: flex;
-      align-items: center;
-      gap: .5rem;
-    }
-    .params-header span { color: var(--accent); font-family: 'JetBrains Mono', monospace; }
-    .params-body {
-      padding: 1rem 1.4rem;
+    .url-row {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 12px; overflow: hidden;
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-      gap: .5rem 1.5rem;
+      grid-template-columns: 48px 1fr auto auto;
+      align-items: center;
+      transition: border-color .2s;
     }
-    .param-row { display: flex; flex-direction: column; gap: 2px; }
-    .param-label { font-size: .73rem; color: var(--muted); }
-    .param-value {
+    .url-row:hover { border-color: #30363d; }
+    .q-num {
+      display: flex; align-items: center; justify-content: center;
+      height: 100%; min-height: 56px;
+      background: var(--s2); border-right: 1px solid var(--border);
       font-family: 'JetBrains Mono', monospace;
-      font-size: .8rem;
+      font-size: .72rem; font-weight: 700;
       color: var(--accent);
-      word-break: break-all;
     }
-    .spin { display: inline-block; animation: spin .8s linear infinite; }
-    @keyframes spin { to { transform: rotate(360deg); } }
+    .url-info { padding: .7rem 1rem; overflow: hidden; }
+    .url-name { font-size: .8rem; font-weight: 600; color: var(--text); margin-bottom: 3px; }
+    .url-method {
+      display: inline-block; font-size: .64rem; font-weight: 700;
+      padding: 1px 5px; border-radius: 4px; margin-right: 5px;
+      font-family: 'JetBrains Mono', monospace; letter-spacing: .04em;
+    }
+    .m-get  { background: rgba(88,166,255,.15); color: var(--blue); border: 1px solid rgba(88,166,255,.25); }
+    .m-post { background: rgba(126,232,162,.12); color: var(--accent); border: 1px solid rgba(126,232,162,.22); }
+    .url-path {
+      font-family: 'JetBrains Mono', monospace; font-size: .76rem;
+      color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .url-path .em { color: #fbbf24; }
+    .url-actions { display: flex; gap: 0; }
+    .copy-btn {
+      background: transparent; border: none; border-left: 1px solid var(--border);
+      color: var(--muted); padding: 0 1rem; height: 100%; min-height: 56px;
+      cursor: pointer; font-size: .78rem; font-weight: 600;
+      display: flex; align-items: center; gap: 5px;
+      transition: background .15s, color .15s; white-space: nowrap;
+    }
+    .copy-btn:hover { background: var(--s2); color: var(--text); }
+    .copy-btn.copied { color: var(--accent); }
+    .open-btn {
+      background: transparent; border: none; border-left: 1px solid var(--border);
+      color: var(--muted); padding: 0 .9rem; height: 100%; min-height: 56px;
+      cursor: pointer; font-size: .8rem; display: flex; align-items: center;
+      transition: background .15s, color .15s; text-decoration: none;
+    }
+    .open-btn:hover { background: var(--s2); color: var(--blue); }
 
-    /* ----- DOCS FOOTER ----- */
-    footer {
-      text-align: center;
-      padding: 1.5rem;
-      color: var(--muted);
-      font-size: .82rem;
-      border-top: 1px solid var(--border);
+    /* ── QUICK TIPS ── */
+    .tip-box {
+      background: var(--s2); border: 1px solid var(--border);
+      border-radius: 12px; padding: 1.1rem 1.3rem; margin-bottom: .6rem;
     }
+    .tip-box code {
+      font-family: 'JetBrains Mono', monospace; font-size: .78rem;
+      background: var(--s3); border: 1px solid var(--border);
+      border-radius: 5px; padding: 1px 6px; color: var(--accent);
+    }
+    .tip-box p { font-size: .83rem; color: var(--muted); line-height: 1.6; }
+
+    /* ── INFO CARDS ── */
+    .info-grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: .7rem;
+    }
+    .info-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 12px; padding: 1rem 1.1rem;
+    }
+    .info-label { font-size: .7rem; color: var(--muted); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; margin-bottom: 4px; }
+    .info-val {
+      font-family: 'JetBrains Mono', monospace; font-size: .8rem; color: var(--accent);
+      word-break: break-all; display: flex; align-items: center; gap: 6px;
+    }
+    .mini-copy {
+      background: none; border: none; color: var(--muted); cursor: pointer;
+      font-size: .7rem; flex-shrink: 0; transition: color .15s;
+    }
+    .mini-copy:hover { color: var(--accent); }
+    .loading-dots::after {
+      content: '...'; animation: dots 1s infinite;
+    }
+    @keyframes dots { 0%{content:'.'} 33%{content:'..'} 66%{content:'...'} }
+
+    /* footer */
+    footer { text-align: center; color: var(--muted); font-size: .78rem; padding: 2rem 1rem; border-top: 1px solid var(--border); }
     footer a { color: var(--blue); text-decoration: none; }
-    footer a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
 
-<header>
-  <div class="badge">Multi-Tenant API Hub &mdash; Live</div>
-  <h1>TDS GA2 API Hub</h1>
-  <p>Seeded per-student. All 10 question services live under <code style="color:var(--accent);font-family:'JetBrains Mono',monospace">/ga2/{email}/q&lt;N&gt;/...</code></p>
-</header>
+<!-- HERO -->
+<div class="hero">
+  <div class="live-pill"><span class="live-dot"></span>10 SERVICES LIVE</div>
+  <h1>GA2 URL Generator</h1>
+  <p>Enter your IITM student email to instantly generate all your personalised GA2 API endpoints — ready to copy-paste into the exam grader.</p>
+</div>
 
-<!-- Email lookup -->
-<div class="lookup">
-  <div class="lookup-card">
-    <label>Student email →</label>
-    <input type="email" id="email-input" placeholder="23f1000000@ds.study.iitm.ac.in" />
-    <button onclick="loadParams()">Load My Config</button>
+<!-- EMAIL INPUT -->
+<div class="email-wrap">
+  <div class="email-card">
+    <label>Your Student Email</label>
+    <div class="email-row">
+      <input type="email" id="email-input"
+        placeholder="23f1000000@ds.study.iitm.ac.in"
+        autocomplete="off" spellcheck="false" />
+      <button class="gen-btn" onclick="generate()">⚡ Generate URLs</button>
+    </div>
   </div>
 </div>
 
-<!-- Dynamic per-student params -->
-<section id="params-section">
-  <div class="params-card">
-    <div class="params-header">⚡ Computed Parameters for <span id="params-email"></span></div>
-    <div class="params-body" id="params-body"></div>
-  </div>
-</section>
+<!-- URL SECTION (hidden until email entered) -->
+<div class="section">
 
-<!-- Question grid -->
-<div class="grid">
+  <div id="url-section">
 
-  <div class="card" style="--card-accent:#58a6ff;--card-badge-bg:rgba(88,166,255,.1);--card-glow:radial-gradient(ellipse 120% 80% at 50% 50%,rgba(88,166,255,.04),transparent)">
-    <div class="card-header"><span class="q-badge">Q01</span><h3>CORS-Aware Metrics</h3></div>
-    <p>Statistical analysis over integer arrays with strict per-student <code>Access-Control-Allow-Origin</code>.</p>
-    <div class="endpoints"><span class="ep-tag">GET /q1/stats</span></div>
-    <div class="card-status"><span class="dot"></span> Online</div>
-  </div>
+    <!-- Computed params -->
+    <div class="section-title">Your Computed Config</div>
+    <div class="info-grid" id="info-grid">
+      <div class="info-card"><div class="info-label">Email</div><div class="info-val" id="ic-email">—</div></div>
+      <div class="info-card"><div class="info-label">Q01 Allowed Origin</div><div class="info-val" id="ic-origin"><span class="loading-dots"></span></div></div>
+      <div class="info-card"><div class="info-label">Q03 Port</div><div class="info-val" id="ic-port"><span class="loading-dots"></span></div></div>
+      <div class="info-card"><div class="info-label">Q03 Workers</div><div class="info-val" id="ic-workers"><span class="loading-dots"></span></div></div>
+      <div class="info-card"><div class="info-label">Q03 Log Level</div><div class="info-val" id="ic-log"><span class="loading-dots"></span></div></div>
+      <div class="info-card"><div class="info-label">Q09 Total Orders</div><div class="info-val" id="ic-orders"><span class="loading-dots"></span></div></div>
+    </div>
 
-  <div class="card" style="--card-accent:#bc8cff;--card-badge-bg:rgba(188,140,255,.1);--card-glow:radial-gradient(ellipse 120% 80% at 50% 50%,rgba(188,140,255,.04),transparent)">
-    <div class="card-header"><span class="q-badge">Q02</span><h3>OAuth / OIDC Verify</h3></div>
-    <p>Validates RS256 JWT tokens against per-student issuer, audience, and expiry constraints.</p>
-    <div class="endpoints"><span class="ep-tag">POST /q2/verify</span></div>
-    <div class="card-status"><span class="dot"></span> Online</div>
-  </div>
+    <!-- URL list -->
+    <div class="section-title">Your Personalised API URLs</div>
+    <div class="url-table" id="url-table"></div>
 
-  <div class="card" style="--card-accent:#7ee8a2;--card-badge-bg:rgba(126,232,162,.1);--card-glow:radial-gradient(ellipse 120% 80% at 50% 50%,rgba(126,232,162,.04),transparent)">
-    <div class="card-header"><span class="q-badge">Q03</span><h3>Config Precedence</h3></div>
-    <p>Merges 4 config layers (defaults → yaml → .env → os-env) with CLI override and secret masking.</p>
-    <div class="endpoints"><span class="ep-tag">GET /q3/effective-config</span></div>
-    <div class="card-status"><span class="dot"></span> Online</div>
-  </div>
+    <!-- Tips -->
+    <div class="section-title">Quick Tips</div>
+    <div class="tip-box">
+      <p>🔑 <strong>Q05 Analytics</strong> requires an <code>X-API-Key</code> header. Your key is unique — fetch it from <code>/q5/analytics</code> after generating.</p>
+    </div>
+    <div class="tip-box">
+      <p>🪪 <strong>Q02 JWT Verify</strong> expects a POST body: <code>{"token": "&lt;your-RS256-jwt&gt;"}</code></p>
+    </div>
+    <div class="tip-box">
+      <p>📦 <strong>Q08 Extract</strong> expects: <code>{"text": "Invoice from Vendor XYZ, amount USD 540.50, date 2026-03-15"}</code></p>
+    </div>
+    <div class="tip-box">
+      <p>🔁 <strong>Q09 Orders</strong> — pass <code>Idempotency-Key: any-uuid</code> header so the same order ID is returned on retry.</p>
+    </div>
 
-  <div class="card" style="--card-accent:#ffa657;--card-badge-bg:rgba(255,166,87,.1);--card-glow:radial-gradient(ellipse 120% 80% at 50% 50%,rgba(255,166,87,.04),transparent)">
-    <div class="card-header"><span class="q-badge">Q04</span><h3>Redis Counter</h3></div>
-    <p>Docker Compose service that proxies atomic INCR/GET via Redis with health probe.</p>
-    <div class="endpoints"><span class="ep-tag">POST /q4/hit/{key}</span><span class="ep-tag">GET /q4/count/{key}</span><span class="ep-tag">GET /q4/healthz</span></div>
-    <div class="card-status"><span class="dot"></span> Online</div>
   </div>
 
-  <div class="card" style="--card-accent:#e3b341;--card-badge-bg:rgba(227,179,65,.1);--card-glow:radial-gradient(ellipse 120% 80% at 50% 50%,rgba(227,179,65,.04),transparent)">
-    <div class="card-header"><span class="q-badge">Q05</span><h3>Analytics Platform</h3></div>
-    <p>Batch event aggregation: total, unique users, revenue, top user. X-API-Key authentication per student.</p>
-    <div class="endpoints"><span class="ep-tag">POST /q5/analytics</span></div>
-    <div class="card-status"><span class="dot"></span> Online</div>
-  </div>
-
-  <div class="card" style="--card-accent:#58a6ff;--card-badge-bg:rgba(88,166,255,.1);--card-glow:radial-gradient(ellipse 120% 80% at 50% 50%,rgba(88,166,255,.04),transparent)">
-    <div class="card-header"><span class="q-badge">Q06</span><h3>Observability</h3></div>
-    <p>Live Prometheus metrics, structured tail logging, and health/uptime endpoint.</p>
-    <div class="endpoints"><span class="ep-tag">GET /q6/metrics</span><span class="ep-tag">GET /q6/logs/tail</span><span class="ep-tag">GET /q6/healthz</span></div>
-    <div class="card-status"><span class="dot"></span> Online</div>
-  </div>
-
-  <div class="card" style="--card-accent:#ff7b72;--card-badge-bg:rgba(255,123,114,.1);--card-glow:radial-gradient(ellipse 120% 80% at 50% 50%,rgba(255,123,114,.04),transparent)">
-    <div class="card-header"><span class="q-badge">Q07</span><h3>LLM Tunnel</h3></div>
-    <p>OpenAI-compatible local LLM tunnel: echoes tokens, computes arithmetic, returns structured completions.</p>
-    <div class="endpoints"><span class="ep-tag">POST /q7/v1/chat/completions</span></div>
-    <div class="card-status"><span class="dot"></span> Online</div>
-  </div>
-
-  <div class="card" style="--card-accent:#bc8cff;--card-badge-bg:rgba(188,140,255,.1);--card-glow:radial-gradient(ellipse 120% 80% at 50% 50%,rgba(188,140,255,.04),transparent)">
-    <div class="card-header"><span class="q-badge">Q08</span><h3>Invoice Extractor</h3></div>
-    <p>LLM-style structured output: extracts vendor, currency, date, and amount from free-text invoices.</p>
-    <div class="endpoints"><span class="ep-tag">POST /q8/extract</span></div>
-    <div class="card-status"><span class="dot"></span> Online</div>
-  </div>
-
-  <div class="card" style="--card-accent:#7ee8a2;--card-badge-bg:rgba(126,232,162,.1);--card-glow:radial-gradient(ellipse 120% 80% at 50% 50%,rgba(126,232,162,.04),transparent)">
-    <div class="card-header"><span class="q-badge">Q09</span><h3>Orders (Idempotency + Pagination)</h3></div>
-    <p>Create orders with idempotency keys, cursor-based pagination, and per-client rate limiting.</p>
-    <div class="endpoints"><span class="ep-tag">POST /q9/orders</span><span class="ep-tag">GET /q9/orders</span></div>
-    <div class="card-status"><span class="dot"></span> Online</div>
-  </div>
-
-  <div class="card" style="--card-accent:#ffa657;--card-badge-bg:rgba(255,166,87,.1);--card-glow:radial-gradient(ellipse 120% 80% at 50% 50%,rgba(255,166,87,.04),transparent)">
-    <div class="card-header"><span class="q-badge">Q10</span><h3>Middleware Stack</h3></div>
-    <p>Composable CORS guard → Context-ID injector → sliding-window rate limiter → pong handler.</p>
-    <div class="endpoints"><span class="ep-tag">GET /q10/ping</span></div>
-    <div class="card-status"><span class="dot"></span> Online</div>
+  <!-- empty state -->
+  <div id="empty-state" style="text-align:center;padding:3rem 1rem;color:var(--muted);">
+    <div style="font-size:2.5rem;margin-bottom:.8rem;">🎯</div>
+    <p style="font-size:.95rem;">Enter your email above and click <strong style="color:var(--text)">Generate URLs</strong> to get your personalised endpoints.</p>
   </div>
 
 </div>
 
 <footer>
-  <a href="docs">OpenAPI Docs</a> &nbsp;·&nbsp;
-  <a href="redoc">ReDoc</a> &nbsp;·&nbsp;
-  IITM TDS 2026-05 &mdash; Multi-tenant, seeded per student email
+  <a href="docs">OpenAPI Docs</a> &nbsp;·&nbsp; <a href="redoc">ReDoc</a> &nbsp;·&nbsp;
+  IITM TDS 2026-05 GA2 — Multi-tenant, seeded per student email
 </footer>
 
 <script>
-async function loadParams() {
-  const email = document.getElementById('email-input').value.trim();
-  if (!email) return;
-  const sec = document.getElementById('params-section');
-  const body = document.getElementById('params-body');
-  const lbl  = document.getElementById('params-email');
-  lbl.textContent = email;
-  body.innerHTML = '<div style="color:var(--muted);font-size:.85rem"><span class="spin">↻</span> Loading…</div>';
-  sec.style.display = 'block';
+  // Detect base host automatically
+  const BASE = window.location.origin;
 
-  const base = `/ga2/${encodeURIComponent(email)}`;
-  const rows = [];
+  const QUESTIONS = [
+    {
+      q: 'Q01', name: 'Metrics + CORS',
+      method: 'GET',
+      path: (e) => `/ga2/${e}/q1/stats?values=1,2,3,4,5`,
+      note: 'Comma-separated integers in ?values'
+    },
+    {
+      q: 'Q02', name: 'OAuth JWT Verify',
+      method: 'POST',
+      path: (e) => `/ga2/${e}/q2/verify`,
+      note: 'Body: {"token": "<RS256-jwt>"}'
+    },
+    {
+      q: 'Q03', name: 'Config Precedence',
+      method: 'GET',
+      path: (e) => `/ga2/${e}/q3/effective-config`,
+      note: 'Optional ?set=key=value overrides'
+    },
+    {
+      q: 'Q04', name: 'Redis Counter — Hit',
+      method: 'POST',
+      path: (e) => `/ga2/${e}/q4/hit/mykey`,
+      note: 'Replace mykey with any key name'
+    },
+    {
+      q: 'Q04', name: 'Redis Counter — Count',
+      method: 'GET',
+      path: (e) => `/ga2/${e}/q4/count/mykey`,
+      note: 'Read the current count for a key'
+    },
+    {
+      q: 'Q04', name: 'Redis Healthz',
+      method: 'GET',
+      path: (e) => `/ga2/${e}/q4/healthz`,
+      note: 'Check Redis + service health'
+    },
+    {
+      q: 'Q05', name: 'Analytics (X-API-Key)',
+      method: 'POST',
+      path: (e) => `/ga2/${e}/q5/analytics`,
+      note: 'Add X-API-Key header — key is unique to your email'
+    },
+    {
+      q: 'Q06', name: 'Prometheus Metrics',
+      method: 'GET',
+      path: (e) => `/ga2/${e}/q6/metrics`,
+      note: 'Returns Prometheus text format'
+    },
+    {
+      q: 'Q06', name: 'Log Tail',
+      method: 'GET',
+      path: (e) => `/ga2/${e}/q6/logs/tail?limit=20`,
+      note: 'Returns last N structured log entries'
+    },
+    {
+      q: 'Q06', name: 'Healthz / Uptime',
+      method: 'GET',
+      path: (e) => `/ga2/${e}/q6/healthz`,
+      note: 'Returns status + uptime_s'
+    },
+    {
+      q: 'Q07', name: 'LLM Chat Completions',
+      method: 'POST',
+      path: (e) => `/ga2/${e}/q7/v1/chat/completions`,
+      note: 'OpenAI-compatible, echoes tokens & arithmetic'
+    },
+    {
+      q: 'Q08', name: 'Invoice Extractor',
+      method: 'POST',
+      path: (e) => `/ga2/${e}/q8/extract`,
+      note: 'Body: {"text": "Invoice from Acme, USD 540.50, 2026-03-15"}'
+    },
+    {
+      q: 'Q09', name: 'Create Order',
+      method: 'POST',
+      path: (e) => `/ga2/${e}/q9/orders`,
+      note: 'Header: Idempotency-Key: <uuid>'
+    },
+    {
+      q: 'Q09', name: 'List Orders (Paginated)',
+      method: 'GET',
+      path: (e) => `/ga2/${e}/q9/orders?limit=10`,
+      note: 'Cursor-based pagination via ?cursor=N'
+    },
+    {
+      q: 'Q10', name: 'Ping (Middleware Stack)',
+      method: 'GET',
+      path: (e) => `/ga2/${e}/q10/ping`,
+      note: 'CORS + Context-ID + Rate-limiter → pong'
+    },
+  ];
 
-  try {
-    const r1 = await fetch(`${base}/q1/stats?values=1,2,3`);
-    const h1 = r1.headers.get('access-control-allow-origin') || '(not returned)';
-    rows.push({ label: 'Q01 Allowed Origin', value: h1 });
-  } catch(e) { rows.push({ label: 'Q01 Allowed Origin', value: 'error' }); }
+  const METHOD_CLASS = { GET: 'm-get', POST: 'm-post' };
+  const Q_COLORS = {
+    Q01: '#58a6ff', Q02: '#bc8cff', Q03: '#7ee8a2',
+    Q04: '#ffa657', Q05: '#e3b341', Q06: '#58a6ff',
+    Q07: '#ff7b72', Q08: '#bc8cff', Q09: '#7ee8a2', Q10: '#ffa657'
+  };
 
-  try {
-    const r3 = await fetch(`${base}/q3/effective-config`);
-    const d3 = await r3.json();
-    rows.push({ label: 'Q03 Port', value: d3.port });
-    rows.push({ label: 'Q03 Workers', value: d3.workers });
-    rows.push({ label: 'Q03 Debug', value: String(d3.debug) });
-    rows.push({ label: 'Q03 Log Level', value: d3.log_level });
-  } catch(e) { rows.push({ label: 'Q03 Config', value: 'error' }); }
+  let lastEmail = '';
 
-  try {
-    const r9 = await fetch(`${base}/q9/orders`);
-    const d9 = await r9.json();
-    rows.push({ label: 'Q09 Total Orders', value: d9.items ? (d9.next_cursor ? '>' + d9.items.length : d9.items.length) : '?' });
-  } catch(e) { rows.push({ label: 'Q09 Orders', value: 'error' }); }
+  function generate() {
+    const raw = document.getElementById('email-input').value.trim();
+    if (!raw || !raw.includes('@')) {
+      document.getElementById('email-input').style.borderColor = '#f85149';
+      setTimeout(() => document.getElementById('email-input').style.borderColor = '', 1200);
+      return;
+    }
+    lastEmail = raw;
+    const enc = encodeURIComponent(raw);
 
-  try {
-    const r10 = await fetch(`${base}/q10/ping`);
-    const aco = r10.headers.get('access-control-allow-origin');
-    rows.push({ label: 'Q10 Context-Id', value: r10.headers.get('x-context-id') || 'n/a' });
-  } catch(e) { rows.push({ label: 'Q10 Ping', value: 'error' }); }
+    // Show section
+    document.getElementById('url-section').style.display = 'block';
+    document.getElementById('empty-state').style.display = 'none';
 
-  body.innerHTML = rows.map(r =>
-    `<div class="param-row"><div class="param-label">${r.label}</div><div class="param-value">${r.value}</div></div>`
-  ).join('');
-}
+    // Computed config card
+    document.getElementById('ic-email').textContent = raw;
 
-document.getElementById('email-input').addEventListener('keydown', e => {
-  if (e.key === 'Enter') loadParams();
-});
+    // Build URL rows
+    const table = document.getElementById('url-table');
+    table.innerHTML = '';
+    QUESTIONS.forEach((q, i) => {
+      const path = q.path(enc);
+      const fullUrl = BASE + path;
+      const color = Q_COLORS[q.q] || '#7ee8a2';
+
+      // email part highlighted in path display
+      const displayPath = path.replace(enc, `<span class="em">${enc}</span>`);
+
+      const row = document.createElement('div');
+      row.className = 'url-row';
+      row.innerHTML = `
+        <div class="q-num" style="color:${color}">${q.q}</div>
+        <div class="url-info">
+          <div class="url-name">
+            <span class="url-method ${METHOD_CLASS[q.method]}">${q.method}</span>
+            ${q.name}
+          </div>
+          <div class="url-path" title="${fullUrl}">${displayPath}</div>
+        </div>
+        <button class="copy-btn" id="copy-${i}" onclick="copyUrl('${fullUrl}', ${i})">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
+          </svg>
+          Copy
+        </button>
+        ${q.method === 'GET' ? `<a class="open-btn" href="${fullUrl}" target="_blank" title="Open in new tab">↗</a>` : '<div style="width:16px"></div>'}
+      `;
+      table.appendChild(row);
+    });
+
+    // Fetch live config values
+    fetchConfig(enc);
+  }
+
+  async function fetchConfig(enc) {
+    // Reset loaders
+    ['ic-origin','ic-port','ic-workers','ic-log','ic-orders'].forEach(id => {
+      document.getElementById(id).innerHTML = '<span style="color:var(--muted);font-size:.7rem">loading…</span>';
+    });
+
+    try {
+      const r1 = await fetch(`${BASE}/ga2/${enc}/q1/stats?values=1,2,3`);
+      const origin = r1.headers.get('access-control-allow-origin') || '(check CORS preflight)';
+      setInfo('ic-origin', origin);
+    } catch(e) { setInfo('ic-origin', 'fetch failed'); }
+
+    try {
+      const r3 = await fetch(`${BASE}/ga2/${enc}/q3/effective-config`);
+      const d = await r3.json();
+      setInfo('ic-port', String(d.port));
+      setInfo('ic-workers', String(d.workers));
+      setInfo('ic-log', d.log_level);
+    } catch(e) {
+      ['ic-port','ic-workers','ic-log'].forEach(id => setInfo(id, 'fetch failed'));
+    }
+
+    try {
+      const r9 = await fetch(`${BASE}/ga2/${enc}/q9/orders?limit=1`);
+      const d = await r9.json();
+      // next_cursor is null when we reach the end, so total = last id returned
+      const total = d.next_cursor ? '> 10' : (d.items?.length || '?');
+      setInfo('ic-orders', d.next_cursor || (d.items?.length ? String(d.items.length) : '?'));
+    } catch(e) { setInfo('ic-orders', 'fetch failed'); }
+  }
+
+  function setInfo(id, val) {
+    const el = document.getElementById(id);
+    el.innerHTML = `<span>${val}</span>
+      <button class="mini-copy" onclick="navigator.clipboard.writeText('${val.replace(/'/g,"\\'")}').then(()=>this.textContent='✓').then(()=>setTimeout(()=>this.textContent='⎘',1000))" title="Copy">⎘</button>`;
+  }
+
+  function copyUrl(url, idx) {
+    navigator.clipboard.writeText(url).then(() => {
+      const btn = document.getElementById(`copy-${idx}`);
+      btn.classList.add('copied');
+      btn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg> Copied!`;
+      setTimeout(() => {
+        btn.classList.remove('copied');
+        btn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg> Copy`;
+      }, 2000);
+    });
+  }
+
+  // Press Enter to generate
+  document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('email-input').addEventListener('keydown', e => {
+      if (e.key === 'Enter') generate();
+    });
+  });
 </script>
 </body>
 </html>
