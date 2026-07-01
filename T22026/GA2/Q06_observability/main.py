@@ -49,9 +49,6 @@ def record_request(path: str, req_id: str, status_code: int) -> None:
 @router.get("/work")
 async def get_work(request: Request, n: int = Query(..., ge=0, le=10_000)):
     email  = current_email.get()
-    req_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
-    path   = request.url.path
-    record_request(path, req_id, 200)
     return {"email": email, "done": n}
 
 
