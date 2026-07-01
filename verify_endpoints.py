@@ -1,15 +1,14 @@
-import requests
-import json
+from fastapi.testclient import TestClient
+from hf_space.app import app
 
-BASE_URL = "http://127.0.0.1:8000"
+client = TestClient(app)
 
 def test_endpoint(method, path, data=None, json_data=None, expected_status=200):
-    url = f"{BASE_URL}{path}"
     try:
         if method.upper() == "GET":
-            resp = requests.get(url, timeout=5)
+            resp = client.get(path, timeout=5)
         elif method.upper() == "POST":
-            resp = requests.post(url, data=data, json=json_data, timeout=5)
+            resp = client.post(path, data=data, json=json_data, timeout=5)
         else:
             print(f"Unsupported method: {method}")
             return False
