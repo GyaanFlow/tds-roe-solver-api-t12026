@@ -356,92 +356,72 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     {
       q: 'Q01', name: 'Metrics + CORS',
       method: 'GET',
-      path: (e) => `/ga2/${e}/q1/stats?values=1,2,3,4,5`,
-      note: 'Comma-separated integers in ?values'
+      path: (e) => `/ga2/${e}/q1/stats?values=1,2,3`,
+      submitPath: (e) => `/ga2/${e}/q1`,
+      note: 'Your deployed service base URL'
     },
     {
       q: 'Q02', name: 'OAuth JWT Verify',
       method: 'POST',
       path: (e) => `/ga2/${e}/q2/verify`,
-      note: 'Body: {"token": "<RS256-jwt>"}'
+      submitPath: (e) => `/ga2/${e}/q2/verify`,
+      note: 'Your deployed /verify endpoint URL'
     },
     {
       q: 'Q03', name: 'Config Precedence',
       method: 'GET',
       path: (e) => `/ga2/${e}/q3/effective-config`,
-      note: 'Optional ?set=key=value overrides'
+      submitPath: (e) => `/ga2/${e}/q3/effective-config`,
+      note: 'Your deployed /effective-config endpoint URL'
     },
     {
-      q: 'Q04', name: 'Redis Counter — Hit',
+      q: 'Q04', name: 'Redis Counter',
       method: 'POST',
-      path: (e) => `/ga2/${e}/q4/hit/mykey`,
-      note: 'Replace mykey with any key name'
-    },
-    {
-      q: 'Q04', name: 'Redis Counter — Count',
-      method: 'GET',
-      path: (e) => `/ga2/${e}/q4/count/mykey`,
-      note: 'Read the current count for a key'
-    },
-    {
-      q: 'Q04', name: 'Redis Healthz',
-      method: 'GET',
       path: (e) => `/ga2/${e}/q4/healthz`,
-      note: 'Check Redis + service health'
+      submitPath: (e) => `/ga2/${e}/q4`,
+      note: 'Your public tunnel base URL'
     },
     {
       q: 'Q05', name: 'Analytics (X-API-Key)',
       method: 'POST',
       path: (e) => `/ga2/${e}/q5/analytics`,
-      note: 'Add X-API-Key header — key is unique to your email'
+      submitPath: (e) => `/ga2/${e}/q5/analytics`,
+      note: 'Your deployed /analytics endpoint URL'
     },
     {
-      q: 'Q06', name: 'Prometheus Metrics',
+      q: 'Q06', name: 'Observability',
       method: 'GET',
       path: (e) => `/ga2/${e}/q6/metrics`,
-      note: 'Returns Prometheus text format'
-    },
-    {
-      q: 'Q06', name: 'Log Tail',
-      method: 'GET',
-      path: (e) => `/ga2/${e}/q6/logs/tail?limit=20`,
-      note: 'Returns last N structured log entries'
-    },
-    {
-      q: 'Q06', name: 'Healthz / Uptime',
-      method: 'GET',
-      path: (e) => `/ga2/${e}/q6/healthz`,
-      note: 'Returns status + uptime_s'
+      submitPath: (e) => `/ga2/${e}/q6`,
+      note: 'Your deployed service base URL'
     },
     {
       q: 'Q07', name: 'LLM Chat Completions',
       method: 'POST',
       path: (e) => `/ga2/${e}/q7/v1/chat/completions`,
-      note: 'OpenAI-compatible, echoes tokens & arithmetic'
+      submitPath: (e) => `/ga2/${e}/q7/v1/chat/completions`,
+      note: 'Your endpoint + model as JSON'
     },
     {
       q: 'Q08', name: 'Invoice Extractor',
       method: 'POST',
       path: (e) => `/ga2/${e}/q8/extract`,
-      note: 'Body: {"text": "Invoice from Acme, USD 540.50, 2026-03-15"}'
+      submitPath: (e) => `/ga2/${e}/q8/extract`,
+      note: 'Your deployed /extract endpoint URL'
     },
     {
-      q: 'Q09', name: 'Create Order',
+      q: 'Q09', name: 'Orders API',
       method: 'POST',
       path: (e) => `/ga2/${e}/q9/orders`,
-      note: 'Header: Idempotency-Key: <uuid>'
+      submitPath: (e) => `/ga2/${e}/q9`,
+      note: 'Your deployed orders API base URL'
     },
     {
-      q: 'Q09', name: 'List Orders (Paginated)',
-      method: 'GET',
-      path: (e) => `/ga2/${e}/q9/orders?limit=10`,
-      note: 'Cursor-based pagination via ?cursor=N'
-    },
-    {
-      q: 'Q10', name: 'Ping (Middleware Stack)',
+      q: 'Q10', name: 'Ping Middleware',
       method: 'GET',
       path: (e) => `/ga2/${e}/q10/ping`,
-      note: 'CORS + Context-ID + Rate-limiter → pong'
+      submitPath: (e) => `/ga2/${e}/q10`,
+      note: 'Your deployed service base URL'
     },
   ];
 
@@ -476,11 +456,13 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     table.innerHTML = '';
     QUESTIONS.forEach((q, i) => {
       const path = q.path(enc);
+      const submitPath = q.submitPath(enc);
       const fullUrl = BASE + path;
+      const fullSubmitUrl = BASE + submitPath;
       const color = Q_COLORS[q.q] || '#7ee8a2';
 
-      let displayPath = path.replace(enc, `<span class="em">${enc}</span>`);
-      let copyValue = fullUrl;
+      let displayPath = submitPath.replace(enc, `<span class="em">${enc}</span>`);
+      let copyValue = fullSubmitUrl;
 
       if (q.q === 'Q07') {
         const jsonVal = { url: fullUrl, model: "mock-model" };
@@ -495,9 +477,9 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="url-info">
           <div class="url-name">
             <span class="url-method ${METHOD_CLASS[q.method]}">${q.method}</span>
-            ${q.name}
+            ${q.name} <span style="color:var(--muted);font-size:0.72rem;margin-left:8px;font-style:italic">(${q.note})</span>
           </div>
-          <div class="url-path" title="${fullUrl}">${displayPath}</div>
+          <div class="url-path" title="${fullSubmitUrl}">${displayPath}</div>
         </div>
         <button class="copy-btn" id="copy-${i}" onclick="copyUrl(this.getAttribute('data-value'), ${i})" data-value='${copyValue.replace(/'/g, "&apos;")}'>
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -505,7 +487,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
           </svg>
           Copy
         </button>
-        ${q.method === 'GET' ? `<a class="open-btn" href="${fullUrl}" target="_blank" title="Open in new tab">↗</a>` : '<div style="width:16px"></div>'}
+        ${q.method === 'GET' ? `<a class="open-btn" href="${fullUrl}" target="_blank" title="Open test in new tab">↗</a>` : '<div style="width:16px"></div>'}
       `;
       table.appendChild(row);
     });
