@@ -164,6 +164,7 @@ def test_q4_compose():
     # Health
     resp = client.get(f"/ga2/{email}/q4/healthz")
     assert resp.json()["status"] == "ok"
+    assert resp.json()["redis"] == "up"
     print("[PASS] Q04 Redis counter verified!")
 
 

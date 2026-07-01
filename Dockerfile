@@ -6,10 +6,20 @@ ENV PIP_NO_CACHE_DIR=1
 
 WORKDIR /app
 
+# Install Node.js (needed for seedrandom bridge that matches exam grader)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl ca-certificates && \
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y --no-install-recommends nodejs && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
 COPY hf_space/requirements.txt /app/requirements.txt
 RUN pip install --upgrade pip && pip install -r /app/requirements.txt
 
 COPY . /app
+
+# Install seedrandom npm package for the Node.js bridge
+RUN cd /app && npm install --omit=dev seedrandom
 
 ENV Q14_OUTPUT_DIR=/tmp/q14_output
 ENV Q16_WORK_ROOT=/tmp/q16_work

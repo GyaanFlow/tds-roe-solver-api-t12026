@@ -4,9 +4,9 @@ from __future__ import annotations
 Q10: Composable Middleware Stack — /ping endpoint
 Middleware layers (applied in order, outermost first):
   1. CORS guard: allow only the tenant-specific origin (or exam origins)
-  2. X-Context-Id injector: generate + propagate
+  2. X-Request-Id injector: generate + propagate
   3. Rate limiter: N requests / 10s sliding window per X-Client-Id
-  4. Handler: {"message": "pong", "context_id": <id>}
+  4. Handler: {"email": "…", "request_id": "<id>"}
 
 Thread-safe sliding window rate limiter.
 """
@@ -41,6 +41,14 @@ def _check_rate(client_id: str, bucket: int) -> bool:
     return True
 
 
+def _cors_headers(origin: str | None, allowed: str) -> dict:
+    """Build CORS headers only if origin matches."""
+    h: dict = {}
+    if origin and (origin == allowed or origin in EXAM_ORIGINS):
+        h["Access-Control-Allow-Origin"] = origin
+    return h
+
+
 @router.options("/ping")
 async def options_ping(request: Request):
     email   = current_email.get()
@@ -72,11 +80,11 @@ async def ping(
     bucket  = params["bucket"]
     origin  = request.headers.get("Origin")
 
-    # 1. CORS gate
+    # 1. CORS gate — only block if an Origin IS present and doesn't match
     if origin and (origin not in EXAM_ORIGINS and origin != allowed):
         return JSONResponse(status_code=403, content={"detail": "CORS forbidden"})
 
-    # 2. Request ID
+    # 2. Request ID — reuse inbound or generate fresh
     req_id  = x_request_id or str(uuid.uuid4())
 
     # 3. Rate limit
@@ -85,15 +93,17 @@ async def ping(
         hdrs = {
             "X-Request-ID": req_id,
             "Retry-After":  "10",
+            **_cors_headers(origin, allowed),
         }
-        if origin and (origin == allowed or origin in EXAM_ORIGINS):
-            hdrs["Access-Control-Allow-Origin"] = origin
         return JSONResponse(status_code=429, content={"detail": "Too Many Requests"}, headers=hdrs)
 
-    # 4. Build response
-    hdrs: dict = {"X-Request-ID": req_id}
-    if origin and (origin == allowed or origin in EXAM_ORIGINS):
-        hdrs["Access-Control-Allow-Origin"] = origin
+    # 4. Build response — ALWAYS include X-Request-ID in response header
+    hdrs: dict = {
+        "X-Request-ID": req_id,
+        **_cors_headers(origin, allowed),
+    }
 
-    return JSONResponse(content={"message": "pong", "request_id": req_id, "email": email}, headers=hdrs)
-
+    return JSONResponse(
+        content={"email": email, "request_id": req_id},
+        headers=hdrs,
+    )
