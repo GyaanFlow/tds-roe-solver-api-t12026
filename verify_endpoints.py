@@ -102,5 +102,23 @@ def main():
             else:
                 print("[FAIL] Q18 session version proxy/fallback failed!")
 
+    # 8. Q25 Vercel Latency API
+    test_endpoint("GET", "/q-vercel-latency/health")
+    gen_resp = test_endpoint("POST", "/q-vercel-latency/generate-telemetry", json_data={"email": "student@example.com"})
+    if gen_resp:
+        # Now run analyze
+        analyze_payload = {
+            "regions": ["apac", "emea"],
+            "threshold_ms": 180.0
+        }
+        analyze_resp = test_endpoint("POST", "/q-vercel-latency/api/latency", json_data=analyze_payload)
+        if analyze_resp:
+            data = analyze_resp.json()
+            print("Q25 analysis returned regions:", [r["region"] for r in data.get("regions", [])])
+            if len(data.get("regions", [])) == 2:
+                print("[PASS] Q25 Vercel Latency API succeeded!")
+            else:
+                print("[FAIL] Q25 Vercel Latency API failed!")
+
 if __name__ == "__main__":
     main()
