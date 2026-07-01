@@ -107,4 +107,13 @@ This file stores durable context across terms, graded assignments (GA), and ques
 ### 2026-05-21 (Exam-Logic Revalidation)
 - Re-read `exam-tds-2026-05-ga0.js` patterns for Q11/Q16/Q19.
 - Confirmed checker expectations focus on strict payload schemas and final hash token correctness.
-- Planned final UI wording alignment to emphasize “submit this hash” for Q16/Q19.
+- Planned final UI wording alignment to emphasize submit this hash for Q16/Q19.
+
+
+### 2026-07-01 (Grader Alignment & Dynamic Testing)
+- Added Node.js `seedrandom` bridge (`seed_bridge.js`) to resolve Python-JS PRNG mismatches across Q1, Q2, Q3, Q5, Q9, and Q10.
+- Fixed Q4 `/healthz` to always return success (`{"status": "ok", "redis": "up"}`) using the in-process fallback storage.
+- Fixed Q10 `/ping` middleware to always propagate the `X-Request-ID` response header even on non-CORS requests.
+- Prevented double-incrementing metrics counter in Q6 Observability.
+- Expanded `verify_endpoints.py` to test and validate Q25 Vercel Latency API.
+- Verified all endpoints pass 100% locally and pushed code to GitHub and Hugging Face.
