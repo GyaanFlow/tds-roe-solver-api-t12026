@@ -35,6 +35,7 @@ def _cors(origin: str | None) -> dict:
         "Access-Control-Allow-Origin":  origin or "*",
         "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type, X-Client-Id, Idempotency-Key",
+        "Access-Control-Expose-Headers": "Retry-After, X-Request-ID",
     }
 
 

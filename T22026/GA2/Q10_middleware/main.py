@@ -46,6 +46,7 @@ def _cors_headers(origin: str | None, allowed: str) -> dict:
     h: dict = {}
     if origin and (origin == allowed or origin in EXAM_ORIGINS):
         h["Access-Control-Allow-Origin"] = origin
+        h["Access-Control-Expose-Headers"] = "X-Request-ID, Retry-After"
     return h
 
 
@@ -63,6 +64,7 @@ async def options_ping(request: Request):
                 "Access-Control-Allow-Origin":  origin,
                 "Access-Control-Allow-Methods": "GET, OPTIONS",
                 "Access-Control-Allow-Headers": "Content-Type, X-Client-Id, X-Request-ID",
+                "Access-Control-Expose-Headers": "X-Request-ID, Retry-After",
             },
         )
     return Response(status_code=403)
