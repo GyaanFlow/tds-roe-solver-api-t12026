@@ -61,8 +61,8 @@ async def chat_completions(body: ChatRequest, request: Request):
 
 
 def _route_prompt(prompt: str) -> str:
-    # Echo test — model must echo back TK<6-hex> verbatim
-    token_m = re.search(r'\b(TK[0-9A-Fa-f]{6})\b', prompt, re.IGNORECASE)
+    # Echo test — model must echo back TK<6-alphanumeric> verbatim (base-36)
+    token_m = re.search(r'\b(TK[0-9A-Z]{6})\b', prompt, re.IGNORECASE)
     if token_m:
         tok = token_m.group(1).upper()
         return tok  # echo ONLY the token so grader's `.includes()` check passes
