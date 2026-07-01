@@ -479,8 +479,14 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       const fullUrl = BASE + path;
       const color = Q_COLORS[q.q] || '#7ee8a2';
 
-      // email part highlighted in path display
-      const displayPath = path.replace(enc, `<span class="em">${enc}</span>`);
+      let displayPath = path.replace(enc, `<span class="em">${enc}</span>`);
+      let copyValue = fullUrl;
+
+      if (q.q === 'Q07') {
+        const jsonVal = { url: fullUrl, model: "mock-model" };
+        copyValue = JSON.stringify(jsonVal);
+        displayPath = `{"url": "${fullUrl.replace(enc, `<span class="em">${enc}</span>`)}", "model": "mock-model"}`;
+      }
 
       const row = document.createElement('div');
       row.className = 'url-row';
@@ -493,7 +499,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
           </div>
           <div class="url-path" title="${fullUrl}">${displayPath}</div>
         </div>
-        <button class="copy-btn" id="copy-${i}" onclick="copyUrl('${fullUrl}', ${i})">
+        <button class="copy-btn" id="copy-${i}" onclick="copyUrl(this.getAttribute('data-value'), ${i})" data-value='${copyValue.replace(/'/g, "&apos;")}'>
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
           </svg>
