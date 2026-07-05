@@ -45,11 +45,12 @@ class MultiTenantASGIMiddleware:
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http":
             path = scope.get("path", "")
-            match = re.match(r"^/ga2/([^/]+@[^/]+)(/.*)?$", path)
+            match = re.match(r"^/(ga2|ga3)/([^/]+@[^/]+)(/.*)?$", path)
             if match:
-                email = match.group(1).strip()
-                rest = match.group(2) or "/"
-                scope["path"] = f"/ga2{rest}"
+                ga_version = match.group(1)
+                email = match.group(2).strip()
+                rest = match.group(3) or "/"
+                scope["path"] = f"/{ga_version}{rest}"
                 scope["tenant_email"] = email
         await self.app(scope, receive, send)
 
@@ -59,7 +60,10 @@ class ConditionalCORSMiddleware(CORSMiddleware):
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http":
             path = scope.get("path", "")
-            if path.startswith("/ga2"):
+            if path.startswith("/ga2") or path.startswith("/ga3"):
+                if scope.get("method") == "OPTIONS":
+                    await super().__call__(scope, receive, send)
+                    return
                 await self.app(scope, receive, send)
                 return
         await super().__call__(scope, receive, send)
@@ -85,295 +89,197 @@ def home() -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>T22026 API Hub — GA0 + GA2</title>
+  <title>T22026 IITM TDS API Hub</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
     :root {
       --bg: #030712;
+      --surface: #0f172a;
       --card-bg: rgba(17, 24, 39, 0.6);
-      --border: rgba(99, 102, 241, 0.2);
-      --border-hover: rgba(99, 102, 241, 0.4);
+      --border: rgba(99, 102, 241, 0.15);
+      --border-hover: rgba(99, 102, 241, 0.35);
       --text: #f9fafb;
       --muted: #9ca3af;
       --accent: #6366f1;
       --accent-hover: #818cf8;
       --green: #10b981;
-      --green-bg: rgba(16,185,129,0.1);
       --green-border: rgba(16,185,129,0.25);
+      --orange: #fb923c;
+      --orange-border: rgba(251,146,60,0.25);
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: 'Outfit', sans-serif;
       background-color: var(--bg);
       background-image:
-        radial-gradient(at 0% 0%, rgba(99,102,241,.15) 0px, transparent 50%),
-        radial-gradient(at 100% 100%, rgba(168,85,247,.1) 0px, transparent 50%);
+        radial-gradient(at 0% 0%, rgba(99,102,241,.12) 0px, transparent 50%),
+        radial-gradient(at 100% 100%, rgba(168,85,247,.08) 0px, transparent 50%);
       color: var(--text);
       min-height: 100vh;
       display: flex;
       flex-direction: column;
       align-items: center;
-      padding: 40px 20px;
+      justify-content: center;
+      padding: 60px 20px;
     }
-    .container { width: 100%; max-width: 1100px; }
-    .header { text-align: center; margin-bottom: 40px; }
+    .container { width: 100%; max-width: 900px; }
+    .header { text-align: center; margin-bottom: 50px; }
     .header h1 {
-      font-size: 2.5rem; font-weight: 700;
-      background: linear-gradient(135deg, #a5b4fc 0%, #6366f1 50%, #4338ca 100%);
+      font-size: clamp(2rem, 5vw, 3rem); font-weight: 800;
+      background: linear-gradient(135deg, #ffffff 30%, #6366f1 100%);
       -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      background-clip: text;
       margin-bottom: 12px;
+      letter-spacing: -0.02em;
     }
-    .badge {
-      display: inline-block; padding: 6px 14px;
-      background: rgba(99,102,241,.1); border: 1px solid rgba(99,102,241,.3);
-      border-radius: 20px; color: #a5b4fc; font-size: .85rem; font-weight: 500; margin-bottom: 15px;
+    .header p {
+      color: var(--muted); max-width: 600px; margin: 0 auto; font-size: 1.05rem; line-height: 1.6;
     }
-    /* Section labels */
-    .section-label {
-      font-size: .75rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
-      color: var(--muted); margin: 30px 0 14px; padding-left: 4px;
-      display: flex; align-items: center; gap: 8px;
+    
+    /* ── DASHBOARD GRID ── */
+    .hubs-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 24px;
+      margin-bottom: 40px;
     }
-    .section-label::after { content:''; flex:1; height:1px; background:rgba(255,255,255,.06); }
-    /* Grids */
-    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); gap: 18px; margin-bottom: 10px; }
-    .tile {
-      background: var(--card-bg); border: 1px solid var(--border); border-radius: 16px;
-      padding: 22px; box-shadow: 0 10px 25px rgba(0,0,0,.3);
-      transition: all .3s cubic-bezier(.4,0,.2,1); backdrop-filter: blur(16px);
-      display: flex; flex-direction: column; justify-content: space-between;
+    @media (min-width: 768px) {
+      .hubs-grid { grid-template-columns: repeat(3, 1fr); }
     }
-    .tile:hover { border-color: var(--border-hover); transform: translateY(-4px); box-shadow: 0 15px 35px rgba(99,102,241,.15); }
-    .tile.ga2-tile { border-color: var(--green-border); background: rgba(16,185,129,.04); }
-    .tile.ga2-tile:hover { border-color: rgba(16,185,129,.5); box-shadow: 0 15px 35px rgba(16,185,129,.12); }
-    .tile-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }
-    .tile-title { font-size: 1.1rem; font-weight: 600; color: #f3f4f6; }
-    .status-badge { font-size: .72rem; padding: 3px 8px; border-radius: 10px; font-weight: 600; }
-    .status-badge.active { background: rgba(16,185,129,.1); color: #34d399; border: 1px solid rgba(16,185,129,.2); }
-    .status-badge.ga2 { background: rgba(16,185,129,.15); color: #6ee7b7; border: 1px solid rgba(16,185,129,.3); }
-    .tile-desc { font-size: .88rem; color: var(--muted); line-height: 1.55; margin-bottom: 18px; flex-grow: 1; }
-    .mono-hint { font-size: .73rem; color: #818cf8; font-family: 'JetBrains Mono', monospace; margin-bottom: 8px; word-break: break-all; }
-    .tile-actions { display: flex; gap: 8px; }
+    
+    .hub-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 30px;
+      box-shadow: 0 10px 30px rgba(0,0,0,.4);
+      transition: border-color .3s, transform .3s, box-shadow .3s;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+    .hub-card:hover {
+      transform: translateY(-4px);
+    }
+    
+    .hub-card.ga3 { border-color: var(--orange-border); }
+    .hub-card.ga3:hover { border-color: var(--orange); box-shadow: 0 15px 35px rgba(251,146,60,0.12); }
+    
+    .hub-card.ga2 { border-color: var(--green-border); }
+    .hub-card.ga2:hover { border-color: var(--green); box-shadow: 0 15px 35px rgba(16,185,129,0.12); }
+    
+    .hub-card.ga0 { border-color: var(--border); }
+    .hub-card.ga0:hover { border-color: var(--accent); box-shadow: 0 15px 35px rgba(99,102,241,0.12); }
+    
+    .hub-meta { font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 12px; }
+    .hub-meta.c-ga3 { color: var(--orange); }
+    .hub-meta.c-ga2 { color: var(--green); }
+    .hub-meta.c-ga0 { color: var(--accent); }
+    
+    .hub-title { font-size: 1.35rem; font-weight: 700; color: #ffffff; margin-bottom: 10px; }
+    .hub-desc { font-size: 0.9rem; color: var(--muted); line-height: 1.6; margin-bottom: 24px; flex-grow: 1; }
+    
+    .btn-stack { display: flex; flex-direction: column; gap: 8px; }
     .btn {
-      display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-      padding: 9px 16px; font-family: inherit; font-size: .83rem; font-weight: 600;
-      color: #fff; background: var(--accent); border: none; border-radius: 10px;
-      cursor: pointer; transition: all .2s ease; text-decoration: none; flex: 1; text-align: center;
+      display: inline-flex; align-items: center; justify-content: center;
+      padding: 11px 20px; font-size: 0.88rem; font-weight: 700; border-radius: 12px;
+      text-decoration: none; cursor: pointer; transition: opacity 0.2s, transform 0.1s;
+      color: #030712; text-align: center;
     }
-    .btn:hover { background: var(--accent-hover); }
-    .btn.green { background: #059669; }
-    .btn.green:hover { background: #10b981; }
+    .btn:hover { opacity: 0.9; }
+    .btn:active { transform: translateY(1px); }
+    
+    .btn.b-ga3 { background: var(--orange); }
+    .btn.b-ga2 { background: var(--green); }
+    .btn.b-ga0 { background: var(--accent); color: #ffffff; }
+    
     .btn-secondary {
       background: rgba(255,255,255,.05); color: var(--text);
       border: 1px solid rgba(255,255,255,.08);
     }
     .btn-secondary:hover { background: rgba(255,255,255,.1); }
-    /* GA2 hero box */
-    .ga2-hero {
-      background: linear-gradient(135deg, rgba(16,185,129,.08) 0%, rgba(99,102,241,.08) 100%);
-      border: 1px solid var(--green-border); border-radius: 16px; padding: 24px 28px;
-      margin-bottom: 14px; display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap;
+    
+    /* GA0 list dropdown */
+    .ga0-select {
+      width: 100%;
+      background: rgba(15,23,42,0.8);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 10px;
+      padding: 10px 14px;
+      color: var(--text);
+      font-size: 0.83rem;
+      outline: none;
+      margin-top: 10px;
+      cursor: pointer;
     }
-    .ga2-hero h2 { font-size: 1.3rem; font-weight: 700; color: #6ee7b7; margin-bottom: 6px; }
-    .ga2-hero p { font-size: .9rem; color: var(--muted); max-width: 520px; line-height: 1.6; }
-    .ga2-url-box {
-      background: rgba(0,0,0,.4); border: 1px solid rgba(16,185,129,.2);
-      border-radius: 10px; padding: 12px 16px; margin-top: 12px;
-      font-family: 'JetBrains Mono', monospace; font-size: .8rem; color: #6ee7b7;
-      white-space: nowrap; overflow-x: auto;
-    }
-    .ga2-url-box .dim { color: #4b5563; }
+    .ga0-select option { background: var(--surface); color: var(--text); }
+
     .footer {
       text-align: center; color: var(--muted); font-size: .83rem;
-      margin-top: 36px; padding-top: 20px; border-top: 1px solid rgba(255,255,255,.05);
+      margin-top: 20px; padding-top: 20px; border-top: 1px solid rgba(255,255,255,.05);
     }
   </style>
 </head>
 <body>
 <div class="container">
   <div class="header">
-    <span class="badge">GA0 + GA2 · Multi-App Gateway</span>
-    <h1>T22026 IITM TDS API Hub</h1>
-    <p style="color:var(--muted);max-width:600px;margin:0 auto;font-size:1rem;line-height:1.6;">
-      All GA0 programming services and the full GA2 multi-tenant API hub are live on this Space.
-    </p>
+    <span class="badge">Unified Solution Platform</span>
+    <h1>T22026 IITM TDS Solver Gateway</h1>
+    <p>Select a graded assignment dashboard below to access multi-tenant endpoint credentials, settings, and interactive solvers.</p>
   </div>
 
-  <!-- ── GA2 Hero ──────────────────────────── -->
-  <div class="section-label">🆕 GA2 — Multi-Tenant Services</div>
+  <div class="hubs-grid">
+    <!-- GA3 -->
+    <div class="hub-card ga3">
+      <div>
+        <div class="hub-meta c-ga3">Graded Assignment 3</div>
+        <div class="hub-title">GA3 Hub & Solvers</div>
+        <div class="hub-desc">13 questions including Multimodal QA, invoice extraction, semantic ranking, and interactive client-side solvers for nonces, context window heist, and terminal cli cast generation.</div>
+      </div>
+      <div class="btn-stack">
+        <a href="/ga3/" class="btn b-ga3">Open GA3 Dashboard</a>
+        <a href="/ga3/docs" class="btn btn-secondary">API Reference</a>
+      </div>
+    </div>
 
-  <div class="ga2-hero">
-    <div style="flex:1;min-width:240px;">
-      <h2>GA2 API Hub — 10 Question Services</h2>
-      <p>Seeded per student email. Pass your email in the URL path — every student gets their own isolated config, CORS origins, API keys, and rate limits.</p>
-      <div class="ga2-url-box">
-        <span class="dim">https://your-space.hf.space</span>/ga2/<span style="color:#fbbf24;">your@email.com</span>/q1/stats
+    <!-- GA2 -->
+    <div class="hub-card ga2">
+      <div>
+        <div class="hub-meta c-ga2">Graded Assignment 2</div>
+        <div class="hub-title">GA2 API Hub</div>
+        <div class="hub-desc">10 multi-tenant API question services (Metrics, OAuth JWT Verification, Config precedence, Redis counters, Analytics, Prometheus metrics, and LLM integrations).</div>
+      </div>
+      <div class="btn-stack">
+        <a href="/ga2/" class="btn b-ga2">Open GA2 Dashboard</a>
+        <a href="/ga2/docs" class="btn btn-secondary">API Reference</a>
       </div>
     </div>
-    <div style="display:flex;flex-direction:column;gap:8px;min-width:180px;">
-      <a href="/ga2/" class="btn green" style="text-align:center;">Open GA2 Dashboard</a>
-      <a href="/ga2/docs" class="btn btn-secondary" style="text-align:center;">GA2 API Docs</a>
-    </div>
-  </div>
 
-  <div class="grid">
-    <div class="tile ga2-tile">
+    <!-- GA0 -->
+    <div class="hub-card ga0">
       <div>
-        <div class="tile-header"><span class="tile-title">Q1 · Metrics + CORS</span><span class="status-badge ga2">Live</span></div>
-        <p class="tile-desc">Statistical summary (count, sum, min, max, mean) with strict per-student CORS origin enforcement.</p>
-        <p class="mono-hint">GET /ga2/{email}/q1/stats?values=1,2,3</p>
+        <div class="hub-meta c-ga0">Graded Assignment 0</div>
+        <div class="hub-title">GA0 Services</div>
+        <div class="hub-desc">Individual programming task services including Python Code Interpreter, Student Database, Sentiment Analysis batch, forensic Image Reassembly, and Ollama Proxy.</div>
       </div>
-    </div>
-    <div class="tile ga2-tile">
-      <div>
-        <div class="tile-header"><span class="tile-title">Q2 · OAuth JWT Verify</span><span class="status-badge ga2">Live</span></div>
-        <p class="tile-desc">RS256 JWT validation with per-student issuer, audience, and expiry checks.</p>
-        <p class="mono-hint">POST /ga2/{email}/q2/verify</p>
-      </div>
-    </div>
-    <div class="tile ga2-tile">
-      <div>
-        <div class="tile-header"><span class="tile-title">Q3 · Config Precedence</span><span class="status-badge ga2">Live</span></div>
-        <p class="tile-desc">Merges 4 config layers with CLI overrides and secret masking.</p>
-        <p class="mono-hint">GET /ga2/{email}/q3/effective-config</p>
-      </div>
-    </div>
-    <div class="tile ga2-tile">
-      <div>
-        <div class="tile-header"><span class="tile-title">Q4 · Redis Counter</span><span class="status-badge ga2">Live</span></div>
-        <p class="tile-desc">Atomic INCR/GET via Redis (in-process fallback when Redis unavailable).</p>
-        <p class="mono-hint">POST /ga2/{email}/q4/hit/{key}</p>
-      </div>
-    </div>
-    <div class="tile ga2-tile">
-      <div>
-        <div class="tile-header"><span class="tile-title">Q5 · Analytics</span><span class="status-badge ga2">Live</span></div>
-        <p class="tile-desc">Batch event aggregation — revenue, unique users, top user — with per-student API key.</p>
-        <p class="mono-hint">POST /ga2/{email}/q5/analytics</p>
-      </div>
-    </div>
-    <div class="tile ga2-tile">
-      <div>
-        <div class="tile-header"><span class="tile-title">Q6 · Observability</span><span class="status-badge ga2">Live</span></div>
-        <p class="tile-desc">Prometheus metrics, structured tail logs, and uptime health endpoint.</p>
-        <p class="mono-hint">GET /ga2/{email}/q6/metrics</p>
-      </div>
-    </div>
-    <div class="tile ga2-tile">
-      <div>
-        <div class="tile-header"><span class="tile-title">Q7 · LLM Tunnel</span><span class="status-badge ga2">Live</span></div>
-        <p class="tile-desc">OpenAI-compatible completions endpoint: echoes tokens, computes arithmetic.</p>
-        <p class="mono-hint">POST /ga2/{email}/q7/v1/chat/completions</p>
-      </div>
-    </div>
-    <div class="tile ga2-tile">
-      <div>
-        <div class="tile-header"><span class="tile-title">Q8 · Invoice Extractor</span><span class="status-badge ga2">Live</span></div>
-        <p class="tile-desc">Extracts vendor, currency, date, and amount from free-text invoice strings.</p>
-        <p class="mono-hint">POST /ga2/{email}/q8/extract</p>
-      </div>
-    </div>
-    <div class="tile ga2-tile">
-      <div>
-        <div class="tile-header"><span class="tile-title">Q9 · Orders API</span><span class="status-badge ga2">Live</span></div>
-        <p class="tile-desc">Idempotent order creation, cursor pagination, and per-client rate limiting.</p>
-        <p class="mono-hint">POST /ga2/{email}/q9/orders</p>
-      </div>
-    </div>
-    <div class="tile ga2-tile">
-      <div>
-        <div class="tile-header"><span class="tile-title">Q10 · Middleware Stack</span><span class="status-badge ga2">Live</span></div>
-        <p class="tile-desc">CORS guard → Context-ID injector → sliding-window rate limiter → pong.</p>
-        <p class="mono-hint">GET /ga2/{email}/q10/ping</p>
-      </div>
-    </div>
-  </div>
-
-  <!-- ── GA0 Section ──────────────────────────── -->
-  <div class="section-label">GA0 — Programming Services</div>
-
-  <div class="grid">
-    <div class="tile">
-      <div>
-        <div class="tile-header"><span class="tile-title">Q5: Code Interpreter</span><span class="status-badge active">Active</span></div>
-        <p class="tile-desc">Python execution sandbox with secure traceback-based error line number extraction.</p>
-        <p class="mono-hint">POST /q-code-interpreter-ai-analysis/code-interpreter</p>
-      </div>
-      <div class="tile-actions">
-        <a href="/q-code-interpreter-ai-analysis/" class="btn">Open</a>
-        <a href="/q-code-interpreter-ai-analysis/health" class="btn btn-secondary">Health</a>
-      </div>
-    </div>
-    <div class="tile">
-      <div>
-        <div class="tile-header"><span class="tile-title">Q10: Student CSV API</span><span class="status-badge active">Active</span></div>
-        <p class="tile-desc">FastAPI database server filtering students dynamically with multi-query list matching.</p>
-        <p class="mono-hint">GET /q-fastapi/api?class=...</p>
-      </div>
-      <div class="tile-actions">
-        <a href="/q-fastapi/" class="btn">Open</a>
-        <a href="/q-fastapi/health" class="btn btn-secondary">Health</a>
-      </div>
-    </div>
-    <div class="tile">
-      <div>
-        <div class="tile-header"><span class="tile-title">Q11: Sentiment Batch</span><span class="status-badge active">Active</span></div>
-        <p class="tile-desc">High-performance NLP pipeline classifying sentiment into happy, sad, and neutral.</p>
-        <p class="mono-hint">POST /q-fastapi-sentiment-batch/sentiment</p>
-      </div>
-      <div class="tile-actions">
-        <a href="/q-fastapi-sentiment-batch/" class="btn">Open</a>
-        <a href="/q-fastapi-sentiment-batch/health" class="btn btn-secondary">Health</a>
-      </div>
-    </div>
-    <div class="tile">
-      <div>
-        <div class="tile-header"><span class="tile-title">Q14: Image Rebuild</span><span class="status-badge active">Active</span></div>
-        <p class="tile-desc">Forensic jigsaw reassembly and luminance-based grayscale PNG exporter.</p>
-      </div>
-      <div class="tile-actions">
-        <a href="/q-image-grayscale-rebuild/" class="btn">Open</a>
-        <a href="/q-image-grayscale-rebuild/health" class="btn btn-secondary">Health</a>
-      </div>
-    </div>
-    <div class="tile">
-      <div>
-        <div class="tile-header"><span class="tile-title">Q16: Move/Rename Files</span><span class="status-badge active">Active</span></div>
-        <p class="tile-desc">Zip extraction pipeline performing flat relocation and digit increment renaming.</p>
-      </div>
-      <div class="tile-actions">
-        <a href="/q-move-rename-files/" class="btn">Open</a>
-        <a href="/q-move-rename-files/health" class="btn btn-secondary">Health</a>
-      </div>
-    </div>
-    <div class="tile">
-      <div>
-        <div class="tile-header"><span class="tile-title">Q18: Ollama Proxy</span><span class="status-badge active">Active</span></div>
-        <p class="tile-desc">Diagnostic Ollama reverse proxy designed for strict ngrok hostname validation.</p>
-      </div>
-      <div class="tile-actions">
-        <a href="/q-ollama/" class="btn">Open</a>
-        <a href="/q-ollama/health" class="btn btn-secondary">Health</a>
-      </div>
-    </div>
-    <div class="tile">
-      <div>
-        <div class="tile-header"><span class="tile-title">Q25: Vercel Latency API</span><span class="status-badge active">Active</span></div>
-        <p class="tile-desc">Per-region latency analytics: avg, p95, uptime, threshold breach counting.</p>
-        <p class="mono-hint" style="color:#f59e0b;">⚠️ Deploy to Vercel — exam checks vercel.app hostname</p>
-      </div>
-      <div class="tile-actions">
-        <a href="/q-vercel-latency/" class="btn">Open</a>
-        <a href="/q-vercel-latency/health" class="btn btn-secondary">Health</a>
+      <div class="btn-stack">
+        <select class="ga0-select" onchange="if(this.value) window.location.href=this.value;">
+          <option value="">⚡ Select GA0 Service...</option>
+          <option value="/q-code-interpreter-ai-analysis/">Q5: Code Interpreter</option>
+          <option value="/q-fastapi/">Q10: Student CSV API</option>
+          <option value="/q-fastapi-sentiment-batch/sentiment">Q11: Sentiment Batch</option>
+          <option value="/q-image-grayscale-rebuild/">Q14: Image Rebuild</option>
+          <option value="/q-move-rename-files/">Q16: Move/Rename Files</option>
+          <option value="/q-ollama/">Q18: Ollama Proxy</option>
+          <option value="/q-vercel-latency/">Q25: Vercel Latency API</option>
+        </select>
       </div>
     </div>
   </div>
 
   <div class="footer">
-    GA2 URL format: <code style="color:#6ee7b7;">/ga2/your@email.com/q1/stats</code> &nbsp;·&nbsp;
-    <a href="/ga2/" style="color:#818cf8;">GA2 Dashboard</a> &nbsp;·&nbsp;
-    <a href="/ga2/docs" style="color:#818cf8;">GA2 API Docs</a>
+    T22026 IITM TDS Solver Gateway &nbsp;·&nbsp; Powered by FastAPI
   </div>
 </div>
 </body>
@@ -398,3 +304,7 @@ app.mount("/q-vercel-latency", q25)
 # Mount GA2 Multi-Tenant Service Hub
 ga2 = load_app("ga2_app", BASE / "T22026" / "GA2" / "app.py")
 app.mount("/ga2", ga2)
+
+# Mount GA3 Multi-Tenant Service Hub
+ga3 = load_app("ga3_app", BASE / "T22026" / "GA3" / "app.py")
+app.mount("/ga3", ga3)
