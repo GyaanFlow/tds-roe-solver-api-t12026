@@ -29,3 +29,13 @@ Suggested files:
 ### Traceability
 - Canonical term namespace: `T22026`.
 - Context source of truth: `context/agent_context.md`.
+
+## 2026-07-05 Update
+
+### Architecture Events
+- Added GA2 (`/ga2/`) and GA3 (`/ga3/`) multi-tenant service hubs under `T22026/GA2` and `T22026/GA3`.
+- Redesigned entry homepage to display a simplified index of the GA0, GA2, and GA3 dashboard portals.
+
+### Reliability & Concurrency Events
+- Added mutual-exclusion `Lock` operations to prevent concurrent file writes to `ga3_tenant_configs.json` and `youtube_metadata_cache.json`.
+- Implemented `extract_json_data` to ensure LLM JSON outputs are parsed reliably by isolating bounding bracket scopes.
