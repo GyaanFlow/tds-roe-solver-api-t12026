@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import logging
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse
@@ -299,6 +297,7 @@ async def solve_q13(request: Request):
         return JSONResponse(status_code=400, content={"error": str(e)})
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
+
 
 
 
