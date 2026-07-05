@@ -11,6 +11,7 @@ from pathlib import Path
 from contextvars import ContextVar
 
 current_email: ContextVar[str] = ContextVar("current_email", default="student@example.com")
+current_token: ContextVar[str | None] = ContextVar("current_token", default=None)
 
 _CONFIG_FILE = Path(__file__).resolve().parents[3] / "work" / "ga3_tenant_configs.json"
 _lock = threading.Lock()
@@ -28,7 +29,13 @@ def get_tenant_config(email: str) -> dict:
             except Exception:
                 config = {}
     
-    # Environment variables have precedence/fallback
+    # Precedence:
+    # 1. ContextVar token (passed via request header/query)
+    c_token = current_token.get()
+    if c_token:
+        config["aipipe_token"] = c_token
+
+    # 2. Environment variables fallback
     env_token = os.environ.get("AIPIPE_TOKEN") or os.environ.get("AIPIPE_API_KEY")
     if env_token:
         config["aipipe_token"] = env_token

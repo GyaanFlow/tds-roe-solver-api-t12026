@@ -203,6 +203,32 @@ Return ONLY the raw JSON object."""
 
 
 # --- Q6: Korean Audio Dataset API statistics (Pure Python) ---
+def clean_csv_text(text: str) -> str:
+    cleaned = text.strip()
+    if "```" in cleaned:
+        parts = cleaned.split("```")
+        for part in parts:
+            part_clean = part.strip()
+            if part_clean.startswith("csv"):
+                part_clean = part_clean[3:].strip()
+            lines = part_clean.splitlines()
+            if len(lines) > 1 and "," in lines[0]:
+                return part_clean
+    lines = cleaned.splitlines()
+    csv_lines = []
+    started = False
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if not started:
+            if "," in stripped:
+                started = True
+                csv_lines.append(stripped)
+        else:
+            csv_lines.append(stripped)
+    return "\n".join(csv_lines)
+
 async def solve_korean_audio(body: Dict[str, Any]) -> Dict[str, Any]:
     audio_base64 = body.get("audio_base64", "")
     if not audio_base64:
@@ -212,13 +238,47 @@ async def solve_korean_audio(body: Dict[str, Any]) -> Dict[str, Any]:
     raw_bytes = base64.b64decode(audio_base64)
     csv_text = None
     
-    # 1. Try direct UTF-8 text (if it is base64 CSV)
-    try:
-        csv_text = raw_bytes.decode('utf-8')
-    except UnicodeDecodeError:
-        pass
+    # 1. Try LLM Whisper transcription if keys are available
+    email = current_email.get()
+    config = get_tenant_config(email)
+    aipipe_token = config.get("aipipe_token")
+    openai_key = os.environ.get("OPENAI_API_KEY")
+    
+    if aipipe_token:
+        url = "https://aipipe.org/openai/v1/audio/transcriptions"
+        key_to_use = aipipe_token
+    elif openai_key:
+        url = "https://api.openai.com/v1/audio/transcriptions"
+        key_to_use = openai_key
+    else:
+        url = None
         
-    # 2. Try Gzip decompression
+    if url:
+        try:
+            headers = {
+                "Authorization": f"Bearer {key_to_use}"
+            }
+            files = {
+                "file": ("audio.wav", io.BytesIO(raw_bytes), "audio/wav")
+            }
+            data = {
+                "model": "whisper-1",
+                "response_format": "json",
+                "prompt": "Transcribe the audio as a structured CSV dataset with headers and comma-separated values."
+            }
+            res = requests.post(url, headers=headers, files=files, data=data, timeout=60)
+            res.raise_for_status()
+            csv_text = clean_csv_text(res.json()["text"])
+        except Exception as e:
+            print(f"Whisper transcription failed: {e}. Falling back to text decoding.")
+            
+    # 2. Fallbacks for direct text decoding (mocks or plain csv data)
+    if not csv_text:
+        try:
+            csv_text = raw_bytes.decode('utf-8')
+        except UnicodeDecodeError:
+            pass
+            
     if not csv_text or not ("\n" in csv_text or "," in csv_text):
         import gzip
         try:
@@ -226,7 +286,6 @@ async def solve_korean_audio(body: Dict[str, Any]) -> Dict[str, Any]:
         except Exception:
             pass
             
-    # 3. Try Zip decompression
     if not csv_text or not ("\n" in csv_text or "," in csv_text):
         import zipfile
         try:
