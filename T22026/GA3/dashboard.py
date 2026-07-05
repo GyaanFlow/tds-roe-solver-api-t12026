@@ -1,11 +1,11 @@
-# T22026/GA3/dashboard.py
+﻿# T22026/GA3/dashboard.py
 
 DASHBOARD_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>GA3 Solvers & API Hub â€” IITM TDS 2026-05</title>
+  <title>GA3 Solvers & API Hub — IITM TDS 2026-05</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <style>
@@ -36,7 +36,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       line-height: 1.5;
     }
 
-    /* â”€â”€ HERO â”€â”€ */
+    /* Ã¢â€â‚¬Ã¢â€â‚¬ HERO Ã¢â€â‚¬Ã¢â€â‚¬ */
     .hero {
       background: radial-gradient(circle at top, rgba(99, 102, 241, 0.12) 0%, var(--bg) 70%);
       border-bottom: 1px solid var(--border);
@@ -60,14 +60,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       margin: 0 auto;
     }
 
-    /* â”€â”€ CONTAINER â”€â”€ */
+    /* Ã¢â€â‚¬Ã¢â€â‚¬ CONTAINER Ã¢â€â‚¬Ã¢â€â‚¬ */
     .container {
       max-width: 960px;
       margin: 0 auto;
       padding: 2rem 1.25rem 4rem;
     }
 
-    /* â”€â”€ CARD STYLING â”€â”€ */
+    /* Ã¢â€â‚¬Ã¢â€â‚¬ CARD STYLING Ã¢â€â‚¬Ã¢â€â‚¬ */
     .card {
       background: var(--surface);
       border: 1px solid var(--border);
@@ -90,7 +90,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       margin-bottom: 0.6rem;
     }
 
-    /* â”€â”€ INPUTS & BUTTONS â”€â”€ */
+    /* Ã¢â€â‚¬Ã¢â€â‚¬ INPUTS & BUTTONS Ã¢â€â‚¬Ã¢â€â‚¬ */
     .input-row {
       display: flex;
       gap: 1rem;
@@ -140,14 +140,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       background: rgba(255, 255, 255, 0.1);
     }
 
-    /* â”€â”€ DYNAMIC GRID â”€â”€ */
+    /* Ã¢â€â‚¬Ã¢â€â‚¬ DYNAMIC GRID Ã¢â€â‚¬Ã¢â€â‚¬ */
     .grid {
       display: grid;
       grid-template-columns: 1fr;
       gap: 1.5rem;
     }
 
-    /* â”€â”€ QUESTION CARD â”€â”€ */
+    /* Ã¢â€â‚¬Ã¢â€â‚¬ QUESTION CARD Ã¢â€â‚¬Ã¢â€â‚¬ */
     .q-card {
       background: var(--surface);
       border: 1px solid var(--border);
@@ -223,7 +223,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       margin-bottom: 1rem;
     }
 
-    /* â”€â”€ INTERACTIVE SOLVER â”€â”€ */
+    /* Ã¢â€â‚¬Ã¢â€â‚¬ INTERACTIVE SOLVER Ã¢â€â‚¬Ã¢â€â‚¬ */
     .solver-box {
       background: rgba(15, 23, 42, 0.4);
       border: 1px dashed var(--border);
@@ -288,6 +288,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       border-radius: 6px;
       font-size: 0.72rem;
       font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
     .answer-summary {
       display: grid;
       gap: 0.8rem;
@@ -317,14 +320,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       font-size: 0.86rem;
       word-break: break-word;
     }
-      cursor: pointer;
-      transition: background 0.2s;
-    }
     .btn-copy-ans:hover {
       background: rgba(255, 255, 255, 0.15);
     }
 
-    /* â”€â”€ ACTION FOOTER â”€â”€ */
+    /* Ã¢â€â‚¬Ã¢â€â‚¬ ACTION FOOTER Ã¢â€â‚¬Ã¢â€â‚¬ */
     .q-footer {
       background: rgba(15, 23, 42, 0.2);
       padding: 1rem 1.5rem;
@@ -333,7 +333,75 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       gap: 0.5rem;
     }
 
-    /* â”€â”€ TOAST NOTIFICATION â”€â”€ */
+    /* Ã¢â€â‚¬Ã¢â€â‚¬ TOAST NOTIFICATION Ã¢â€â‚¬Ã¢â€â‚¬ */
+    .endpoint-panel {
+      display: none;
+      margin-bottom: 2rem;
+    }
+    .endpoint-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1rem;
+      margin-bottom: 1rem;
+      flex-wrap: wrap;
+    }
+    .endpoint-title {
+      font-size: 1.05rem;
+      font-weight: 700;
+      color: var(--text);
+    }
+    .endpoint-sub {
+      color: var(--muted);
+      font-size: 0.82rem;
+      margin-top: 0.2rem;
+    }
+    .endpoint-base {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.76rem;
+      color: var(--green);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.55rem 0.7rem;
+      background: rgba(15, 23, 42, 0.7);
+      max-width: 100%;
+      overflow-x: auto;
+    }
+    .endpoint-list {
+      display: grid;
+      gap: 0.65rem;
+    }
+    .endpoint-row {
+      display: grid;
+      grid-template-columns: 56px 1fr auto;
+      gap: 0.75rem;
+      align-items: center;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.75rem;
+      background: rgba(15, 23, 42, 0.45);
+    }
+    .endpoint-q {
+      font-weight: 800;
+      color: var(--accent);
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .endpoint-url {
+      min-width: 0;
+      overflow-x: auto;
+      white-space: nowrap;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.78rem;
+      color: var(--blue);
+    }
+    .endpoint-copy {
+      padding: 0.5rem 0.75rem;
+      font-size: 0.76rem;
+    }
+    @media (max-width: 680px) {
+      .endpoint-row { grid-template-columns: 1fr; }
+      .endpoint-copy { width: 100%; }
+    }
     .toast {
       position: fixed;
       bottom: 24px;
@@ -359,7 +427,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
 <div class="hero">
   <h1>GA3 Multi-Tenant API Hub</h1>
-  <p> IITM TDS 2026-05 â€” Seeded, structured, and interactive question solvers. </p>
+  <p>IITM TDS 2026-05 — Seeded, structured, and interactive question solvers.</p>
 </div>
 
 <div class="container">
@@ -367,13 +435,25 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <div class="card">
     <label>Credentials & Configuration</label>
     <div class="input-row">
-      <input type="email" id="student-email" placeholder="23f1000000@ds.study.iitm.ac.in" value="student@example.com" />
-      <input type="text" id="aipipe-token" placeholder="aipipe.org API Key (optional)" />
-      <button class="btn" id="btn-save-settings" onclick="saveSettings()">âš¡ Save Settings</button>
+      <input type="email" id="student-email" placeholder="23f1000000@ds.study.iitm.ac.in" autocomplete="email" />
+      <input type="password" id="aipipe-token" placeholder="aipipe.org API Key (optional)" autocomplete="off" />
+      <button class="btn" id="btn-save-settings" onclick="saveSettings()">Generate URLs</button>
     </div>
-    <p style="font-size: 0.8rem; color: var(--muted);"> Step 1: save email/token to initialize your tenant context. Then the solver routes unlock for that user. </p>
+    <p style="font-size: 0.8rem; color: var(--muted);">Enter your IITM email and optional AI Pipe token, then click Generate URLs to unlock your personalized endpoints.</p>
   </div>
 
+
+  <div class="card endpoint-panel" id="endpoint-panel">
+    <div class="endpoint-head">
+      <div>
+        <div class="endpoint-title">Personalized GA3 API URLs</div>
+        <div class="endpoint-sub" id="endpoint-sub">Save your email and token to generate your routes.</div>
+      </div>
+      <button class="btn btn-sec" onclick="copyAllEndpoints()">Copy All</button>
+    </div>
+    <div class="endpoint-base" id="endpoint-base">/ga3/{email}</div>
+    <div class="endpoint-list" id="endpoint-list"></div>
+  </div>
   <!-- QUESTIONS SECTION -->
   <div class="grid" id="questions-grid">
     <!-- Q1 -->
@@ -620,6 +700,61 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <script>
   let BASE = window.location.origin;
   let filesData = {};
+  const GA3_ENDPOINTS = [
+    { q: "Q1", label: "Video curation solver", path: "/solve/q1" },
+    { q: "Q2", label: "Multimodal image QA API", path: "/q2" },
+    { q: "Q3", label: "Fixed invoice extraction API", path: "/q3" },
+    { q: "Q4", label: "Dynamic schema extraction API", path: "/q4" },
+    { q: "Q5", label: "Cosine similarity solver", path: "/solve/q5" },
+    { q: "Q6", label: "Korean audio dataset API", path: "/q6" },
+    { q: "Q7", label: "Invoice intelligence API", path: "/q7" },
+    { q: "Q8", label: "Semantic ranking API", path: "/q8" },
+    { q: "Q9", label: "Word problem solver API", path: "/q9" },
+    { q: "Q10", label: "Proof-of-work solver", path: "/solve/q10" },
+    { q: "Q11", label: "Context heist solver", path: "/solve/q11" },
+    { q: "Q12", label: "CLI cast solver", path: "/solve/q12" },
+    { q: "Q13", label: "Embedding trapdoor solver", path: "/solve/q13" }
+  ];
+
+  function buildTenantBase(email) {
+    return `${BASE}/ga3/${encodeURIComponent(email)}`;
+  }
+
+  function renderEndpointPanel(email, hasToken = false) {
+    const panel = document.getElementById("endpoint-panel");
+    const list = document.getElementById("endpoint-list");
+    const base = buildTenantBase(email);
+    panel.style.display = "block";
+    document.getElementById("endpoint-base").textContent = base;
+    document.getElementById("endpoint-sub").textContent = hasToken
+      ? `Tenant ready for ${email}. Token saved for LLM-backed questions.`
+      : `Tenant ready for ${email}. Add an AI Pipe token for Q2, Q3, Q4, Q7, and Q9.`;
+    list.innerHTML = "";
+    GA3_ENDPOINTS.forEach((item, idx) => {
+      const url = `${base}${item.path}`;
+      const row = document.createElement("div");
+      row.className = "endpoint-row";
+      row.innerHTML = `
+        <div class="endpoint-q">${item.q}</div>
+        <div class="endpoint-url" title="${url}">${url}<div style="color:var(--muted);font-family:Outfit,sans-serif;font-size:0.72rem;margin-top:0.2rem">${item.label}</div></div>
+        <button class="btn btn-sec endpoint-copy" onclick="copyEndpoint(${idx})">Copy</button>
+      `;
+      row.dataset.url = url;
+      list.appendChild(row);
+    });
+  }
+
+  function copyEndpoint(index) {
+    const row = document.querySelectorAll(".endpoint-row")[index];
+    if (!row) return;
+    navigator.clipboard.writeText(row.dataset.url).then(() => showToast("Endpoint copied."));
+  }
+
+  function copyAllEndpoints() {
+    const urls = Array.from(document.querySelectorAll(".endpoint-row")).map((row) => row.dataset.url).join("\n");
+    if (!urls) return;
+    navigator.clipboard.writeText(urls).then(() => showToast("All GA3 endpoints copied."));
+  }
 
   // Load email from localStorage if saved
   document.addEventListener("DOMContentLoaded", () => {
@@ -627,11 +762,20 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     if (savedEmail) {
       document.getElementById("student-email").value = savedEmail;
       updatePaths(savedEmail);
+      renderEndpointPanel(savedEmail, Boolean(localStorage.getItem("aipipe_token")));
     }
     const savedToken = localStorage.getItem("aipipe_token");
     if (savedToken) {
       document.getElementById("aipipe-token").value = savedToken;
     }
+
+    const emailInput = document.getElementById("student-email");
+    const tokenInput = document.getElementById("aipipe-token");
+    const onEnter = (event) => {
+      if (event.key === "Enter") saveSettings();
+    };
+    emailInput.addEventListener("keydown", onEnter);
+    tokenInput.addEventListener("keydown", onEnter);
 
     // Set up drag-drop event listeners
     setupDragDrop("dz-q1", "file-q1", "q1");
@@ -645,7 +789,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (q === 5) continue;
       const el = document.getElementById(`path-q${q}`);
       if (el) {
-        el.textContent = `${BASE}/ga3/${email}/q${q}`;
+        el.textContent = `${buildTenantBase(email)}/q${q}`;
       }
     }
   }
@@ -660,22 +804,47 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     localStorage.setItem("student_email", email);
     localStorage.setItem("aipipe_token", token);
     updatePaths(email);
+    renderEndpointPanel(email, Boolean(token));
 
+    const enc = encodeURIComponent(email);
     try {
-      const resp = await fetch(`${BASE}/ga3/onboard`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, aipipe_token: token || null })
-      });
-      const data = await resp.json();
-      if (resp.ok) {
-        showToast(`Saved. Base URL ready: ${data.solver_url_prefix}`);
+      const requests = [
+        fetch(`${BASE}/ga3/onboard`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, aipipe_token: token || null })
+        })
+      ];
+      if (token) {
+        requests.push(
+          fetch(`${BASE}/ga3/${enc}/config`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ aipipe_token: token })
+          })
+        );
+      }
+      const [onboardResp] = await Promise.all(requests);
+      const data = await onboardResp.json();
+      if (onboardResp.ok) {
+        showToast(`URLs ready. Base: ${data.solver_url_prefix}`);
       } else {
-        showToast(data.detail || data.error || "Failed to initialize tenant.", true);
+        showToast(data.detail || data.error || "Token save failed (URLs still generated).", true);
       }
     } catch (e) {
-      showToast("Error connecting to server.", true);
+      showToast("URLs generated locally. Server save failed.", true);
     }
+  }
+
+  function parseDataset(raw) {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      throw new Error("empty dataset");
+    }
+    if (trimmed.startsWith("[")) {
+      return JSON.parse(trimmed);
+    }
+    return trimmed.split("\n").filter(Boolean).map((line) => JSON.parse(line));
   }
 
   function setupDragDrop(dzId, fileInputId, qKey) {
@@ -718,7 +887,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           JSON.parse(rawContent);
         }
         filesData[qKey] = rawContent;
-        dz.innerHTML = `ðŸ“„ Loaded: <strong>${file.name}</strong> (${(file.size / 1024).toFixed(1)} KB)`;
+        dz.innerHTML = `Loaded: <strong>${file.name}</strong> (${(file.size / 1024).toFixed(1)} KB)`;
       } catch (err) {
         showToast("Invalid JSON file uploaded.", true);
       }
@@ -834,7 +1003,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       showToast("Please upload/paste dataset and enter the marker.", true);
       return;
     }
-    const dataset = datasetRaw.trim().split("\\n").map(l => JSON.parse(l));
+    const dataset = parseDataset(datasetRaw);
     const email = document.getElementById("student-email").value.trim();
     showToast("Generating asciinema recording...");
     try {
@@ -927,5 +1096,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 </body>
 </html>
 """
+
+
+
+
 
 

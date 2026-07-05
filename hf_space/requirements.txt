@@ -8,3 +8,4 @@ vaderSentiment==3.3.2
 pyjwt[crypto]==2.9.0
 redis==5.0.8
 prometheus-client==0.20.0
+yt-dlp==2025.1.26

@@ -1,151 +1,170 @@
+﻿import json
 import logging
-from fastapi import APIRouter, Request, HTTPException
+from typing import Any, Awaitable, Callable, Dict, List, TypeVar
+
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
-from typing import Any, Dict, List, Optional
-from T22026.GA3.shared.tenant import current_email, set_tenant_config
+from pydantic import BaseModel, ConfigDict, Field
+
+from T22026.GA3.shared.tenant import (
+    build_ready_routes,
+    build_solver_url_prefix,
+    current_email,
+    get_tenant_config,
+    normalize_email,
+    set_tenant_config,
+)
 from T22026.GA3.solvers import (
-    solve_multimodal_qa,
-    solve_invoice_extract,
-    solve_dynamic_extract,
-    solve_korean_audio,
-    solve_structured_extraction,
-    solve_semantic_rank,
-    solve_cot_math,
-    solve_youtube_filter,
-    solve_cosine_similarity,
-    solve_proof_of_work,
     solve_context_window_heist,
-    solve_spin_up_cli,
+    solve_cosine_similarity,
+    solve_cot_math,
+    solve_dynamic_extract,
     solve_embedding_trapdoors,
+    solve_invoice_extract,
+    solve_korean_audio,
+    solve_multimodal_qa,
+    solve_proof_of_work,
+    solve_semantic_rank,
+    solve_spin_up_cli,
+    solve_structured_extraction,
+    solve_youtube_filter,
 )
 
 logger = logging.getLogger("ga3_router")
 router = APIRouter()
+T = TypeVar("T")
+
+
+async def _read_json_body(request: Request) -> Dict[str, Any]:
+    try:
+        body = await request.json()
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON body: {exc}") from exc
+    if not isinstance(body, dict):
+        raise ValueError("JSON body must be an object")
+    return body
+
+
+async def _run_solver(handler: Callable[[], Awaitable[T]], label: str) -> T | JSONResponse:
+    try:
+        return await handler()
+    except (RuntimeError, ValueError) as exc:
+        logger.warning("%s client error: %s", label, exc)
+        return JSONResponse(status_code=400, content={"error": str(exc)})
+    except Exception as exc:
+        logger.exception("%s failed", label)
+        return JSONResponse(status_code=500, content={"error": "Internal server error"})
+
 
 # --- Q2: Multimodal Image QA ---
 class MultimodalRequest(BaseModel):
     image_base64: str
     question: str
 
+
 @router.post("/q2/answer-image")
 @router.post("/answer-image")
 @router.post("/q2")
 async def answer_image(req: MultimodalRequest):
     email = current_email.get()
-    logger.info(f"Q2 Multimodal QA for {email}: {req.question}")
-    try:
+    logger.info("Q2 multimodal QA for %s", email)
+
+    async def _handle():
         ans = await solve_multimodal_qa(req.image_base64, req.question)
         return {"answer": str(ans)}
-    except RuntimeError as e:
-        return JSONResponse(status_code=400, content={"error": str(e)})
-    except Exception as e:
-        logger.error(f"Error in Q2: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+
+    return await _run_solver(_handle, "Q2")
+
 
 # --- Q3: Fixed Schema Invoice Extraction ---
 class ExtractRequest(BaseModel):
     invoice_text: str
+
 
 @router.post("/q3/extract")
 @router.post("/extract")
 @router.post("/q3")
 async def extract_invoice(req: ExtractRequest):
     email = current_email.get()
-    logger.info(f"Q3 Fixed Extract for {email}")
-    try:
-        ans = await solve_invoice_extract(req.invoice_text)
-        return ans
-    except RuntimeError as e:
-        return JSONResponse(status_code=400, content={"error": str(e)})
-    except Exception as e:
-        logger.error(f"Error in Q3: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+    logger.info("Q3 fixed extract for %s", email)
+
+    async def _handle():
+        return await solve_invoice_extract(req.invoice_text)
+
+    return await _run_solver(_handle, "Q3")
+
 
 # --- Q4: Dynamic Schema Structured Extraction ---
 class DynamicExtractRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     text: str
-    schema: Dict[str, Any]
+    schema_def: Dict[str, Any] = Field(alias="schema")
+
 
 @router.post("/q4/dynamic-extract")
 @router.post("/dynamic-extract")
 @router.post("/q4")
 async def dynamic_extract(req: DynamicExtractRequest):
     email = current_email.get()
-    logger.info(f"Q4 Dynamic Extract for {email}")
-    try:
-        ans = await solve_dynamic_extract(req.text, req.schema)
-        return ans
-    except RuntimeError as e:
-        return JSONResponse(status_code=400, content={"error": str(e)})
-    except Exception as e:
-        logger.error(f"Error in Q4: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+    logger.info("Q4 dynamic extract for %s", email)
+
+    async def _handle():
+        return await solve_dynamic_extract(req.text, req.schema_def)
+
+    return await _run_solver(_handle, "Q4")
+
 
 # --- Q6: Korean Audio Dataset API ---
 @router.post("/q6")
 async def korean_audio(request: Request):
     email = current_email.get()
-    body = await request.json()
-    logger.info(f"Q6 Korean Audio Request for {email}: keys={list(body.keys())}")
-    print(f"DEBUG Q6 Body keys: {list(body.keys())}")
-    # Print sample of base64 if present
-    if "audio_base64" in body:
-        b64 = body["audio_base64"]
-        print(f"DEBUG Q6 base64 snippet: {b64[:100]}... length={len(b64)}")
-    try:
-        ans = await solve_korean_audio(body)
-        return ans
-    except RuntimeError as e:
-        return JSONResponse(status_code=400, content={"error": str(e)})
-    except Exception as e:
-        logger.error(f"Error in Q6: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+
+    async def _handle():
+        body = await _read_json_body(request)
+        logger.info("Q6 korean audio for %s keys=%s", email, list(body.keys()))
+        return await solve_korean_audio(body)
+
+    return await _run_solver(_handle, "Q6")
+
 
 # --- Q7: Invoice Intelligence Extraction ---
 @router.post("/q7")
 async def structured_extraction(request: Request):
     email = current_email.get()
-    body = await request.json()
-    logger.info(f"Q7 Structured Extraction for {email}")
-    try:
-        ans = await solve_structured_extraction(body)
-        return ans
-    except RuntimeError as e:
-        return JSONResponse(status_code=400, content={"error": str(e)})
-    except Exception as e:
-        logger.error(f"Error in Q7: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+
+    async def _handle():
+        body = await _read_json_body(request)
+        logger.info("Q7 structured extraction for %s", email)
+        return await solve_structured_extraction(body)
+
+    return await _run_solver(_handle, "Q7")
+
 
 # --- Q8: Semantic Search Passage Ranking ---
 @router.post("/q8")
 async def semantic_rank(request: Request):
     email = current_email.get()
-    body = await request.json()
-    logger.info(f"Q8 Semantic Rank for {email}")
-    try:
-        ans = await solve_semantic_rank(body)
-        return ans
-    except RuntimeError as e:
-        return JSONResponse(status_code=400, content={"error": str(e)})
-    except Exception as e:
-        logger.error(f"Error in Q8: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+
+    async def _handle():
+        body = await _read_json_body(request)
+        logger.info("Q8 semantic rank for %s", email)
+        return await solve_semantic_rank(body)
+
+    return await _run_solver(_handle, "Q8")
+
 
 # --- Q9: Word-Problem Solver ---
 @router.post("/q9")
 async def cot_math(request: Request):
     email = current_email.get()
-    body = await request.json()
-    logger.info(f"Q9 CoT Math for {email}")
-    try:
-        ans = await solve_cot_math(body)
-        return ans
-    except RuntimeError as e:
-        return JSONResponse(status_code=400, content={"error": str(e)})
-    except Exception as e:
-        logger.error(f"Error in Q9: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+
+    async def _handle():
+        body = await _read_json_body(request)
+        logger.info("Q9 cot math for %s", email)
+        return await solve_cot_math(body)
+
+    return await _run_solver(_handle, "Q9")
 
 
 # --- Config & Solver Routes for Dashboard ---
@@ -176,130 +195,107 @@ class TenantStatusResponse(BaseModel):
     solver_url_prefix: str
     ready_routes: List[str]
 
+
+@router.get("/health")
+async def health() -> dict:
+    return {"status": "ok", "service": "ga3"}
+
+
 @router.post("/config")
 async def save_config(req: ConfigSaveRequest):
     email = current_email.get()
-    set_tenant_config(email, {"aipipe_token": req.aipipe_token})
-    return {"status": "ok", "message": f"AIPipe token saved for {email}"}
+    if req.aipipe_token is not None:
+        set_tenant_config(email, {"aipipe_token": req.aipipe_token})
+    tenant_cfg = get_tenant_config(email)
+    return {
+        "status": "ok",
+        "message": f"Configuration saved for {email}",
+        "has_token": bool(tenant_cfg.get("aipipe_token")),
+    }
 
 
 @router.get("/status", response_model=TenantStatusResponse)
 async def tenant_status(request: Request):
-    email = current_email.get()
+    email = normalize_email(current_email.get())
     base = str(request.base_url).rstrip("/")
-    ready_routes = [
-        f"{base}/ga3/{email}/q2",
-        f"{base}/ga3/{email}/q3",
-        f"{base}/ga3/{email}/q4",
-        f"{base}/ga3/{email}/q6",
-        f"{base}/ga3/{email}/q7",
-        f"{base}/ga3/{email}/q8",
-        f"{base}/ga3/{email}/q9",
-    ]
-    from T22026.GA3.shared.tenant import get_tenant_config
     tenant_cfg = get_tenant_config(email)
     return TenantStatusResponse(
         email=email,
         configured=True,
         has_token=bool(tenant_cfg.get("aipipe_token")),
-        solver_url_prefix=f"{base}/ga3/{email}",
-        ready_routes=ready_routes,
+        solver_url_prefix=build_solver_url_prefix(base, email),
+        ready_routes=build_ready_routes(base, email),
     )
+
 
 @router.post("/onboard", response_model=OnboardResponse)
 async def onboard(req: OnboardRequest, request: Request):
-    email = req.email.strip().lower()
+    email = normalize_email(req.email)
     if not email or "@" not in email:
         raise HTTPException(status_code=400, detail="Valid email is required")
-    if req.aipipe_token:
+    if req.aipipe_token is not None:
         set_tenant_config(email, {"aipipe_token": req.aipipe_token})
     base = str(request.base_url).rstrip("/")
-    ready_routes = [
-        f"{base}/ga3/{email}/q2",
-        f"{base}/ga3/{email}/q3",
-        f"{base}/ga3/{email}/q4",
-        f"{base}/ga3/{email}/q6",
-        f"{base}/ga3/{email}/q7",
-        f"{base}/ga3/{email}/q8",
-        f"{base}/ga3/{email}/q9",
-    ]
+    tenant_cfg = get_tenant_config(email)
     return OnboardResponse(
         email=email,
         configured=True,
-        has_token=bool(req.aipipe_token),
+        has_token=bool(tenant_cfg.get("aipipe_token")),
         base_url=base,
-        solver_url_prefix=f"{base}/ga3/{email}",
-        ready_routes=ready_routes,
+        solver_url_prefix=build_solver_url_prefix(base, email),
+        ready_routes=build_ready_routes(base, email),
     )
+
 
 @router.post("/solve/q1")
 async def solve_q1(request: Request):
-    body = await request.json()
-    try:
-        ans = await solve_youtube_filter(body)
-        return ans
-    except RuntimeError as e:
-        return JSONResponse(status_code=400, content={"error": str(e)})
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+    async def _handle():
+        body = await _read_json_body(request)
+        return await solve_youtube_filter(body)
+
+    return await _run_solver(_handle, "Q1")
+
 
 @router.post("/solve/q5")
 async def solve_q5(request: Request):
-    body = await request.json()
-    try:
-        ans = await solve_cosine_similarity(body)
-        return ans
-    except RuntimeError as e:
-        return JSONResponse(status_code=400, content={"error": str(e)})
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+    async def _handle():
+        body = await _read_json_body(request)
+        return await solve_cosine_similarity(body)
+
+    return await _run_solver(_handle, "Q5")
+
 
 @router.post("/solve/q10")
 async def solve_q10(request: Request):
-    body = await request.json()
-    try:
-        ans = await solve_proof_of_work(body)
-        return ans
-    except RuntimeError as e:
-        return JSONResponse(status_code=400, content={"error": str(e)})
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+    async def _handle():
+        body = await _read_json_body(request)
+        return await solve_proof_of_work(body)
+
+    return await _run_solver(_handle, "Q10")
+
 
 @router.post("/solve/q11")
 async def solve_q11(request: Request):
-    body = await request.json()
-    try:
-        ans = await solve_context_window_heist(body)
-        return ans
-    except RuntimeError as e:
-        return JSONResponse(status_code=400, content={"error": str(e)})
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+    async def _handle():
+        body = await _read_json_body(request)
+        return await solve_context_window_heist(body)
+
+    return await _run_solver(_handle, "Q11")
+
 
 @router.post("/solve/q12")
 async def solve_q12(request: Request):
-    body = await request.json()
-    try:
-        ans = await solve_spin_up_cli(body)
-        return ans
-    except RuntimeError as e:
-        return JSONResponse(status_code=400, content={"error": str(e)})
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+    async def _handle():
+        body = await _read_json_body(request)
+        return await solve_spin_up_cli(body)
+
+    return await _run_solver(_handle, "Q12")
+
 
 @router.post("/solve/q13")
 async def solve_q13(request: Request):
-    body = await request.json()
-    try:
-        ans = await solve_embedding_trapdoors(body)
-        return ans
-    except RuntimeError as e:
-        return JSONResponse(status_code=400, content={"error": str(e)})
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+    async def _handle():
+        body = await _read_json_body(request)
+        return await solve_embedding_trapdoors(body)
 
-
-
-
-
-
+    return await _run_solver(_handle, "Q13")

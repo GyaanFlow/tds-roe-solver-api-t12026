@@ -10,6 +10,7 @@ import threading
 import tempfile
 from pathlib import Path
 from contextvars import ContextVar
+from urllib.parse import quote
 
 current_email: ContextVar[str] = ContextVar("current_email", default="student@example.com")
 current_token: ContextVar[str | None] = ContextVar("current_token", default=None)
@@ -19,11 +20,36 @@ _CONFIG_FILE = Path(os.environ.get("GA3_TENANT_CONFIG_PATH", str(GA3_CONFIG_DEFA
 _lock = threading.Lock()
 _MEMORY_CONFIG: dict[str, dict] = {}
 
+GA3_API_ROUTE_SUFFIXES = ("/q2", "/q3", "/q4", "/q6", "/q7", "/q8", "/q9")
+GA3_SOLVER_ROUTE_SUFFIXES = (
+    "/solve/q1",
+    "/solve/q5",
+    "/solve/q10",
+    "/solve/q11",
+    "/solve/q12",
+    "/solve/q13",
+)
+
+
+def normalize_email(email: str) -> str:
+    return email.strip().lower()
+
+
+def build_solver_url_prefix(base_url: str, email: str) -> str:
+    base = base_url.rstrip("/")
+    return f"{base}/ga3/{quote(normalize_email(email), safe='')}"
+
+
+def build_ready_routes(base_url: str, email: str) -> list[str]:
+    prefix = build_solver_url_prefix(base_url, email)
+    suffixes = GA3_API_ROUTE_SUFFIXES + GA3_SOLVER_ROUTE_SUFFIXES
+    return [f"{prefix}{suffix}" for suffix in suffixes]
+
 
 def get_tenant_config(email: str) -> dict:
     """Read the tenant's configuration."""
-    email_key = email.strip().lower()
-    config = {}
+    email_key = normalize_email(email)
+    config: dict = {}
     with _lock:
         if email_key in _MEMORY_CONFIG:
             config = dict(_MEMORY_CONFIG.get(email_key, {}))
@@ -31,31 +57,29 @@ def get_tenant_config(email: str) -> dict:
             try:
                 with open(_CONFIG_FILE, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                    config = data.get(email_key, {})
+                    config = dict(data.get(email_key, {}))
                     _MEMORY_CONFIG[email_key] = dict(config)
             except Exception:
                 config = {}
 
-    # Precedence:
-    # 1. ContextVar token (passed via request header/query)
+    # Precedence: request ContextVar > stored tenant config > env fallback
     c_token = current_token.get()
     if c_token:
         config["aipipe_token"] = c_token
-
-    # 2. Environment variables fallback
-    env_token = os.environ.get("AIPIPE_TOKEN") or os.environ.get("AIPIPE_API_KEY")
-    if env_token:
-        config["aipipe_token"] = env_token
+    elif not config.get("aipipe_token"):
+        env_token = os.environ.get("AIPIPE_TOKEN") or os.environ.get("AIPIPE_API_KEY")
+        if env_token:
+            config["aipipe_token"] = env_token
     return config
 
 
 def set_tenant_config(email: str, config: dict) -> None:
     """Save the tenant's configuration."""
-    email_key = email.strip().lower()
+    email_key = normalize_email(email)
     with _lock:
         _CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-        data = {}
+        data: dict = {}
         if _CONFIG_FILE.exists():
             try:
                 with open(_CONFIG_FILE, "r", encoding="utf-8") as f:

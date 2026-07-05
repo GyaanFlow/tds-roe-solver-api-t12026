@@ -4,9 +4,17 @@ import base64
 import math
 import csv
 import io
+import asyncio
+import logging
+import threading
 import requests
 from typing import Any, Dict, List, Optional
 from T22026.GA3.shared.tenant import current_email, get_tenant_config
+
+logger = logging.getLogger("ga3_solvers")
+
+MAX_POW_DIFFICULTY = 28
+MAX_POW_ATTEMPTS = 15_000_000
 
 # Helper for calling LLMs via raw HTTP requests to be dependency-free
 def call_llm(prompt: str, system_instruction: Optional[str] = None, image_base64: Optional[str] = None) -> str:
@@ -48,9 +56,9 @@ def call_llm(prompt: str, system_instruction: Optional[str] = None, image_base64
                 data = res.json()
                 return data["choices"][0]["message"]["content"]
             else:
-                print(f"AI Pipe call failed with status {res.status_code}: {res.text}")
+                logger.warning("AI Pipe call failed with status %s: %s", res.status_code, res.text)
         except Exception as e:
-            print(f"AI Pipe call failed: {e}")
+            logger.warning("AI Pipe call failed: %s", e)
 
     # 2. Try Gemini API if key is present
     gemini_key = os.environ.get("GEMINI_API_KEY")
@@ -75,7 +83,7 @@ def call_llm(prompt: str, system_instruction: Optional[str] = None, image_base64
                 data = res.json()
                 return data["candidates"][0]["content"]["parts"][0]["text"]
         except Exception as e:
-            print(f"Gemini API call failed: {e}")
+            logger.warning("Gemini API call failed: %s", e)
 
     # 3. Try OpenAI API if key is present
     openai_key = os.environ.get("OPENAI_API_KEY")
@@ -111,7 +119,7 @@ def call_llm(prompt: str, system_instruction: Optional[str] = None, image_base64
                 data = res.json()
                 return data["choices"][0]["message"]["content"]
         except Exception as e:
-            print(f"OpenAI API call failed: {e}")
+            logger.warning("OpenAI API call failed: %s", e)
 
     # 4. Fallback mock / warning if no keys are configured
     raise RuntimeError("No LLM API key (AI Pipe token, GEMINI_API_KEY, or OPENAI_API_KEY) found.")
@@ -143,8 +151,8 @@ def extract_json_data(text: str) -> Dict[str, Any]:
     try:
         return json.loads(cleaned)
     except Exception as e:
-        print(f"Failed to parse LLM response as JSON: {text}. Error: {e}")
-        raise ValueError(f"Invalid JSON returned by LLM: {e}")
+        logger.error("Failed to parse LLM response as JSON: %s", e)
+        raise ValueError(f"Invalid JSON returned by LLM: {e}") from e
 
 async def solve_multimodal_qa(image_base64: str, question: str) -> str:
     prompt = f"""Analyze the image and answer the question: "{question}"
@@ -280,7 +288,7 @@ async def solve_korean_audio(body: Dict[str, Any]) -> Dict[str, Any]:
             res.raise_for_status()
             csv_text = clean_csv_text(res.json()["text"])
         except Exception as e:
-            print(f"Whisper transcription failed: {e}. Falling back to text decoding.")
+            logger.info("Whisper transcription failed (%s). Falling back to text decoding.", e)
             
     # 2. Fallbacks for direct text decoding (mocks or plain csv data)
     if not csv_text:
@@ -591,7 +599,6 @@ Return ONLY the raw JSON object."""
 
 
 # --- Q1: Automated Video Curation Pipeline ---
-import threading
 _yt_cache_lock = threading.Lock()
 
 def get_youtube_metadata_cached(url: str) -> dict:
@@ -633,7 +640,7 @@ def get_youtube_metadata_cached(url: str) -> dict:
                 "upload_date": info.get("upload_date") or ""
             }
         except Exception as e:
-            print(f"Error extracting {url}: {e}")
+            logger.warning("Error extracting YouTube metadata for %s: %s", url, e)
             return None
 
     # 3. Write cache with lock
@@ -737,18 +744,33 @@ def count_leading_zero_bits(digest: bytes) -> int:
             break
     return count
 
-async def solve_proof_of_work(body: Dict[str, Any]) -> Dict[str, Any]:
+def _mine_nonce(token: str, difficulty: int) -> str:
     import hashlib
-    token = body.get("token", "")
-    difficulty = body.get("difficulty", 0)
-    
+
     nonce = 0
-    while True:
-        s = f"{token}:{nonce}".encode("utf-8")
-        h = hashlib.sha256(s).digest()
-        if count_leading_zero_bits(h) >= difficulty:
-            return {"nonce": str(nonce)}
+    while nonce < MAX_POW_ATTEMPTS:
+        digest = hashlib.sha256(f"{token}:{nonce}".encode("utf-8")).digest()
+        if count_leading_zero_bits(digest) >= difficulty:
+            return str(nonce)
         nonce += 1
+    raise RuntimeError("Proof-of-work search exceeded iteration limit")
+
+
+async def solve_proof_of_work(body: Dict[str, Any]) -> Dict[str, Any]:
+    token = str(body.get("token", "")).strip()
+    if not token:
+        raise ValueError("token is required")
+
+    try:
+        difficulty = int(body.get("difficulty", 0))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("difficulty must be an integer") from exc
+
+    if difficulty < 0 or difficulty > MAX_POW_DIFFICULTY:
+        raise ValueError(f"difficulty must be between 0 and {MAX_POW_DIFFICULTY}")
+
+    nonce = await asyncio.to_thread(_mine_nonce, token, difficulty)
+    return {"nonce": nonce}
 
 
 # --- Q11: Context Window Heist ---
@@ -829,12 +851,19 @@ def classify_message(message: str) -> str:
 async def solve_spin_up_cli(body: Dict[str, Any]) -> Dict[str, Any]:
     import hashlib
     import time
-    dataset = body.get("dataset", [])
-    marker = body.get("marker", "SPINCLI_MARKER")
+
+    dataset = body.get("dataset")
+    marker = str(body.get("marker", "SPINCLI_MARKER")).strip()
+    if not isinstance(dataset, list) or not dataset:
+        raise ValueError("dataset must be a non-empty array")
+    if not marker:
+        raise ValueError("marker is required")
     
     classified = []
     for item in dataset:
-        lbl = classify_message(item["message"])
+        if not isinstance(item, dict) or "id" not in item or "message" not in item:
+            raise ValueError("each dataset item must include id and message")
+        lbl = classify_message(str(item["message"]))
         classified.append({
             "id": item["id"],
             "label": lbl
@@ -942,7 +971,7 @@ async def solve_embedding_trapdoors(body: Dict[str, Any]) -> Dict[str, Any]:
         if target_text and target_text in corpus_lookup:
             answers[q["id"]] = corpus_lookup[target_text]
         else:
-            print(f"Warning: target text not found for {q_domain} / {q_text}")
+            logger.warning("Trapdoor target not found for %s / %s", q_domain, q_text)
             if corpus:
                 answers[q["id"]] = corpus[0]["id"]
                 

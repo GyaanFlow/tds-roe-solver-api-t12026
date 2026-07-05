@@ -48,7 +48,32 @@ def test_ga3_routes():
     assert res.headers.get("access-control-allow-origin") == "*"
     print("[PASS] GA3 OPTIONS CORS verified!")
 
-    # 3. Test Config Saving Endpoint
+    # 3. Test health + onboarding + status
+    res = client.get("/ga3/health")
+    assert res.status_code == 200
+    assert res.json()["status"] == "ok"
+    print("[PASS] GA3 health endpoint verified!")
+
+    res = client.post(
+        "/ga3/onboard",
+        json={"email": "test@ds.study.iitm.ac.in", "aipipe_token": "test-token-value"},
+    )
+    assert res.status_code == 200, res.text
+    onboard = res.json()
+    assert onboard["configured"] is True
+    assert onboard["has_token"] is True
+    assert "/ga3/test%40ds.study.iitm.ac.in/q2" in onboard["ready_routes"][0]
+    assert len(onboard["ready_routes"]) == 13
+    print("[PASS] Onboard endpoint verified!")
+
+    res = client.get("/ga3/test@ds.study.iitm.ac.in/status")
+    assert res.status_code == 200, res.text
+    status = res.json()
+    assert status["has_token"] is True
+    assert len(status["ready_routes"]) == 13
+    print("[PASS] Tenant status endpoint verified!")
+
+    # 4. Test Config Saving Endpoint
     res = client.post(
         "/ga3/test@ds.study.iitm.ac.in/config",
         json={"aipipe_token": "test-token-value"}
@@ -59,7 +84,11 @@ def test_ga3_routes():
     assert config.get("aipipe_token") == "test-token-value"
     print("[PASS] Config saving endpoint verified!")
 
-    # 4. Test Q2 Multimodal Image QA
+    res = client.post("/ga3/test@ds.study.iitm.ac.in/solve/q12", json={"bad": True})
+    assert res.status_code == 400
+    print("[PASS] Invalid solver payload returns 400!")
+
+    # 5. Test Q2 Multimodal Image QA
     payload_q2 = {"image_base64": "iVBOR...", "question": "What is the answer?"}
     res = client.post("/ga3/test@ds.study.iitm.ac.in/q2", json=payload_q2)
     assert res.status_code == 200, f"Q2 failed: {res.text}"
@@ -70,7 +99,7 @@ def test_ga3_routes():
     assert res.json() == {"answer": "42.0"}
     print("[PASS] Q2 Multimodal QA endpoints verified!")
 
-    # 5. Test Q3 Fixed Schema Invoice Extraction
+    # 6. Test Q3 Fixed Schema Invoice Extraction
     payload_q3 = {"invoice_text": "Vendor: Test Vendor, Invoice No: INV-123"}
     res = client.post("/ga3/test@ds.study.iitm.ac.in/q3", json=payload_q3)
     assert res.status_code == 200, f"Q3 failed: {res.text}"
@@ -81,7 +110,7 @@ def test_ga3_routes():
     assert res.json()["invoice_no"] == "INV-123"
     print("[PASS] Q3 Invoice Extraction endpoints verified!")
 
-    # 6. Test Q4 Dynamic Schema Structured Extraction
+    # 7. Test Q4 Dynamic Schema Structured Extraction
     payload_q4 = {
         "text": "Rahul bought 3 notebooks...",
         "schema": {"customer_name": "string", "quantity": "integer"}
@@ -95,7 +124,7 @@ def test_ga3_routes():
     assert res.json()["customer_name"] == "Rahul"
     print("[PASS] Q4 Dynamic Extraction endpoints verified!")
 
-    # 7. Test Q1 Solver Route
+    # 8. Test Q1 Solver Route
     q1_payload = {
         "source_urls": ["https://www.youtube.com/watch?v=_C8kWso4ne4"],
         "min_duration_seconds": 300,
@@ -109,7 +138,7 @@ def test_ga3_routes():
     assert res.json() == {"urls": ["https://www.youtube.com/watch?v=_C8kWso4ne4"]}
     print("[PASS] Q1 Solver verified!")
 
-    # 8. Test Q5 Solver Route
+    # 9. Test Q5 Solver Route
     q5_payload = {
         "documents": [
             {"doc_id": "D000001", "embedding": [1.0, 0.0]},
@@ -124,7 +153,7 @@ def test_ga3_routes():
     assert res.json() == {"Q001": ["D000001", "D000002"]}
     print("[PASS] Q5 Solver verified!")
 
-    # 9. Test Q6: Korean Audio Dataset API with mock Base64 CSV
+    # 10. Test Q6: Korean Audio Dataset API with mock Base64 CSV
     csv_content = (
         "id,name,score,age\n"
         "1,Alice,85.0,23\n"
@@ -154,7 +183,7 @@ def test_ga3_routes():
     assert math.isclose(data["correlation"][1][2], 1.0)
     print("[PASS] Q6 Audio Dataset parser statistics verified!")
 
-    # 10. Test Q10 Solver Route (Proof of Work)
+    # 11. Test Q10 Solver Route (Proof of Work)
     q10_payload = {
         "token": "powtest",
         "difficulty": 4
@@ -164,7 +193,7 @@ def test_ga3_routes():
     assert "nonce" in res.json()
     print("[PASS] Q10 Solver verified!")
 
-    # 11. Test Q11 Solver Route (Context Heist)
+    # 12. Test Q11 Solver Route (Context Heist)
     q11_payload = {
         "haystack": "LATEST FACT [Q1]: The current active retrieval strategy is hybrid-v4. Use this value."
     }
@@ -174,7 +203,7 @@ def test_ga3_routes():
     assert ans["answers"]["q1"] == "hybrid-v4"
     print("[PASS] Q11 Solver verified!")
 
-    # 12. Test Q12 Solver Route (Spin Up CLI)
+    # 13. Test Q12 Solver Route (Spin Up CLI)
     q12_payload = {
         "dataset": [
             {"id": "log-001", "message": "password spray detected for tenant login"}
@@ -186,7 +215,7 @@ def test_ga3_routes():
     assert "session_cast" in res.json()
     print("[PASS] Q12 Solver verified!")
 
-    # 13. Test Q13 Solver Route (Embedding Trapdoors)
+    # 14. Test Q13 Solver Route (Embedding Trapdoors)
     q13_payload = {
         "queries": [
             {"id": "q1", "text": "patient has low blood sugar", "domain": "medical"}
