@@ -152,14 +152,51 @@ async def cot_math(request: Request):
 
 # --- Config & Solver Routes for Dashboard ---
 
-class ConfigSaveRequest(BaseModel):
-    aipipe_token: str
+
+class OnboardRequest(BaseModel):
+    email: str
+    aipipe_token: str | None = None
+
+
+class OnboardResponse(BaseModel):
+    email: str
+    configured: bool
+    has_token: bool
+    base_url: str
+    solver_url_prefix: str
+    ready_routes: List[str]
 
 @router.post("/config")
 async def save_config(req: ConfigSaveRequest):
     email = current_email.get()
     set_tenant_config(email, {"aipipe_token": req.aipipe_token})
     return {"status": "ok", "message": f"AIPipe token saved for {email}"}
+
+@router.post("/onboard", response_model=OnboardResponse)
+async def onboard(req: OnboardRequest, request: Request):
+    email = req.email.strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="Valid email is required")
+    if req.aipipe_token:
+        set_tenant_config(email, {"aipipe_token": req.aipipe_token})
+    base = str(request.base_url).rstrip("/")
+    ready_routes = [
+        f"{base}/ga3/{email}/q2",
+        f"{base}/ga3/{email}/q3",
+        f"{base}/ga3/{email}/q4",
+        f"{base}/ga3/{email}/q6",
+        f"{base}/ga3/{email}/q7",
+        f"{base}/ga3/{email}/q8",
+        f"{base}/ga3/{email}/q9",
+    ]
+    return OnboardResponse(
+        email=email,
+        configured=True,
+        has_token=bool(req.aipipe_token),
+        base_url=base,
+        solver_url_prefix=f"{base}/ga3/{email}",
+        ready_routes=ready_routes,
+    )
 
 @router.post("/solve/q1")
 async def solve_q1(request: Request):
@@ -226,5 +263,6 @@ async def solve_q13(request: Request):
         return JSONResponse(status_code=400, content={"error": str(e)})
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
+
 
 

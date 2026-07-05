@@ -342,7 +342,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <input type="text" id="aipipe-token" placeholder="aipipe.org API Key (optional)" />
       <button class="btn" id="btn-save-settings" onclick="saveSettings()">⚡ Save Settings</button>
     </div>
-    <p style="font-size: 0.8rem; color: var(--muted);"> Saving settings writes credentials locally to enable LLM solvers dynamically for your tenant email. </p>
+    <p style="font-size: 0.8rem; color: var(--muted);"> Step 1: save email/token to initialize your tenant context. Then the solver routes unlock for that user. </p>
   </div>
 
   <!-- QUESTIONS SECTION -->
@@ -633,15 +633,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     updatePaths(email);
 
     try {
-      const resp = await fetch(`${BASE}/ga3/${encodeURIComponent(email)}/config`, {
+      const resp = await fetch(`${BASE}/ga3/onboard`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ aipipe_token: token })
+        body: JSON.stringify({ email, aipipe_token: token || null })
       });
+      const data = await resp.json();
       if (resp.ok) {
-        showToast("Settings saved successfully!");
+        showToast(`Saved. Base URL ready: ${data.solver_url_prefix}`);
       } else {
-        showToast("Failed to save settings on server.", true);
+        showToast(data.detail || data.error || "Failed to initialize tenant.", true);
       }
     } catch (e) {
       showToast("Error connecting to server.", true);
@@ -885,3 +886,4 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 </body>
 </html>
 """
+
