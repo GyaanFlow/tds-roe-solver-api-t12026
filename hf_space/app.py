@@ -79,7 +79,7 @@ app.add_middleware(
 
 @app.get("/api/version")
 def api_version():
-    return {"version": "mock-0.0.1"}
+    return {"version": "mock-0.0.1", "commit": os.getenv("GIT_COMMIT", "local"), "build": os.getenv("RENDER_GIT_COMMIT", os.getenv("GIT_COMMIT", "local"))}
 
 
 @app.get("/health")
