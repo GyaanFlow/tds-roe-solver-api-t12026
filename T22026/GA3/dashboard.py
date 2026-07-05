@@ -5,7 +5,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>GA3 Solvers & API Hub — IITM TDS 2026-05</title>
+  <title>GA3 Solvers & API Hub â€” IITM TDS 2026-05</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <style>
@@ -36,7 +36,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       line-height: 1.5;
     }
 
-    /* ── HERO ── */
+    /* â”€â”€ HERO â”€â”€ */
     .hero {
       background: radial-gradient(circle at top, rgba(99, 102, 241, 0.12) 0%, var(--bg) 70%);
       border-bottom: 1px solid var(--border);
@@ -60,14 +60,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       margin: 0 auto;
     }
 
-    /* ── CONTAINER ── */
+    /* â”€â”€ CONTAINER â”€â”€ */
     .container {
       max-width: 960px;
       margin: 0 auto;
       padding: 2rem 1.25rem 4rem;
     }
 
-    /* ── CARD STYLING ── */
+    /* â”€â”€ CARD STYLING â”€â”€ */
     .card {
       background: var(--surface);
       border: 1px solid var(--border);
@@ -90,7 +90,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       margin-bottom: 0.6rem;
     }
 
-    /* ── INPUTS & BUTTONS ── */
+    /* â”€â”€ INPUTS & BUTTONS â”€â”€ */
     .input-row {
       display: flex;
       gap: 1rem;
@@ -140,14 +140,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       background: rgba(255, 255, 255, 0.1);
     }
 
-    /* ── DYNAMIC GRID ── */
+    /* â”€â”€ DYNAMIC GRID â”€â”€ */
     .grid {
       display: grid;
       grid-template-columns: 1fr;
       gap: 1.5rem;
     }
 
-    /* ── QUESTION CARD ── */
+    /* â”€â”€ QUESTION CARD â”€â”€ */
     .q-card {
       background: var(--surface);
       border: 1px solid var(--border);
@@ -223,7 +223,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       margin-bottom: 1rem;
     }
 
-    /* ── INTERACTIVE SOLVER ── */
+    /* â”€â”€ INTERACTIVE SOLVER â”€â”€ */
     .solver-box {
       background: rgba(15, 23, 42, 0.4);
       border: 1px dashed var(--border);
@@ -288,6 +288,35 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       border-radius: 6px;
       font-size: 0.72rem;
       font-weight: 600;
+    .answer-summary {
+      display: grid;
+      gap: 0.8rem;
+    }
+    .answer-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 0.65rem;
+    }
+    .answer-chip {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 0.8rem 0.9rem;
+      background: rgba(15, 23, 42, 0.92);
+    }
+    .answer-chip span {
+      display: block;
+      font-size: 0.72rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 0.25rem;
+    }
+    .answer-chip strong {
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--text);
+      font-size: 0.86rem;
+      word-break: break-word;
+    }
       cursor: pointer;
       transition: background 0.2s;
     }
@@ -295,7 +324,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       background: rgba(255, 255, 255, 0.15);
     }
 
-    /* ── ACTION FOOTER ── */
+    /* â”€â”€ ACTION FOOTER â”€â”€ */
     .q-footer {
       background: rgba(15, 23, 42, 0.2);
       padding: 1rem 1.5rem;
@@ -304,7 +333,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       gap: 0.5rem;
     }
 
-    /* ── TOAST NOTIFICATION ── */
+    /* â”€â”€ TOAST NOTIFICATION â”€â”€ */
     .toast {
       position: fixed;
       bottom: 24px;
@@ -330,7 +359,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
 <div class="hero">
   <h1>GA3 Multi-Tenant API Hub</h1>
-  <p> IITM TDS 2026-05 — Seeded, structured, and interactive question solvers. </p>
+  <p> IITM TDS 2026-05 â€” Seeded, structured, and interactive question solvers. </p>
 </div>
 
 <div class="container">
@@ -340,7 +369,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div class="input-row">
       <input type="email" id="student-email" placeholder="23f1000000@ds.study.iitm.ac.in" value="student@example.com" />
       <input type="text" id="aipipe-token" placeholder="aipipe.org API Key (optional)" />
-      <button class="btn" id="btn-save-settings" onclick="saveSettings()">⚡ Save Settings</button>
+      <button class="btn" id="btn-save-settings" onclick="saveSettings()">âš¡ Save Settings</button>
     </div>
     <p style="font-size: 0.8rem; color: var(--muted);"> Step 1: save email/token to initialize your tenant context. Then the solver routes unlock for that user. </p>
   </div>
@@ -689,7 +718,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           JSON.parse(rawContent);
         }
         filesData[qKey] = rawContent;
-        dz.innerHTML = `📄 Loaded: <strong>${file.name}</strong> (${(file.size / 1024).toFixed(1)} KB)`;
+        dz.innerHTML = `ðŸ“„ Loaded: <strong>${file.name}</strong> (${(file.size / 1024).toFixed(1)} KB)`;
       } catch (err) {
         showToast("Invalid JSON file uploaded.", true);
       }
@@ -855,7 +884,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const area = document.getElementById(`ans-${qKey}`);
     const code = document.getElementById(`pre-${qKey}`);
     area.style.display = "block";
-    code.textContent = typeof data === "string" ? data : JSON.stringify(data, null, 2);
+
+    if (qKey === "q11" && data && typeof data === "object" && data.answers) {
+      const answers = data.answers;
+      const items = Object.entries(answers)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([k, v]) => `<div class="answer-chip"><span>${k}</span><strong>${String(v)}</strong></div>`)
+        .join("");
+      area.innerHTML = `<button class="btn-copy-ans" onclick="copyText('pre-q11')">Copy</button><div class="answer-summary"><div class="answer-grid">${items}</div><pre><code id="pre-${qKey}"></code></pre></div>`;
+      const summary = Object.entries(answers).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k}: ${v}`).join('\n');
+      document.getElementById(`pre-${qKey}`).textContent = summary;
+    } else {
+      code.textContent = typeof data === "string" ? data : JSON.stringify(data, null, 2);
+    }
     showToast("Solved! Answer displayed below.");
   }
 
@@ -886,4 +927,5 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 </body>
 </html>
 """
+
 

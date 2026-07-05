@@ -131,3 +131,8 @@ This file stores durable context across terms, graded assignments (GA), and ques
 - Implemented `extract_json_data` helper in solvers to safely isolate and parse LLM-generated JSON blocks, preventing parsing failures.
 - Simplified index gateway homepage layout into an index pointing directly to the GA0, GA2, and GA3 hubs.
 - Successfully verified all endpoints via test suites and pushed the production-ready code to GitHub and Hugging Face.
+### 2026-07-05 (GA3 Onboarding-First UX + Tenant Status)
+- Added a dedicated GA3 onboarding flow that collects student email and optional AI Pipe token before generating tenant-specific solver URLs.
+- Added `/ga3/onboard` and `/ga3/status` so the dashboard can show a ready state instead of raw JSON-only responses.
+- Improved GA3 answer rendering for Q11 so the UI shows human-readable answer cards plus a copyable summary.
+- Hardened tenant config persistence and kept token lookup precedence stable for multi-user operation.

@@ -82,6 +82,11 @@ def api_version():
     return {"version": "mock-0.0.1"}
 
 
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
 @app.get("/", response_class=HTMLResponse)
 def home() -> str:
     return """<!doctype html>

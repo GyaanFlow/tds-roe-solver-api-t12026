@@ -166,11 +166,47 @@ class OnboardResponse(BaseModel):
     solver_url_prefix: str
     ready_routes: List[str]
 
+
+class ConfigSaveRequest(BaseModel):
+    aipipe_token: str | None = None
+
+
+class TenantStatusResponse(BaseModel):
+    email: str
+    configured: bool
+    has_token: bool
+    solver_url_prefix: str
+    ready_routes: List[str]
+
 @router.post("/config")
 async def save_config(req: ConfigSaveRequest):
     email = current_email.get()
     set_tenant_config(email, {"aipipe_token": req.aipipe_token})
     return {"status": "ok", "message": f"AIPipe token saved for {email}"}
+
+
+@router.get("/status", response_model=TenantStatusResponse)
+async def tenant_status(request: Request):
+    email = current_email.get()
+    base = str(request.base_url).rstrip("/")
+    ready_routes = [
+        f"{base}/ga3/{email}/q2",
+        f"{base}/ga3/{email}/q3",
+        f"{base}/ga3/{email}/q4",
+        f"{base}/ga3/{email}/q6",
+        f"{base}/ga3/{email}/q7",
+        f"{base}/ga3/{email}/q8",
+        f"{base}/ga3/{email}/q9",
+    ]
+    from T22026.GA3.shared.tenant import get_tenant_config
+    tenant_cfg = get_tenant_config(email)
+    return TenantStatusResponse(
+        email=email,
+        configured=True,
+        has_token=bool(tenant_cfg.get("aipipe_token")),
+        solver_url_prefix=f"{base}/ga3/{email}",
+        ready_routes=ready_routes,
+    )
 
 @router.post("/onboard", response_model=OnboardResponse)
 async def onboard(req: OnboardRequest, request: Request):
@@ -263,6 +299,8 @@ async def solve_q13(request: Request):
         return JSONResponse(status_code=400, content={"error": str(e)})
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
+
+
 
 
 

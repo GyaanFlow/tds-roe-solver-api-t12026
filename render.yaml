@@ -15,4 +15,5 @@ services:
         value: "/tmp/q16_work"
       - key: Q19_WORK_ROOT
         value: "/tmp/q19_work"
-    healthCheckPath: /q-fastapi/health
+    healthCheckPath: /health
+
