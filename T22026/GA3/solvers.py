@@ -235,7 +235,17 @@ async def solve_korean_audio(body: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("Missing audio_base64")
         
     # Decode base64
-    raw_bytes = base64.b64decode(audio_base64)
+    raw_audio = (audio_base64 or "").strip()
+    if raw_audio.lower().startswith("data:") and "," in raw_audio:
+        raw_audio = raw_audio.split(",", 1)[1]
+    raw_audio = raw_audio.replace("\n", "").replace("\r", "").replace(" ", "")
+    pad = len(raw_audio) % 4
+    if pad:
+        raw_audio += "=" * (4 - pad)
+    try:
+        raw_bytes = base64.b64decode(raw_audio, validate=False)
+    except Exception:
+        raw_bytes = base64.urlsafe_b64decode(raw_audio)
     csv_text = None
     
     # 1. Try LLM Whisper transcription if keys are available
@@ -937,3 +947,4 @@ async def solve_embedding_trapdoors(body: Dict[str, Any]) -> Dict[str, Any]:
                 answers[q["id"]] = corpus[0]["id"]
                 
     return answers
+

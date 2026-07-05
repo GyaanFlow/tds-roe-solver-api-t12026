@@ -39,6 +39,8 @@ async def answer_image(req: MultimodalRequest):
     try:
         ans = await solve_multimodal_qa(req.image_base64, req.question)
         return {"answer": str(ans)}
+    except RuntimeError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
     except Exception as e:
         logger.error(f"Error in Q2: {e}")
         return JSONResponse(status_code=500, content={"error": str(e)})
@@ -56,6 +58,8 @@ async def extract_invoice(req: ExtractRequest):
     try:
         ans = await solve_invoice_extract(req.invoice_text)
         return ans
+    except RuntimeError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
     except Exception as e:
         logger.error(f"Error in Q3: {e}")
         return JSONResponse(status_code=500, content={"error": str(e)})
@@ -74,6 +78,8 @@ async def dynamic_extract(req: DynamicExtractRequest):
     try:
         ans = await solve_dynamic_extract(req.text, req.schema)
         return ans
+    except RuntimeError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
     except Exception as e:
         logger.error(f"Error in Q4: {e}")
         return JSONResponse(status_code=500, content={"error": str(e)})
@@ -92,6 +98,8 @@ async def korean_audio(request: Request):
     try:
         ans = await solve_korean_audio(body)
         return ans
+    except RuntimeError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
     except Exception as e:
         logger.error(f"Error in Q6: {e}")
         return JSONResponse(status_code=500, content={"error": str(e)})
@@ -105,6 +113,8 @@ async def structured_extraction(request: Request):
     try:
         ans = await solve_structured_extraction(body)
         return ans
+    except RuntimeError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
     except Exception as e:
         logger.error(f"Error in Q7: {e}")
         return JSONResponse(status_code=500, content={"error": str(e)})
@@ -118,6 +128,8 @@ async def semantic_rank(request: Request):
     try:
         ans = await solve_semantic_rank(body)
         return ans
+    except RuntimeError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
     except Exception as e:
         logger.error(f"Error in Q8: {e}")
         return JSONResponse(status_code=500, content={"error": str(e)})
@@ -131,6 +143,8 @@ async def cot_math(request: Request):
     try:
         ans = await solve_cot_math(body)
         return ans
+    except RuntimeError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
     except Exception as e:
         logger.error(f"Error in Q9: {e}")
         return JSONResponse(status_code=500, content={"error": str(e)})
@@ -153,6 +167,8 @@ async def solve_q1(request: Request):
     try:
         ans = await solve_youtube_filter(body)
         return ans
+    except RuntimeError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
@@ -162,6 +178,8 @@ async def solve_q5(request: Request):
     try:
         ans = await solve_cosine_similarity(body)
         return ans
+    except RuntimeError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
@@ -171,6 +189,8 @@ async def solve_q10(request: Request):
     try:
         ans = await solve_proof_of_work(body)
         return ans
+    except RuntimeError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
@@ -180,6 +200,8 @@ async def solve_q11(request: Request):
     try:
         ans = await solve_context_window_heist(body)
         return ans
+    except RuntimeError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
@@ -189,6 +211,8 @@ async def solve_q12(request: Request):
     try:
         ans = await solve_spin_up_cli(body)
         return ans
+    except RuntimeError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
@@ -198,5 +222,9 @@ async def solve_q13(request: Request):
     try:
         ans = await solve_embedding_trapdoors(body)
         return ans
+    except RuntimeError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
+
+
