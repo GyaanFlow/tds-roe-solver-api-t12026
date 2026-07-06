@@ -121,11 +121,34 @@ async def dynamic_extract(req: DynamicExtractRequest):
 @router.post("/answer-audio")
 @router.post("/q6")
 async def korean_audio(request: Request):
+    import base64
     email = current_email.get()
 
     async def _handle():
-        body = await _read_json_body(request)
-        logger.info("Q6 korean audio for %s keys=%s", email, list(body.keys()))
+        raw = await request.body()
+        ctype = request.headers.get("content-type", "")
+        body = {}
+        if "application/json" in ctype or raw[:1] in (b"{", b"["):
+            try:
+                body = json.loads(raw)
+            except Exception:
+                pass
+        else:
+            audio_bytes = b""
+            try:
+                form = await request.form()
+                for k, v in form.items():
+                    data = await v.read() if hasattr(v, "read") else None
+                    if data:
+                        audio_bytes = data
+            except Exception:
+                pass
+            if not audio_bytes and raw:
+                audio_bytes = raw
+            if audio_bytes:
+                body = {"audio_base64": base64.b64encode(audio_bytes).decode()}
+        
+        logger.info("Q6 korean audio for %s body keys=%s", email, list(body.keys()))
         return await solve_korean_audio(body)
 
     return await _run_solver(_handle, "Q6")
