@@ -454,29 +454,6 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 
   <!-- QUESTIONS SECTION -->
   <div class="grid" id="questions-grid">
-    <!-- Q1 -->
-    <div class="q-card">
-      <div class="q-header">
-        <div class="q-title"><span class="q-badge">Q1</span> Automated Video Curation Pipeline</div>
-        <span class="q-type type-submit">Submit JSON</span>
-      </div>
-      <div class="q-body">
-        <p class="q-desc">Filters candidate YouTube videos by duration, keyword inclusion/exclusion, and uploads date sorting.</p>
-        <div class="solver-box">
-          <div class="drop-zone" id="dz-q1" onclick="triggerFileSelect('file-q1')">
-            Drag & Drop <strong>q-youtube-metadata-filter-server.json</strong> here or click to browse
-          </div>
-          <input type="file" id="file-q1" style="display:none" onchange="handleFileSelect('q1')" />
-          <button class="btn btn-sec" onclick="solveQ1()">Solve Curation</button>
-          
-          <div class="ans-area" id="ans-q1">
-            <button class="btn-copy-ans" onclick="copyText('pre-q1')">Copy</button>
-            <pre><code id="pre-q1"></code></pre>
-          </div>
-        </div>
-      </div>
-    </div>
-
     <!-- Q2 -->
     <div class="q-card">
       <div class="q-header">
@@ -519,29 +496,6 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       </div>
       <div class="q-footer">
         <button class="btn btn-sec" onclick="copyPath('path-q4')">Copy URL</button>
-      </div>
-    </div>
-
-    <!-- Q5 -->
-    <div class="q-card">
-      <div class="q-header">
-        <div class="q-title"><span class="q-badge">Q5</span> Cosine Similarity Search</div>
-        <span class="q-type type-submit">Submit JSON</span>
-      </div>
-      <div class="q-body">
-        <p class="q-desc">Computes 64-dimensional vector dot-product scores and resolves alpha document ties.</p>
-        <div class="solver-box">
-          <div class="drop-zone" id="dz-q5" onclick="triggerFileSelect('file-q5')">
-            Drag & Drop <strong>q-cosine-similarity-server.json</strong> here or click to browse
-          </div>
-          <input type="file" id="file-q5" style="display:none" onchange="handleFileSelect('q5')" />
-          <button class="btn btn-sec" onclick="solveQ5()">Solve Similarities</button>
-          
-          <div class="ans-area" id="ans-q5">
-            <button class="btn-copy-ans" onclick="copyText('pre-q5')">Copy</button>
-            <pre><code id="pre-q5"></code></pre>
-          </div>
-        </div>
       </div>
     </div>
 
@@ -604,92 +558,6 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         <button class="btn btn-sec" onclick="copyPath('path-q9')">Copy URL</button>
       </div>
     </div>
-
-    <!-- Q10 -->
-    <div class="q-card">
-      <div class="q-header">
-        <div class="q-title"><span class="q-badge">Q10</span> Proof-of-Work Nonce Hunt</div>
-        <span class="q-type type-submit">Submit Nonce</span>
-      </div>
-      <div class="q-body">
-        <p class="q-desc">Searches for a SHA-256 leading zero bits hash match for your personalized token and difficulty.</p>
-        <div class="solver-box">
-          <input type="text" id="pow-token" placeholder="Your assigned Token (e.g. ds_abc123...)" />
-          <input type="text" id="pow-difficulty" placeholder="Difficulty (e.g. 16)" />
-          <button class="btn btn-sec" onclick="solveQ10()">Mine Nonce</button>
-          
-          <div class="ans-area" id="ans-q10">
-            <button class="btn-copy-ans" onclick="copyText('pre-q10')">Copy</button>
-            <pre><code id="pre-q10"></code></pre>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Q11 -->
-    <div class="q-card">
-      <div class="q-header">
-        <div class="q-title"><span class="q-badge">Q11</span> Context Window Heist</div>
-        <span class="q-type type-submit">Submit JSON</span>
-      </div>
-      <div class="q-body">
-        <p class="q-desc">Performs sliding window recency conflict resolution over a 20,000+ token context haystack.</p>
-        <div class="solver-box">
-          <textarea id="heist-haystack" rows="4" placeholder="Paste your seeded context heist document content here..."></textarea>
-          <button class="btn btn-sec" onclick="solveQ11()">Extract Facts</button>
-          
-          <div class="ans-area" id="ans-q11">
-            <button class="btn-copy-ans" onclick="copyText('pre-q11')">Copy</button>
-            <pre><code id="pre-q11"></code></pre>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Q12 -->
-    <div class="q-card">
-      <div class="q-header">
-        <div class="q-title"><span class="q-badge">Q12</span> Spin Up the CLI</div>
-        <span class="q-type type-submit">Submit session.cast</span>
-      </div>
-      <div class="q-body">
-        <p class="q-desc">Classifies incident logs using shell piping, computing final hash validation data.</p>
-        <div class="solver-box">
-          <div class="drop-zone" id="dz-q12" onclick="triggerFileSelect('file-q12')">
-            Drag & Drop your dataset JSON or copy-paste it here
-          </div>
-          <input type="file" id="file-q12" style="display:none" onchange="handleFileSelect('q12')" />
-          <textarea id="cli-dataset" rows="3" style="display:none" placeholder="Or paste dataset content..."></textarea>
-          <input type="text" id="cli-marker" placeholder="Your personalized marker (e.g. SPINCLI_HASH)" />
-          <button class="btn btn-sec" onclick="solveQ12()">Generate Cast File</button>
-          
-          <div class="ans-area" id="ans-q12">
-            <button class="btn-copy-ans" onclick="copyText('pre-q12')">Copy</button>
-            <pre><code id="pre-q12"></code></pre>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Q13 -->
-    <div class="q-card">
-      <div class="q-header">
-        <div class="q-title"><span class="q-badge">Q13</span> Embedding Trapdoors</div>
-        <span class="q-type type-submit">Submit JSON</span>
-      </div>
-      <div class="q-body">
-        <p class="q-desc">Resolves lexical negations and maps query strings to the closest semantic neighbor IDs.</p>
-        <div class="solver-box">
-          <textarea id="trapdoors-json" rows="4" placeholder="Paste your queries and corpus JSON content here..."></textarea>
-          <button class="btn btn-sec" onclick="solveQ13()">Map Neighbors</button>
-          
-          <div class="ans-area" id="ans-q13">
-            <button class="btn-copy-ans" onclick="copyText('pre-q13')">Copy</button>
-            <pre><code id="pre-q13"></code></pre>
-          </div>
-        </div>
-      </div>
-    </div>
   </div>
 </div>
 
@@ -697,21 +565,14 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 
 <script>
   let BASE = window.location.origin;
-  let filesData = {};
   const GA3_ENDPOINTS = [
-    { q: "Q1", label: "Video curation solver", path: "/solve/q1" },
     { q: "Q2", label: "Multimodal image QA API", path: "/q2" },
     { q: "Q3", label: "Fixed invoice extraction API", path: "/q3" },
     { q: "Q4", label: "Dynamic schema extraction API", path: "/q4" },
-    { q: "Q5", label: "Cosine similarity solver", path: "/solve/q5" },
     { q: "Q6", label: "Korean audio dataset API", path: "/q6" },
     { q: "Q7", label: "Invoice intelligence API", path: "/q7" },
     { q: "Q8", label: "Semantic ranking API", path: "/q8" },
-    { q: "Q9", label: "Word problem solver API", path: "/q9" },
-    { q: "Q10", label: "Proof-of-work solver", path: "/solve/q10" },
-    { q: "Q11", label: "Context heist solver", path: "/solve/q11" },
-    { q: "Q12", label: "CLI cast solver", path: "/solve/q12" },
-    { q: "Q13", label: "Embedding trapdoor solver", path: "/solve/q13" }
+    { q: "Q9", label: "Word problem solver API", path: "/q9" }
   ];
 
   function buildTenantBase(email, token = "") {
@@ -810,10 +671,6 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     };
     emailInput.addEventListener("input", autoUpdate);
     tokenInput.addEventListener("input", autoUpdate);
-
-    setupDragDrop("dz-q1", "file-q1", "q1");
-    setupDragDrop("dz-q5", "file-q5", "q5");
-    setupDragDrop("dz-q12", "file-q12", "q12");
   });
 
   function updatePaths(email) {
@@ -899,247 +756,6 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     }
   }
 
-  function parseDataset(raw) {
-    const trimmed = raw.trim();
-    if (!trimmed) {
-      throw new Error("empty dataset");
-    }
-    if (trimmed.startsWith("[")) {
-      return JSON.parse(trimmed);
-    }
-    return trimmed.split("\\n").filter(Boolean).map((line) => JSON.parse(line));
-  }
-
-  function setupDragDrop(dzId, fileInputId, qKey) {
-    try {
-      const dz = document.getElementById(dzId);
-      dz.addEventListener("dragover", (e) => {
-        e.preventDefault();
-        dz.classList.add("dragover");
-      });
-      dz.addEventListener("dragleave", () => {
-        dz.classList.remove("dragover");
-      });
-      dz.addEventListener("drop", (e) => {
-        e.preventDefault();
-        dz.classList.remove("dragover");
-        if (e.dataTransfer.files.length > 0) {
-          const file = e.dataTransfer.files[0];
-          readFileContent(file, dz, qKey);
-        }
-      });
-    } catch (err) {
-      console.error(err);
-    }
-  }
-
-  function triggerFileSelect(inputId) {
-    document.getElementById(inputId).click();
-  }
-
-  function handleFileSelect(qKey) {
-    try {
-      const input = document.getElementById(`file-${qKey}`);
-      const dz = document.getElementById(`dz-${qKey}`);
-      if (input.files.length > 0) {
-        readFileContent(input.files[0], dz, qKey);
-      }
-    } catch (err) {
-      console.error(err);
-    }
-  }
-
-  function readFileContent(file, dz, qKey) {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const rawContent = e.target.result;
-        if (qKey !== "q12") {
-          JSON.parse(rawContent);
-        }
-        filesData[qKey] = rawContent;
-        dz.innerHTML = `Loaded: <strong>${file.name}</strong> (${(file.size / 1024).toFixed(1)} KB)`;
-      } catch (err) {
-        showToast("Invalid JSON file uploaded.", true);
-      }
-    };
-    reader.readAsText(file);
-  }
-
-  async function solveQ1() {
-    if (!filesData.q1) {
-      showToast("Please upload a parameters JSON file.", true);
-      return;
-    }
-    const email = document.getElementById("student-email").value.trim();
-    showToast("Solving curation pipeline...");
-    try {
-      const resp = await fetch(`${BASE}/ga3/${encodeURIComponent(email)}/solve/q1`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: filesData.q1
-      });
-      if (resp.ok) {
-        const data = await resp.json();
-        showAnswer("q1", data);
-      } else {
-        const err = await resp.json();
-        showToast(err.error || "Solver failed.", true);
-      }
-    } catch (e) {
-      showToast("Network error occurred.", true);
-    }
-  }
-
-  async function solveQ5() {
-    if (!filesData.q5) {
-      showToast("Please upload the Cosine Similarity JSON file.", true);
-      return;
-    }
-    const email = document.getElementById("student-email").value.trim();
-    showToast("Computing similarity ranking...");
-    try {
-      const resp = await fetch(`${BASE}/ga3/${encodeURIComponent(email)}/solve/q5`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: filesData.q5
-      });
-      if (resp.ok) {
-        const data = await resp.json();
-        showAnswer("q5", data);
-      } else {
-        const err = await resp.json();
-        showToast(err.error || "Solver failed.", true);
-      }
-    } catch (e) {
-      showToast("Network error occurred.", true);
-    }
-  }
-
-  async function solveQ10() {
-    const token = document.getElementById("pow-token").value.trim();
-    const difficulty = parseInt(document.getElementById("pow-difficulty").value.trim(), 10);
-    if (!token || isNaN(difficulty)) {
-      showToast("Please enter a valid token and difficulty.", true);
-      return;
-    }
-    const email = document.getElementById("student-email").value.trim();
-    showToast("Mining nonce (this may take a few seconds)...");
-    try {
-      const resp = await fetch(`${BASE}/ga3/${encodeURIComponent(email)}/solve/q10`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token, difficulty })
-      });
-      if (resp.ok) {
-        const data = await resp.json();
-        showAnswer("q10", data.nonce);
-      } else {
-        showToast("Mining failed.", true);
-      }
-    } catch (e) {
-      showToast("Network error occurred.", true);
-    }
-  }
-
-  async function solveQ11() {
-    const haystack = document.getElementById("heist-haystack").value.trim();
-    if (!haystack) {
-      showToast("Please paste the haystack content.", true);
-      return;
-    }
-    const email = document.getElementById("student-email").value.trim();
-    showToast("Extracting latest facts...");
-    try {
-      const resp = await fetch(`${BASE}/ga3/${encodeURIComponent(email)}/solve/q11`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ haystack })
-      });
-      if (resp.ok) {
-        const data = await resp.json();
-        showAnswer("q11", data);
-      } else {
-        showToast("Extraction failed.", true);
-      }
-    } catch (e) {
-      showToast("Network error occurred.", true);
-    }
-  }
-
-  async function solveQ12() {
-    let datasetRaw = filesData.q12 || document.getElementById("cli-dataset").value.trim();
-    const marker = document.getElementById("cli-marker").value.trim();
-    if (!datasetRaw || !marker) {
-      showToast("Please upload/paste dataset and enter the marker.", true);
-      return;
-    }
-    const dataset = parseDataset(datasetRaw);
-    const email = document.getElementById("student-email").value.trim();
-    showToast("Generating asciinema recording...");
-    try {
-      const resp = await fetch(`${BASE}/ga3/${encodeURIComponent(email)}/solve/q12`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dataset, marker })
-      });
-      if (resp.ok) {
-        const data = await resp.json();
-        showAnswer("q12", data.session_cast);
-      } else {
-        showToast("Generation failed.", true);
-      }
-    } catch (e) {
-      showToast("Network error occurred.", true);
-    }
-  }
-
-  async function solveQ13() {
-    const rawJson = document.getElementById("trapdoors-json").value.trim();
-    if (!rawJson) {
-      showToast("Please paste the trapdoors queries and corpus JSON.", true);
-      return;
-    }
-    const email = document.getElementById("student-email").value.trim();
-    showToast("Mapping neighbors...");
-    try {
-      const body = JSON.parse(rawJson);
-      const resp = await fetch(`${BASE}/ga3/${encodeURIComponent(email)}/solve/q13`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body)
-      });
-      if (resp.ok) {
-        const data = await resp.json();
-        showAnswer("q13", data);
-      } else {
-        showToast("Mapping failed.", true);
-      }
-    } catch (e) {
-      showToast("Network error occurred.", true);
-    }
-  }
-
-  function showAnswer(qKey, data) {
-    const area = document.getElementById(`ans-${qKey}`);
-    const code = document.getElementById(`pre-${qKey}`);
-    area.style.display = "block";
-
-    if (qKey === "q11" && data && typeof data === "object" && data.answers) {
-      const answers = data.answers;
-      const items = Object.entries(answers)
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([k, v]) => `<div class="answer-chip"><span>${k}</span><strong>${String(v)}</strong></div>`)
-        .join("");
-      area.innerHTML = `<button class="btn-copy-ans" onclick="copyText('pre-q11')">Copy</button><div class="answer-summary"><div class="answer-grid">${items}</div><pre><code id="pre-${qKey}"></code></pre></div>`;
-      const summary = Object.entries(answers).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k}: ${v}`).join('\\\\n');
-      document.getElementById(`pre-${qKey}`).textContent = summary;
-    } else {
-      code.textContent = typeof data === "string" ? data : JSON.stringify(data, null, 2);
-    }
-    showToast("Solved! Answer displayed below.");
-  }
-
   function copyText(elId) {
     const text = document.getElementById(elId).textContent;
     navigator.clipboard.writeText(text).then(() => {
@@ -1160,6 +776,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     });
   }
 
+  // Visual masking helper mapping
   function showToast(message, isError = false) {
     const toast = document.getElementById("toast");
     toast.textContent = message;
