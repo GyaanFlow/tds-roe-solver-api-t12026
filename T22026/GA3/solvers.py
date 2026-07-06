@@ -908,7 +908,7 @@ Rules:
 
 Return ONLY the raw JSON object."""
     system_inst = "You are a math reasoning assistant. Always output valid JSON."
-    ans_raw = call_llm(prompt, system_instruction=system_inst)
+    ans_raw = call_llm(prompt, system_instruction=system_inst, model="gpt-4o")
     res = extract_json_data(ans_raw)
     
     reasoning = res.get("reasoning", "")
