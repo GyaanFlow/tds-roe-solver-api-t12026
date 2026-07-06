@@ -717,15 +717,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   ];
 
   function buildTenantBase(email, token = "") {
-    const encEmail = encodeURIComponent(email);
-    const sessionId = localStorage.getItem("ga3_session_id");
-    if (sessionId) {
-      return `${BASE}/ga3/${encEmail}/${encodeURIComponent(sessionId)}`;
-    }
     if (token) {
-      return `${BASE}/ga3/${encEmail}/${encodeURIComponent(token)}`;
+      return `${BASE}/ga3/${email}/${encodeURIComponent(token)}`;
     }
-    return `${BASE}/ga3/${encEmail}`;
+    return `${BASE}/ga3/${email}`;
   }
 
   function renderEndpointPanel(email, hasToken = false) {
@@ -817,19 +812,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const tokenInput = document.getElementById("aipipe-token");
       const token = tokenInput ? tokenInput.value.trim() : "";
       
-      const encEmail = encodeURIComponent(email);
       const sessionId = localStorage.getItem("ga3_session_id");
       let visualBase = "";
       let copyBase = "";
       
       if (sessionId) {
-        visualBase = `${BASE}/ga3/${encEmail}/${encodeURIComponent(sessionId)}`;
+        visualBase = `${BASE}/ga3/${email}/${encodeURIComponent(sessionId)}`;
         copyBase = visualBase;
       } else if (token) {
-        visualBase = `${BASE}/ga3/${encEmail}/••••••••••••`;
-        copyBase = `${BASE}/ga3/${encEmail}/${encodeURIComponent(token)}`;
+        visualBase = `${BASE}/ga3/${email}/••••••••••••`;
+        copyBase = `${BASE}/ga3/${email}/${encodeURIComponent(token)}`;
       } else {
-        visualBase = `${BASE}/ga3/${encEmail}`;
+        visualBase = `${BASE}/ga3/${email}`;
         copyBase = visualBase;
       }
       
