@@ -755,7 +755,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   }
 
   function copyAllEndpoints() {
-    const urls = Array.from(document.querySelectorAll(".endpoint-row")).map((row) => row.dataset.url).join("\n");
+    const urls = Array.from(document.querySelectorAll(".endpoint-row")).map((row) => row.dataset.url).join("\\n");
     if (!urls) return;
     navigator.clipboard.writeText(urls).then(() => showToast("All GA3 endpoints copied."));
   }
@@ -1115,7 +1115,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         .map(([k, v]) => `<div class="answer-chip"><span>${k}</span><strong>${String(v)}</strong></div>`)
         .join("");
       area.innerHTML = `<button class="btn-copy-ans" onclick="copyText('pre-q11')">Copy</button><div class="answer-summary"><div class="answer-grid">${items}</div><pre><code id="pre-${qKey}"></code></pre></div>`;
-      const summary = Object.entries(answers).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k}: ${v}`).join('\n');
+      const summary = Object.entries(answers).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k}: ${v}`).join('\\n');
       document.getElementById(`pre-${qKey}`).textContent = summary;
     } else {
       code.textContent = typeof data === "string" ? data : JSON.stringify(data, null, 2);
