@@ -723,7 +723,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       return `${BASE}/ga3/${encEmail}/${encodeURIComponent(sessionId)}`;
     }
     if (token) {
-      return `${BASE}/ga3/${encEmail}/<click-generate-to-activate>`;
+      return `${BASE}/ga3/${encEmail}/${encodeURIComponent(token)}`;
     }
     return `${BASE}/ga3/${encEmail}`;
   }
