@@ -816,12 +816,29 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     try {
       const tokenInput = document.getElementById("aipipe-token");
       const token = tokenInput ? tokenInput.value.trim() : "";
-      const base = buildTenantBase(email, token);
+      
+      const encEmail = encodeURIComponent(email);
+      const sessionId = localStorage.getItem("ga3_session_id");
+      let visualBase = "";
+      let copyBase = "";
+      
+      if (sessionId) {
+        visualBase = `${BASE}/ga3/${encEmail}/${encodeURIComponent(sessionId)}`;
+        copyBase = visualBase;
+      } else if (token) {
+        visualBase = `${BASE}/ga3/${encEmail}/••••••••••••`;
+        copyBase = `${BASE}/ga3/${encEmail}/${encodeURIComponent(token)}`;
+      } else {
+        visualBase = `${BASE}/ga3/${encEmail}`;
+        copyBase = visualBase;
+      }
+      
       for (let q = 2; q <= 9; q++) {
         if (q === 5) continue;
         const el = document.getElementById(`path-q${q}`);
         if (el) {
-          el.textContent = `POST ${base}/q${q}`;
+          el.textContent = `POST ${visualBase}/q${q}`;
+          el.dataset.copyUrl = `${copyBase}/q${q}`;
         }
       }
     } catch (err) {
@@ -1120,7 +1137,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   }
 
   function copyPath(elId) {
-    let text = document.getElementById(elId).textContent.trim();
+    const el = document.getElementById(elId);
+    let text = el.dataset.copyUrl || el.textContent.trim();
     if (text.startsWith("POST ")) {
       text = text.substring(5).trim();
     } else if (text.startsWith("GET ")) {
