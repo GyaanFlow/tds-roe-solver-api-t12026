@@ -22,6 +22,8 @@ def call_llm(prompt: str, system_instruction: Optional[str] = None, image_base64
     email = current_email.get()
     config = get_tenant_config(email)
     aipipe_token = config.get("aipipe_token")
+    
+    last_err_msg = ""
     if aipipe_token:
         url = "https://aipipe.org/openai/v1/chat/completions"
         headers = {
@@ -50,15 +52,27 @@ def call_llm(prompt: str, system_instruction: Optional[str] = None, image_base64
             "messages": messages,
             "temperature": 0.0
         }
-        try:
-            res = requests.post(url, headers=headers, json=payload, timeout=30)
-            if res.status_code == 200:
-                data = res.json()
-                return data["choices"][0]["message"]["content"]
-            else:
-                logger.warning("AI Pipe call failed with status %s: %s", res.status_code, res.text)
-        except Exception as e:
-            logger.warning("AI Pipe call failed: %s", e)
+        
+        # 4 attempts with exponential backoff for transient errors
+        for attempt in range(4):
+            try:
+                res = requests.post(url, headers=headers, json=payload, timeout=40)
+                if res.status_code == 200:
+                    data = res.json()
+                    return data["choices"][0]["message"]["content"]
+                elif res.status_code in (429, 500, 502, 503, 504):
+                    last_err_msg = f"HTTP {res.status_code}: {res.text[:160]}"
+                    logger.warning("AI Pipe transient error (%s). Retrying in %s seconds...", last_err_msg, 1.5 * (attempt + 1))
+                    time.sleep(1.5 * (attempt + 1))
+                    continue
+                else:
+                    last_err_msg = f"HTTP {res.status_code}: {res.text[:160]}"
+                    logger.warning("AI Pipe permanent failure: %s", last_err_msg)
+                    break
+            except Exception as e:
+                last_err_msg = str(e)
+                logger.warning("AI Pipe call failed (attempt %s): %s", attempt + 1, e)
+                time.sleep(1.0 * (attempt + 1))
 
     # 2. Try Gemini API if key is present
     gemini_key = os.environ.get("GEMINI_API_KEY")
@@ -77,13 +91,16 @@ def call_llm(prompt: str, system_instruction: Optional[str] = None, image_base64
         if system_instruction:
             payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
             
-        try:
-            res = requests.post(url, json=payload, timeout=30)
-            if res.status_code == 200:
-                data = res.json()
-                return data["candidates"][0]["content"]["parts"][0]["text"]
-        except Exception as e:
-            logger.warning("Gemini API call failed: %s", e)
+        for attempt in range(3):
+            try:
+                res = requests.post(url, json=payload, timeout=30)
+                if res.status_code == 200:
+                    data = res.json()
+                    return data["candidates"][0]["content"]["parts"][0]["text"]
+                time.sleep(1.0 * (attempt + 1))
+            except Exception as e:
+                logger.warning("Gemini API call failed: %s", e)
+                time.sleep(1.0 * (attempt + 1))
 
     # 3. Try OpenAI API if key is present
     openai_key = os.environ.get("OPENAI_API_KEY")
@@ -109,20 +126,24 @@ def call_llm(prompt: str, system_instruction: Optional[str] = None, image_base64
         messages.append({"role": "user", "content": user_content if image_base64 else prompt})
         
         payload = {
-            "model": "gpt-4o-mini" if image_base64 else "gpt-4o",
+            "model": "gpt-4o" if image_base64 else "gpt-4o-mini",
             "messages": messages,
             "temperature": 0.0
         }
-        try:
-            res = requests.post(url, headers=headers, json=payload, timeout=30)
-            if res.status_code == 200:
-                data = res.json()
-                return data["choices"][0]["message"]["content"]
-        except Exception as e:
-            logger.warning("OpenAI API call failed: %s", e)
+        for attempt in range(3):
+            try:
+                res = requests.post(url, headers=headers, json=payload, timeout=30)
+                if res.status_code == 200:
+                    data = res.json()
+                    return data["choices"][0]["message"]["content"]
+                time.sleep(1.0 * (attempt + 1))
+            except Exception as e:
+                logger.warning("OpenAI API call failed: %s", e)
+                time.sleep(1.0 * (attempt + 1))
 
     # 4. Fallback mock / warning if no keys are configured
-    raise RuntimeError("No LLM API key (AI Pipe token, GEMINI_API_KEY, or OPENAI_API_KEY) found.")
+    err_suffix = f" (Last error: {last_err_msg})" if last_err_msg else ""
+    raise RuntimeError(f"No working LLM API key (AI Pipe token, GEMINI_API_KEY, or OPENAI_API_KEY) found.{err_suffix}")
 
 
 def extract_json_data(text: str) -> Dict[str, Any]:
@@ -254,41 +275,143 @@ async def solve_korean_audio(body: Dict[str, Any]) -> Dict[str, Any]:
         raw_bytes = base64.b64decode(raw_audio, validate=False)
     except Exception:
         raw_bytes = base64.urlsafe_b64decode(raw_audio)
-    csv_text = None
     
-    # 1. Try LLM Whisper transcription if keys are available
+    csv_text = None
+    transcript = None
     email = current_email.get()
     config = get_tenant_config(email)
     aipipe_token = config.get("aipipe_token")
     openai_key = os.environ.get("OPENAI_API_KEY")
-    
-    if aipipe_token:
-        url = "https://aipipe.org/openai/v1/audio/transcriptions"
-        key_to_use = aipipe_token
-    elif openai_key:
-        url = "https://api.openai.com/v1/audio/transcriptions"
-        key_to_use = openai_key
+
+    # Detect MIME type from magic bytes
+    if raw_bytes.startswith(b"ID3") or raw_bytes[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"):
+        mime = "audio/mp3"
+    elif raw_bytes.startswith(b"OggS"):
+        mime = "audio/ogg"
+    elif raw_bytes.startswith(b"fLaC"):
+        mime = "audio/flac"
+    elif raw_bytes.startswith(b"RIFF") and raw_bytes[8:12] == b"WAVE":
+        mime = "audio/wav"
+    elif raw_bytes.startswith(b"\x1aE\xdf\xa3"):
+        mime = "audio/webm"
+    elif raw_bytes[4:8] == b"ftyp":
+        mime = "audio/mp4"
     else:
-        url = None
-        
-    if url:
+        mime = "audio/wav"
+
+    # 1. Try Gemini Transcription (AIPipe JSON content format)
+    if aipipe_token:
+        gemini_models = [
+            "gemini-2.5-flash-lite",
+            "gemini-2.5-flash",
+            "gemini-2.0-flash",
+            "gemini-flash-latest"
+        ]
+        payload = {
+            "contents": [{
+                "parts": [
+                    {"text": "Transcribe this audio precisely in Korean. Output ONLY the Korean transcription, nothing else."},
+                    {"inlineData": {"mimeType": mime, "data": raw_audio}}
+                ]
+            }]
+        }
+        for model in gemini_models:
+            url = f"https://aipipe.org/geminiv1beta/models/{model}:generateContent"
+            headers = {"Authorization": f"Bearer {aipipe_token}"}
+            try:
+                # 3 attempts per model
+                for attempt in range(3):
+                    res = requests.post(url, headers=headers, json=payload, timeout=60)
+                    if res.status_code == 200:
+                        data = res.json()
+                        txt = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                        if txt:
+                            transcript = txt
+                            break
+                    elif res.status_code in (429, 500, 502, 503, 504):
+                        time.sleep(1.0 * (attempt + 1))
+                if transcript:
+                    break
+            except Exception as e:
+                logger.warning("Gemini transcription via %s failed: %s", model, e)
+
+    # If Gemini transcription succeeded, use gpt-4o-mini to convert the Korean description to CSV/JSON format
+    if transcript:
+        prompt = (
+            "The transcript (Korean) describes a tabular dataset and asks for or states specific statistics. "
+            "Extract the raw data, schema, and identify/extract the exact statistics.\n"
+            "If the transcript only ASKS to generate data, do NOT invent data. "
+            "Instead, extract the column names into 'columns', return the requested number of rows in 'num_rows', and leave 'data_rows' empty. "
+            "ALSO, if it explicitly mentions any constraints or known statistical values, extract them into 'explicit_stats'.\n\n"
+            "Korean to English Statistic Mapping Guide:\n"
+            "- '평균' -> 'mean'\n"
+            "- '표준편차' -> 'std'\n"
+            "- '분산' -> 'variance'\n"
+            "- '최소' / '최솟값' -> 'min'\n"
+            "- '최대' / '최댓값' -> 'max'\n"
+            "- '중앙값' / '중간값' -> 'median'\n"
+            "- '최빈값' -> 'mode'\n"
+            "- '범위' -> 'range'\n"
+            "- '~사이' -> 'value_range'\n"
+            "- '허용값' / '허용된 값' -> 'allowed_values'\n"
+            "- '상관관계' -> 'correlation'\n\n"
+            "Return ONLY valid JSON:\n"
+            "{\n"
+            "  \"columns\": [\"column_name\"],\n"
+            "  \"data_rows\": [[val1], [val2], ...],\n"
+            "  \"num_rows\": 140,\n"
+            "  \"explicit_stats\": {\n"
+            "    \"value_range\": {\"점수\": [0, 100]},\n"
+            "    \"median\": {\"소득\": 45000}\n"
+            "  },\n"
+            "  \"requested_stats\": [\"median\"]\n"
+            "}\n\n"
+            f"TRANSCRIPT:\n{transcript}"
+        )
         try:
-            headers = {
-                "Authorization": f"Bearer {key_to_use}"
-            }
-            files = {
-                "file": ("audio.wav", io.BytesIO(raw_bytes), "audio/wav")
-            }
-            data = {
-                "model": "whisper-1",
-                "response_format": "json",
-                "prompt": "Transcribe the audio as a structured CSV dataset with headers and comma-separated values."
-            }
-            res = requests.post(url, headers=headers, files=files, data=data, timeout=60)
-            res.raise_for_status()
-            csv_text = clean_csv_text(res.json()["text"])
+            llm_out = call_llm(prompt, system_instruction="You are a precise JSON structured output generator.")
+            ext_data = extract_json_data(llm_out)
+            # Reconstruct the CSV format text if data_rows is present to keep downstream parsing identical
+            if ext_data.get("data_rows") and ext_data.get("columns"):
+                header_line = ",".join(ext_data["columns"])
+                row_lines = [",".join(map(str, r)) for r in ext_data["data_rows"]]
+                csv_text = header_line + "\n" + "\n".join(row_lines)
+            else:
+                # If there's no data, we return a custom mock or return directly
+                # Wait, if we return directly, let's see how our downstream statistical mapping handles it
+                pass
         except Exception as e:
-            logger.info("Whisper transcription failed (%s). Falling back to text decoding.", e)
+            logger.warning("Failed to extract statistics from transcript: %s", e)
+
+    # 2. Try Whisper Transcription fallback
+    if not csv_text and not transcript:
+        if aipipe_token:
+            url = "https://aipipe.org/openai/v1/audio/transcriptions"
+            key_to_use = aipipe_token
+        elif openai_key:
+            url = "https://api.openai.com/v1/audio/transcriptions"
+            key_to_use = openai_key
+        else:
+            url = None
+            
+        if url:
+            try:
+                headers = {
+                    "Authorization": f"Bearer {key_to_use}"
+                }
+                files = {
+                    "file": ("audio.wav", io.BytesIO(raw_bytes), "audio/wav")
+                }
+                data = {
+                    "model": "whisper-1",
+                    "response_format": "json",
+                    "prompt": "Transcribe the audio as a structured CSV dataset with headers and comma-separated values."
+                }
+                res = requests.post(url, headers=headers, files=files, data=data, timeout=60)
+                res.raise_for_status()
+                csv_text = clean_csv_text(res.json()["text"])
+            except Exception as e:
+                logger.info("Whisper transcription failed (%s). Falling back to text decoding.", e)
             
     # 2. Fallbacks for direct text decoding (mocks or plain csv data)
     if not csv_text:
