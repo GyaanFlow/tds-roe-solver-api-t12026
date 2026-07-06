@@ -44,7 +44,7 @@ def call_llm(prompt: str, system_instruction: Optional[str] = None, image_base64
         messages.append({"role": "user", "content": user_content if image_base64 else prompt})
         
         # AI Pipe model selection
-        model_name = "google/gemini-1.5-flash" if image_base64 else "openai/gpt-4o-mini"
+        model_name = "gpt-4o" if image_base64 else "gpt-4o-mini"
         payload = {
             "model": model_name,
             "messages": messages,

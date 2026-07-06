@@ -76,22 +76,23 @@ async def answer_image(req: MultimodalRequest):
     return await _run_solver(_handle, "Q2")
 
 
-# --- Q3: Fixed Schema Invoice Extraction ---
-class ExtractRequest(BaseModel):
-    invoice_text: str
-
-
+# --- Q3 & Q7: Unified Extraction Endpoint ---
 @router.post("/q3/extract")
 @router.post("/extract")
 @router.post("/q3")
-async def extract_invoice(req: ExtractRequest):
+@router.post("/q7/extract")
+@router.post("/q7")
+async def extract(request: Request):
     email = current_email.get()
-    logger.info("Q3 fixed extract for %s", email)
-
     async def _handle():
-        return await solve_invoice_extract(req.invoice_text)
-
-    return await _run_solver(_handle, "Q3")
+        body = await _read_json_body(request)
+        if "invoice_text" in body:
+            logger.info("Q3 fixed extract for %s", email)
+            return await solve_invoice_extract(body["invoice_text"])
+        else:
+            logger.info("Q7 structured extraction for %s", email)
+            return await solve_structured_extraction(body)
+    return await _run_solver(_handle, "Q3/Q7")
 
 
 # --- Q4: Dynamic Schema Structured Extraction ---
@@ -116,6 +117,8 @@ async def dynamic_extract(req: DynamicExtractRequest):
 
 
 # --- Q6: Korean Audio Dataset API ---
+@router.post("/q6/answer-audio")
+@router.post("/answer-audio")
 @router.post("/q6")
 async def korean_audio(request: Request):
     email = current_email.get()
@@ -128,20 +131,9 @@ async def korean_audio(request: Request):
     return await _run_solver(_handle, "Q6")
 
 
-# --- Q7: Invoice Intelligence Extraction ---
-@router.post("/q7")
-async def structured_extraction(request: Request):
-    email = current_email.get()
-
-    async def _handle():
-        body = await _read_json_body(request)
-        logger.info("Q7 structured extraction for %s", email)
-        return await solve_structured_extraction(body)
-
-    return await _run_solver(_handle, "Q7")
-
-
 # --- Q8: Semantic Search Passage Ranking ---
+@router.post("/q8/rank")
+@router.post("/rank")
 @router.post("/q8")
 async def semantic_rank(request: Request):
     email = current_email.get()
@@ -155,6 +147,8 @@ async def semantic_rank(request: Request):
 
 
 # --- Q9: Word-Problem Solver ---
+@router.post("/q9/solve")
+@router.post("/solve")
 @router.post("/q9")
 async def cot_math(request: Request):
     email = current_email.get()
