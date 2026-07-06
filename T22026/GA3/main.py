@@ -1,4 +1,4 @@
-﻿import json
+import json
 import logging
 from typing import Any, Awaitable, Callable, Dict, List, TypeVar
 
@@ -182,6 +182,7 @@ class OnboardResponse(BaseModel):
     base_url: str
     solver_url_prefix: str
     ready_routes: List[str]
+    session_id: str | None = None
 
 
 class ConfigSaveRequest(BaseModel):
@@ -233,8 +234,14 @@ async def onboard(req: OnboardRequest, request: Request):
     email = normalize_email(req.email)
     if not email or "@" not in email:
         raise HTTPException(status_code=400, detail="Valid email is required")
-    if req.aipipe_token is not None:
+    
+    session_id = None
+    if req.aipipe_token:
+        from T22026.GA3.shared.tenant import create_ga3_session
+        session_id = create_ga3_session(email, req.aipipe_token)
+        # Still set tenant config as fallback / local backup
         set_tenant_config(email, {"aipipe_token": req.aipipe_token})
+        
     base = str(request.base_url).rstrip("/")
     tenant_cfg = get_tenant_config(email)
     return OnboardResponse(
@@ -244,6 +251,7 @@ async def onboard(req: OnboardRequest, request: Request):
         base_url=base,
         solver_url_prefix=build_solver_url_prefix(base, email),
         ready_routes=build_ready_routes(base, email),
+        session_id=session_id
     )
 
 

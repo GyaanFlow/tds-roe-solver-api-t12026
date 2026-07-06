@@ -58,8 +58,14 @@ class MultiTenantASGIMiddleware:
                     "solve", "health", "onboard", "status", "config", "docs", "redoc",
                     "answer-image", "extract", "dynamic-extract"
                 }
-                if parts and parts[0] not in known_prefixes:
-                    token = parts[0]
+                if parts and (parts[0].startswith("sess_") or parts[0] not in known_prefixes):
+                    possible_session_or_token = parts[0]
+                    from T22026.GA3.shared.tenant import get_ga3_session_token
+                    resolved = get_ga3_session_token(possible_session_or_token)
+                    if resolved:
+                        token = resolved
+                    else:
+                        token = possible_session_or_token
                     rest = "/" + "/".join(parts[1:])
                 
                 scope["path"] = f"/{ga_version}{rest}"

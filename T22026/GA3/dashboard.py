@@ -718,8 +718,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   function buildTenantBase(email, token = "") {
     const encEmail = encodeURIComponent(email);
+    const sessionId = localStorage.getItem("ga3_session_id");
+    if (sessionId) {
+      return `${BASE}/ga3/${encEmail}/${encodeURIComponent(sessionId)}`;
+    }
     if (token) {
-      return `${BASE}/ga3/${encEmail}/${encodeURIComponent(token)}`;
+      return `${BASE}/ga3/${encEmail}/<click-generate-to-activate>`;
     }
     return `${BASE}/ga3/${encEmail}`;
   }
@@ -732,7 +736,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     panel.style.display = "block";
     document.getElementById("endpoint-base").textContent = base;
     document.getElementById("endpoint-sub").textContent = token
-      ? `Tenant ready for ${email}. Token embedded dynamically in URLs. No personal info saved on server!`
+      ? `Tenant ready for ${email}. Session ID embedded dynamically. No key data saved on disk!`
       : `Tenant ready for ${email}. Add an AI Pipe token for Q2, Q3, Q4, Q7, and Q9.`;
     list.innerHTML = "";
     GA3_ENDPOINTS.forEach((item, idx) => {
@@ -790,6 +794,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const autoUpdate = () => {
       const email = emailInput.value.trim();
       const token = tokenInput.value.trim();
+      // Clear old session ID on modification to force new session creation
+      localStorage.removeItem("ga3_session_id");
       if (email && email.includes("@")) {
         localStorage.setItem("student_email", email);
         localStorage.setItem("aipipe_token", token);
@@ -851,6 +857,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const [onboardResp] = await Promise.all(requests);
       const data = await onboardResp.json();
       if (onboardResp.ok) {
+        if (data.session_id) {
+          localStorage.setItem("ga3_session_id", data.session_id);
+        } else {
+          localStorage.removeItem("ga3_session_id");
+        }
+        // Refresh UI to display session-id-based URLs
+        updatePaths(email);
+        renderEndpointPanel(email, Boolean(token));
         showToast(`URLs ready. Base: ${data.solver_url_prefix}`);
       } else {
         showToast(data.detail || data.error || "Token save failed (URLs still generated).", true);

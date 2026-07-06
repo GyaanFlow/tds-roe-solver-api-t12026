@@ -20,6 +20,37 @@ _CONFIG_FILE = Path(os.environ.get("GA3_TENANT_CONFIG_PATH", str(GA3_CONFIG_DEFA
 _lock = threading.Lock()
 _MEMORY_CONFIG: dict[str, dict] = {}
 
+import time
+import secrets
+_session_lock = threading.Lock()
+GA3_SESSIONS: dict[str, dict] = {}
+
+def create_ga3_session(email: str, token: str) -> str:
+    session_id = "sess_" + secrets.token_hex(8)
+    now = time.time()
+    with _session_lock:
+        GA3_SESSIONS[session_id] = {
+            "email": normalize_email(email),
+            "token": token,
+            "expires_at": now + 1800  # 30 minutes lifetime
+        }
+    return session_id
+
+def get_ga3_session_token(session_id: str) -> str | None:
+    now = time.time()
+    with _session_lock:
+        # Cleanup expired sessions to prevent memory growth
+        expired = [k for k, v in GA3_SESSIONS.items() if v["expires_at"] < now]
+        for k in expired:
+            GA3_SESSIONS.pop(k, None)
+            
+        sess = GA3_SESSIONS.get(session_id)
+        if sess:
+            # Touch / extend lifetime on use
+            sess["expires_at"] = now + 1800
+            return sess["token"]
+    return None
+
 GA3_API_ROUTE_SUFFIXES = ("/q2", "/q3", "/q4", "/q6", "/q7", "/q8", "/q9")
 GA3_SOLVER_ROUTE_SUFFIXES = (
     "/solve/q1",
