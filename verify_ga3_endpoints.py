@@ -228,6 +228,21 @@ def test_ga3_routes():
     assert res.status_code == 200, f"Failed: {res.text}"
     assert res.json() == {"q1": "p-005"}
     print("[PASS] Q13 Solver verified!")
+    # 15. Test Q9 Word Problem Solver
+    q9_payload = {
+        "problem_id": "p0",
+        "problem": "Calculate 20 + 22."
+    }
+    # Mock solvers.call_llm to return the JSON for Q9 math test
+    solvers.call_llm = lambda prompt, system_instruction=None, image_base64=None, model=None: (
+        '{"reasoning": "We perform step-by-step arithmetic. First, add 20 and 22 to get 42. Length padding is verified.", "answer": 42}'
+    )
+    res = client.post("/ga3/test@ds.study.iitm.ac.in/q9", json=q9_payload)
+    assert res.status_code == 200, f"Q9 failed: {res.text}"
+    ans_q9 = res.json()
+    assert ans_q9["answer"] == 42
+    assert len(ans_q9["reasoning"]) >= 80
+    print("[PASS] Q9 Solver verified!")
 
     print("=== ALL GA3 ENDPOINTS VERIFIED SUCCESSFULLY ===")
 
