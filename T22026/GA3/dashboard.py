@@ -813,14 +813,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   });
 
   function updatePaths(email) {
-    const token = document.getElementById("aipipe-token").value.trim();
-    const base = buildTenantBase(email, token);
-    for (let q = 2; q <= 9; q++) {
-      if (q === 5) continue;
-      const el = document.getElementById(`path-q${q}`);
-      if (el) {
-        el.textContent = `${base}/q${q}`;
+    try {
+      const tokenInput = document.getElementById("aipipe-token");
+      const token = tokenInput ? tokenInput.value.trim() : "";
+      const base = buildTenantBase(email, token);
+      for (let q = 2; q <= 9; q++) {
+        if (q === 5) continue;
+        const el = document.getElementById(`path-q${q}`);
+        if (el) {
+          el.textContent = `POST ${base}/q${q}`;
+        }
       }
+    } catch (err) {
+      console.error("Failed to update paths:", err);
     }
   }
 
@@ -1115,7 +1120,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   }
 
   function copyPath(elId) {
-    const text = document.getElementById(elId).textContent.trim();
+    let text = document.getElementById(elId).textContent.trim();
+    if (text.startsWith("POST ")) {
+      text = text.substring(5).trim();
+    } else if (text.startsWith("GET ")) {
+      text = text.substring(4).trim();
+    }
     navigator.clipboard.writeText(text).then(() => {
       showToast("URL copied to clipboard!");
     });
