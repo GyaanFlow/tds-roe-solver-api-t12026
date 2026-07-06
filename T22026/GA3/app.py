@@ -37,13 +37,15 @@ def _resolve_email(request: Request) -> str:
 
 
 def _resolve_token(request: Request) -> str | None:
-    req_token = request.headers.get("X-AIPipe-Token") or request.headers.get("x-aipipe-token")
+    req_token = request.scope.get("tenant_token")
     if not req_token:
-        auth_header = request.headers.get("Authorization") or request.headers.get("authorization")
-        if auth_header and auth_header.lower().startswith("bearer "):
-            req_token = auth_header[7:].strip()
-    if not req_token:
-        req_token = request.query_params.get("aipipe_token") or request.query_params.get("token")
+        req_token = request.headers.get("X-AIPipe-Token") or request.headers.get("x-aipipe-token")
+        if not req_token:
+            auth_header = request.headers.get("Authorization") or request.headers.get("authorization")
+            if auth_header and auth_header.lower().startswith("bearer "):
+                req_token = auth_header[7:].strip()
+        if not req_token:
+            req_token = request.query_params.get("aipipe_token") or request.query_params.get("token")
     return req_token or None
 
 

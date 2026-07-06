@@ -50,8 +50,22 @@ class MultiTenantASGIMiddleware:
                 ga_version = match.group(1)
                 email = match.group(2).strip()
                 rest = match.group(3) or "/"
+                
+                parts = [p for p in rest.split("/") if p]
+                token = None
+                known_prefixes = {
+                    "q1", "q2", "q3", "q4", "q5", "q6", "q7", "q8", "q9", "q10", "q11", "q12", "q13",
+                    "solve", "health", "onboard", "status", "config", "docs", "redoc",
+                    "answer-image", "extract", "dynamic-extract"
+                }
+                if parts and parts[0] not in known_prefixes:
+                    token = parts[0]
+                    rest = "/" + "/".join(parts[1:])
+                
                 scope["path"] = f"/{ga_version}{rest}"
                 scope["tenant_email"] = email
+                if token:
+                    scope["tenant_token"] = token
         await self.app(scope, receive, send)
 
 app.add_middleware(MultiTenantASGIMiddleware)

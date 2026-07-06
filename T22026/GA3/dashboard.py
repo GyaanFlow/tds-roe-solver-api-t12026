@@ -1,4 +1,4 @@
-﻿# T22026/GA3/dashboard.py
+# T22026/GA3/dashboard.py
 
 DASHBOARD_HTML = """<!DOCTYPE html>
 <html lang="en">
@@ -716,18 +716,23 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     { q: "Q13", label: "Embedding trapdoor solver", path: "/solve/q13" }
   ];
 
-  function buildTenantBase(email) {
-    return `${BASE}/ga3/${encodeURIComponent(email)}`;
+  function buildTenantBase(email, token = "") {
+    const encEmail = encodeURIComponent(email);
+    if (token) {
+      return `${BASE}/ga3/${encEmail}/${encodeURIComponent(token)}`;
+    }
+    return `${BASE}/ga3/${encEmail}`;
   }
 
   function renderEndpointPanel(email, hasToken = false) {
     const panel = document.getElementById("endpoint-panel");
     const list = document.getElementById("endpoint-list");
-    const base = buildTenantBase(email);
+    const token = document.getElementById("aipipe-token").value.trim();
+    const base = buildTenantBase(email, token);
     panel.style.display = "block";
     document.getElementById("endpoint-base").textContent = base;
-    document.getElementById("endpoint-sub").textContent = hasToken
-      ? `Tenant ready for ${email}. Token saved for LLM-backed questions.`
+    document.getElementById("endpoint-sub").textContent = token
+      ? `Tenant ready for ${email}. Token embedded dynamically in URLs. No personal info saved on server!`
       : `Tenant ready for ${email}. Add an AI Pipe token for Q2, Q3, Q4, Q7, and Q9.`;
     list.innerHTML = "";
     GA3_ENDPOINTS.forEach((item, idx) => {
@@ -758,24 +763,42 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   // Load email from localStorage if saved
   document.addEventListener("DOMContentLoaded", () => {
+    const savedToken = localStorage.getItem("aipipe_token") || "";
+    if (savedToken) {
+      document.getElementById("aipipe-token").value = savedToken;
+    }
     const savedEmail = localStorage.getItem("student_email");
     if (savedEmail) {
       document.getElementById("student-email").value = savedEmail;
       updatePaths(savedEmail);
-      renderEndpointPanel(savedEmail, Boolean(localStorage.getItem("aipipe_token")));
-    }
-    const savedToken = localStorage.getItem("aipipe_token");
-    if (savedToken) {
-      document.getElementById("aipipe-token").value = savedToken;
+      renderEndpointPanel(savedEmail, Boolean(savedToken));
     }
 
     const emailInput = document.getElementById("student-email");
     const tokenInput = document.getElementById("aipipe-token");
+    
+    // Update placeholder to indicate token is required for LLM endpoints
+    tokenInput.placeholder = "aipipe.org API Key (Required for LLM API tasks)";
+
     const onEnter = (event) => {
       if (event.key === "Enter") saveSettings();
     };
     emailInput.addEventListener("keydown", onEnter);
     tokenInput.addEventListener("keydown", onEnter);
+
+    // Auto-update displayed API URLs dynamically as the user types
+    const autoUpdate = () => {
+      const email = emailInput.value.trim();
+      const token = tokenInput.value.trim();
+      if (email && email.includes("@")) {
+        localStorage.setItem("student_email", email);
+        localStorage.setItem("aipipe_token", token);
+        updatePaths(email);
+        renderEndpointPanel(email, Boolean(token));
+      }
+    };
+    emailInput.addEventListener("input", autoUpdate);
+    tokenInput.addEventListener("input", autoUpdate);
 
     // Set up drag-drop event listeners
     setupDragDrop("dz-q1", "file-q1", "q1");
@@ -784,12 +807,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   });
 
   function updatePaths(email) {
-    const enc = encodeURIComponent(email);
+    const token = document.getElementById("aipipe-token").value.trim();
+    const base = buildTenantBase(email, token);
     for (let q = 2; q <= 9; q++) {
       if (q === 5) continue;
       const el = document.getElementById(`path-q${q}`);
       if (el) {
-        el.textContent = `${buildTenantBase(email)}/q${q}`;
+        el.textContent = `${base}/q${q}`;
       }
     }
   }
