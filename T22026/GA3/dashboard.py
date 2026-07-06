@@ -1,6 +1,10 @@
 # T22026/GA3/dashboard.py
+"""
+Unified Dashboard for IITM TDS GA3.
+Provides interactive solvers and dynamic API URL generators.
+"""
 
-DASHBOARD_HTML = """<!DOCTYPE html>
+DASHBOARD_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -36,7 +40,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       line-height: 1.5;
     }
 
-    /* Ã¢â€â‚¬Ã¢â€â‚¬ HERO Ã¢â€â‚¬Ã¢â€â‚¬ */
     .hero {
       background: radial-gradient(circle at top, rgba(99, 102, 241, 0.12) 0%, var(--bg) 70%);
       border-bottom: 1px solid var(--border);
@@ -60,14 +63,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       margin: 0 auto;
     }
 
-    /* Ã¢â€â‚¬Ã¢â€â‚¬ CONTAINER Ã¢â€â‚¬Ã¢â€â‚¬ */
     .container {
       max-width: 960px;
       margin: 0 auto;
       padding: 2rem 1.25rem 4rem;
     }
 
-    /* Ã¢â€â‚¬Ã¢â€â‚¬ CARD STYLING Ã¢â€â‚¬Ã¢â€â‚¬ */
     .card {
       background: var(--surface);
       border: 1px solid var(--border);
@@ -90,7 +91,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       margin-bottom: 0.6rem;
     }
 
-    /* Ã¢â€â‚¬Ã¢â€â‚¬ INPUTS & BUTTONS Ã¢â€â‚¬Ã¢â€â‚¬ */
     .input-row {
       display: flex;
       gap: 1rem;
@@ -140,14 +140,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       background: rgba(255, 255, 255, 0.1);
     }
 
-    /* Ã¢â€â‚¬Ã¢â€â‚¬ DYNAMIC GRID Ã¢â€â‚¬Ã¢â€â‚¬ */
     .grid {
       display: grid;
       grid-template-columns: 1fr;
       gap: 1.5rem;
     }
 
-    /* Ã¢â€â‚¬Ã¢â€â‚¬ QUESTION CARD Ã¢â€â‚¬Ã¢â€â‚¬ */
     .q-card {
       background: var(--surface);
       border: 1px solid var(--border);
@@ -223,7 +221,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       margin-bottom: 1rem;
     }
 
-    /* Ã¢â€â‚¬Ã¢â€â‚¬ INTERACTIVE SOLVER Ã¢â€â‚¬Ã¢â€â‚¬ */
     .solver-box {
       background: rgba(15, 23, 42, 0.4);
       border: 1px dashed var(--border);
@@ -290,6 +287,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       font-weight: 600;
       cursor: pointer;
       transition: background 0.2s;
+      z-index: 10;
+    }
+    .btn-copy-ans:hover {
+      background: rgba(255, 255, 255, 0.15);
     }
     .answer-summary {
       display: grid;
@@ -320,11 +321,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       font-size: 0.86rem;
       word-break: break-word;
     }
-    .btn-copy-ans:hover {
-      background: rgba(255, 255, 255, 0.15);
-    }
 
-    /* Ã¢â€â‚¬Ã¢â€â‚¬ ACTION FOOTER Ã¢â€â‚¬Ã¢â€â‚¬ */
     .q-footer {
       background: rgba(15, 23, 42, 0.2);
       padding: 1rem 1.5rem;
@@ -333,7 +330,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       gap: 0.5rem;
     }
 
-    /* Ã¢â€â‚¬Ã¢â€â‚¬ TOAST NOTIFICATION Ã¢â€â‚¬Ã¢â€â‚¬ */
     .endpoint-panel {
       display: none;
       margin-bottom: 2rem;
@@ -402,6 +398,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       .endpoint-row { grid-template-columns: 1fr; }
       .endpoint-copy { width: 100%; }
     }
+    
     .toast {
       position: fixed;
       bottom: 24px;
@@ -436,13 +433,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <label>Credentials & Configuration</label>
     <div class="input-row">
       <input type="email" id="student-email" placeholder="23f1000000@ds.study.iitm.ac.in" autocomplete="email" />
-      <input type="password" id="aipipe-token" placeholder="aipipe.org API Key (optional)" autocomplete="off" />
+      <input type="password" id="aipipe-token" placeholder="aipipe.org API Key (Required for LLM API tasks)" autocomplete="off" />
       <button class="btn" id="btn-save-settings" onclick="saveSettings()">Generate URLs</button>
     </div>
     <p style="font-size: 0.8rem; color: var(--muted);">Enter your IITM email and optional AI Pipe token, then click Generate URLs to unlock your personalized endpoints.</p>
   </div>
 
-
+  <!-- ENDPOINT PANEL -->
   <div class="card endpoint-panel" id="endpoint-panel">
     <div class="endpoint-head">
       <div>
@@ -454,6 +451,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div class="endpoint-base" id="endpoint-base">/ga3/{email}</div>
     <div class="endpoint-list" id="endpoint-list"></div>
   </div>
+
   <!-- QUESTIONS SECTION -->
   <div class="grid" id="questions-grid">
     <!-- Q1 -->
@@ -717,6 +715,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   ];
 
   function buildTenantBase(email, token = "") {
+    const sessionId = localStorage.getItem("ga3_session_id");
+    if (sessionId) {
+      return `${BASE}/ga3/${email}/${encodeURIComponent(sessionId)}`;
+    }
     if (token) {
       return `${BASE}/ga3/${email}/${encodeURIComponent(token)}`;
     }
@@ -724,43 +726,54 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   }
 
   function renderEndpointPanel(email, hasToken = false) {
-    const panel = document.getElementById("endpoint-panel");
-    const list = document.getElementById("endpoint-list");
-    const token = document.getElementById("aipipe-token").value.trim();
-    const base = buildTenantBase(email, token);
-    panel.style.display = "block";
-    document.getElementById("endpoint-base").textContent = base;
-    document.getElementById("endpoint-sub").textContent = token
-      ? `Tenant ready for ${email}. Session ID embedded dynamically. No key data saved on disk!`
-      : `Tenant ready for ${email}. Add an AI Pipe token for Q2, Q3, Q4, Q7, and Q9.`;
-    list.innerHTML = "";
-    GA3_ENDPOINTS.forEach((item, idx) => {
-      const url = `${base}${item.path}`;
-      const row = document.createElement("div");
-      row.className = "endpoint-row";
-      row.innerHTML = `
-        <div class="endpoint-q">${item.q}</div>
-        <div class="endpoint-url" title="${url}">${url}<div style="color:var(--muted);font-family:Outfit,sans-serif;font-size:0.72rem;margin-top:0.2rem">${item.label}</div></div>
-        <button class="btn btn-sec endpoint-copy" onclick="copyEndpoint(${idx})">Copy</button>
-      `;
-      row.dataset.url = url;
-      list.appendChild(row);
-    });
+    try {
+      const panel = document.getElementById("endpoint-panel");
+      const list = document.getElementById("endpoint-list");
+      const token = document.getElementById("aipipe-token").value.trim();
+      const base = buildTenantBase(email, token);
+      panel.style.display = "block";
+      document.getElementById("endpoint-base").textContent = base;
+      document.getElementById("endpoint-sub").textContent = token
+        ? `Tenant ready for ${email}. Session ID embedded dynamically. No key data saved on disk!`
+        : `Tenant ready for ${email}. Add an AI Pipe token for Q2, Q3, Q4, Q7, and Q9.`;
+      list.innerHTML = "";
+      GA3_ENDPOINTS.forEach((item, idx) => {
+        const url = `${base}${item.path}`;
+        const row = document.createElement("div");
+        row.className = "endpoint-row";
+        row.innerHTML = `
+          <div class="endpoint-q">${item.q}</div>
+          <div class="endpoint-url" title="${url}">${url}<div style="color:var(--muted);font-family:Outfit,sans-serif;font-size:0.72rem;margin-top:0.2rem">${item.label}</div></div>
+          <button class="btn btn-sec endpoint-copy" onclick="copyEndpoint(${idx})">Copy</button>
+        `;
+        row.dataset.url = url;
+        list.appendChild(row);
+      });
+    } catch (err) {
+      console.error("Failed to render endpoint panel:", err);
+    }
   }
 
   function copyEndpoint(index) {
-    const row = document.querySelectorAll(".endpoint-row")[index];
-    if (!row) return;
-    navigator.clipboard.writeText(row.dataset.url).then(() => showToast("Endpoint copied."));
+    try {
+      const row = document.querySelectorAll(".endpoint-row")[index];
+      if (!row) return;
+      navigator.clipboard.writeText(row.dataset.url).then(() => showToast("Endpoint copied."));
+    } catch (err) {
+      console.error(err);
+    }
   }
 
   function copyAllEndpoints() {
-    const urls = Array.from(document.querySelectorAll(".endpoint-row")).map((row) => row.dataset.url).join("\\n");
-    if (!urls) return;
-    navigator.clipboard.writeText(urls).then(() => showToast("All GA3 endpoints copied."));
+    try {
+      const urls = Array.from(document.querySelectorAll(".endpoint-row")).map((row) => row.dataset.url).join("\\n");
+      if (!urls) return;
+      navigator.clipboard.writeText(urls).then(() => showToast("All GA3 endpoints copied."));
+    } catch (err) {
+      console.error(err);
+    }
   }
 
-  // Load email from localStorage if saved
   document.addEventListener("DOMContentLoaded", () => {
     const savedToken = localStorage.getItem("aipipe_token") || "";
     if (savedToken) {
@@ -776,7 +789,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const emailInput = document.getElementById("student-email");
     const tokenInput = document.getElementById("aipipe-token");
     
-    // Update placeholder to indicate token is required for LLM endpoints
     tokenInput.placeholder = "aipipe.org API Key (Required for LLM API tasks)";
 
     const onEnter = (event) => {
@@ -785,11 +797,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     emailInput.addEventListener("keydown", onEnter);
     tokenInput.addEventListener("keydown", onEnter);
 
-    // Auto-update displayed API URLs dynamically as the user types
     const autoUpdate = () => {
       const email = emailInput.value.trim();
       const token = tokenInput.value.trim();
-      // Clear old session ID on modification to force new session creation
       localStorage.removeItem("ga3_session_id");
       if (email && email.includes("@")) {
         localStorage.setItem("student_email", email);
@@ -801,7 +811,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     emailInput.addEventListener("input", autoUpdate);
     tokenInput.addEventListener("input", autoUpdate);
 
-    // Set up drag-drop event listeners
     setupDragDrop("dz-q1", "file-q1", "q1");
     setupDragDrop("dz-q5", "file-q5", "q5");
     setupDragDrop("dz-q12", "file-q12", "q12");
@@ -849,6 +858,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
     localStorage.setItem("student_email", email);
     localStorage.setItem("aipipe_token", token);
+    
     updatePaths(email);
     renderEndpointPanel(email, Boolean(token));
 
@@ -878,7 +888,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         } else {
           localStorage.removeItem("ga3_session_id");
         }
-        // Refresh UI to display session-id-based URLs
         updatePaths(email);
         renderEndpointPanel(email, Boolean(token));
         showToast(`URLs ready. Base: ${data.solver_url_prefix}`);
@@ -898,26 +907,30 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     if (trimmed.startsWith("[")) {
       return JSON.parse(trimmed);
     }
-    return trimmed.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    return trimmed.split("\\n").filter(Boolean).map((line) => JSON.parse(line));
   }
 
   function setupDragDrop(dzId, fileInputId, qKey) {
-    const dz = document.getElementById(dzId);
-    dz.addEventListener("dragover", (e) => {
-      e.preventDefault();
-      dz.classList.add("dragover");
-    });
-    dz.addEventListener("dragleave", () => {
-      dz.classList.remove("dragover");
-    });
-    dz.addEventListener("drop", (e) => {
-      e.preventDefault();
-      dz.classList.remove("dragover");
-      if (e.dataTransfer.files.length > 0) {
-        const file = e.dataTransfer.files[0];
-        readFileContent(file, dz, qKey);
-      }
-    });
+    try {
+      const dz = document.getElementById(dzId);
+      dz.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        dz.classList.add("dragover");
+      });
+      dz.addEventListener("dragleave", () => {
+        dz.classList.remove("dragover");
+      });
+      dz.addEventListener("drop", (e) => {
+        e.preventDefault();
+        dz.classList.remove("dragover");
+        if (e.dataTransfer.files.length > 0) {
+          const file = e.dataTransfer.files[0];
+          readFileContent(file, dz, qKey);
+        }
+      });
+    } catch (err) {
+      console.error(err);
+    }
   }
 
   function triggerFileSelect(inputId) {
@@ -925,10 +938,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   }
 
   function handleFileSelect(qKey) {
-    const input = document.getElementById(`file-${qKey}`);
-    const dz = document.getElementById(`dz-${qKey}`);
-    if (input.files.length > 0) {
-      readFileContent(input.files[0], dz, qKey);
+    try {
+      const input = document.getElementById(`file-${qKey}`);
+      const dz = document.getElementById(`dz-${qKey}`);
+      if (input.files.length > 0) {
+        readFileContent(input.files[0], dz, qKey);
+      }
+    } catch (err) {
+      console.error(err);
     }
   }
 
@@ -1115,7 +1132,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         .map(([k, v]) => `<div class="answer-chip"><span>${k}</span><strong>${String(v)}</strong></div>`)
         .join("");
       area.innerHTML = `<button class="btn-copy-ans" onclick="copyText('pre-q11')">Copy</button><div class="answer-summary"><div class="answer-grid">${items}</div><pre><code id="pre-${qKey}"></code></pre></div>`;
-      const summary = Object.entries(answers).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k}: ${v}`).join('\\n');
+      const summary = Object.entries(answers).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k}: ${v}`).join('\\\\n');
       document.getElementById(`pre-${qKey}`).textContent = summary;
     } else {
       code.textContent = typeof data === "string" ? data : JSON.stringify(data, null, 2);
@@ -1156,9 +1173,3 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 </body>
 </html>
 """
-
-
-
-
-
-
