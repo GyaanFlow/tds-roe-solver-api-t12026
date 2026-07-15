@@ -14,10 +14,12 @@ This contract is **stable and additive-only**. Code your other solver against it
   - e.g. `https://<host>/ga4/23f1000805%40ds.study.iitm.ac.in`
   - The `<host>` is your Render or Hugging Face Space origin. Both behave identically.
 - **Method:** every functional endpoint is `POST` with `Content-Type: application/json`.
-- **AIPipe token required for Q3 & Q5.** These call an LLM (via AIPipe). Provide the token one of two ways:
-  1. **Env var (recommended):** set `AIPIPE_TOKEN=<your-key>` on Render (and the HF Space). Applies to every request.
-  2. **Onboard:** `POST /ga4/onboard {"email","aipipe_token"}` stores it for that email (lost on dyno restart — env var is more durable).
-  If no token is resolvable, Q3/Q5 fall back to a weak heuristic (won't pass grading). **Q4 needs no token.**
+- **AIPipe token required for Q3 & Q5** (they call an LLM via AIPipe). The token is taken **per-request from the
+  caller** — exactly like GA3 — so the owner never pays. For the exam grader (which calls a bare URL), embed
+  your token as a path segment right after the email:
+  `…/ga4/<email>/<YOUR_AIPIPE_TOKEN>/grounded-answer`. Precedence: URL/header/query token > stored onboard
+  config > `AIPIPE_TOKEN` env (optional last-resort). If none is resolvable, Q3/Q5 fall back to a weak
+  heuristic (won't pass grading). **Q4 needs no token.**
 - **Q4 is fully self-contained.** The server regenerates the student's seeded 500-doc corpus in-memory from
   the email in the URL — no dataset upload, no token.
 - **CORS:** open (`Access-Control-Allow-Origin: *`); preflight `OPTIONS` returns `200`.
@@ -243,8 +245,14 @@ r = requests.post(f"{base}/grounded-answer", json={
 print(r.json())   # {"answer": "...", "citations": ["C1"], "confidence": 0.75, "answerable": true}
 ```
 
-For the exam itself, submit the **tenant URL** for each question as the answer
-(e.g. `https://<host>/ga4/<email>/grounded-answer`) — the grader calls it directly.
+### Exam submission URLs (embed your AIPipe token in the path for Q3/Q5)
+| Q | Submit exactly (grader calls it directly) |
+|---|---|
+| **Q3** | `https://<host>/ga4/<email>/<YOUR_AIPIPE_TOKEN>/grounded-answer` |
+| **Q4** | `https://<host>/ga4/<email>/vector-search`  *(no token — Q4 uses no LLM)* |
+| **Q5** | `https://<host>/ga4/<email>/<YOUR_AIPIPE_TOKEN>`  *(base URL; grader appends `/extract-graph` etc.)* |
+
+The token segment is per-request, so each caller pays with their own key — the owner never bears the cost.
 
 ---
 

@@ -7,8 +7,9 @@ services:
     envVars:
       - key: CORS_ALLOW_ORIGINS
         value: "*"
-      # Required for GA4 Q3 & Q5 (AIPipe LLM calls). Set the value in the Render
-      # dashboard — sync:false keeps the secret out of the repo.
+      # OPTIONAL last-resort fallback for GA4 Q3 & Q5 LLM calls. Normally the
+      # caller's token is taken per-request from the URL path (…/ga4/<email>/<token>/…),
+      # so the owner does NOT pay and this can stay unset. sync:false = not stored in repo.
       - key: AIPIPE_TOKEN
         sync: false
       - key: Q10_CSV_PATH

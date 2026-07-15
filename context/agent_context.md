@@ -156,3 +156,20 @@ This file stores durable context across terms, graded assignments (GA), and ques
 - **Dockerfile/render.yaml parity**: Dockerfile was missing `ENV Q19_WORK_ROOT` and didn't `mkdir /tmp/q19_work` (render.yaml already set it). Added both so the two deploy targets behave identically.
 - **CI hygiene**: `verify_endpoints.py` had a helper named `test_endpoint(method, path, ...)` that pytest mis-collected as a test (fixture-not-found error on any bare `pytest` run). Renamed to `check_endpoint`; a plain `pytest` over all four verify_*.py files is now clean.
 - Confirmed: all third-party imports are covered by `hf_space/requirements.txt`; Redis (GA2 Q4) has an in-process fallback with a 2s connect timeout for token-less/instance-less free tiers; Node seedrandom bridge (GA2) degrades with a clear error and is installed in the container; `CMD` honors Render's dynamic `$PORT` with HF's `7860` fallback; root `/health` exists for Render's healthCheckPath. Full hub boots and all mounts (GA0 canonical routes, /ga2, /ga3, /ga4) respond. Full test + script run green.
+
+### 2026-07-16 (GA4 grader-contract fixes — Q3/Q4/Q5 were failing live)
+- Reference: HypeMonk/GA4 Part-2.md (working deployment guide). Root causes of the live grader failures:
+  - **Q4 HTTP 400**: the grader posts ONLY the query, not the corpus. Added `T22026/GA4/q4data.py` — a Python
+    port of the exam's JS `seedrandom` (David Bau ARC4), verified byte-identical to Node `seedrandom` for the
+    Q4 seed strings. `vector-search` now regenerates the student's exact 500-doc corpus in-memory from the
+    tenant email; inline documents/embeddings are an optional self-test override. Rerank default -999.0 (parity).
+    Q4 output verified identical to the reference algorithm across all filter types. Verified LIVE on Render.
+  - **Q5 incomplete**: regex extraction too weak. Added LLM-backed `extract_graph_llm`/`graph_query_llm`/
+    `community_summary_llm` (gpt-4o via AIPipe) using the exact allowed entity types (Person/Organization/
+    Product/Framework) and relations (FOUNDED/DEVELOPED/INTEGRATED_INTO/HIRED/AUTHORED).
+  - **Q3 8s timeout**: added LLM-backed grounded QA (gpt-4o-mini). Cold-start still needs the dyno warmed first.
+- Token resolution for Q3/Q5: request token > stored tenant config > `AIPIPE_TOKEN`/`AIPIPE_API_KEY` env.
+  Heuristic fallback if none (won't pass grading). Declared `AIPIPE_TOKEN` (sync:false) in render.yaml.
+- No new runtime deps (pure-Python cosine, not numpy). 18/18 tests pass. Pushed to GitHub + HF (squashed
+  clean-tree commit to dodge the output/ binary-history that HF's Xet policy rejects).
+- **OUTSTANDING (user action)**: set `AIPIPE_TOKEN` env var on Render + HF Space for Q3/Q5 to grade correctly.
