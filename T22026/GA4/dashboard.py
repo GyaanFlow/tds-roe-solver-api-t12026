@@ -1,6 +1,9 @@
 # T22026/GA4/dashboard.py
 """
-Unified Dashboard for IITM TDS GA4 — Live RAG API hub (Q3, Q4, Q5).
+Interactive GA4 dashboard — Live RAG API hub (Q3, Q4, Q5).
+Mirrors the GA3 dashboard: email + AIPipe token credentials, per-question cards
+with token-embedded submission URLs (so each caller pays with their own key),
+Copy-URL and live Run-test buttons, and toast notifications.
 """
 
 DASHBOARD_HTML = r"""<!DOCTYPE html>
@@ -14,212 +17,224 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
-      --bg: #030712; --surface: #0f172a; --s2: #1e293b; --border: rgba(99,102,241,0.15);
-      --text: #f8fafc; --muted: #94a3b8; --accent: #818cf8; --green: #34d399; --red: #f87171;
+      --bg: #030712; --surface: #0f172a; --s2: #1e293b; --border: rgba(192,132,252,0.18);
+      --text: #f8fafc; --muted: #94a3b8; --accent: #c084fc; --accent-2: #a855f7;
+      --green: #34d399; --red: #f87171;
     }
     body { font-family: 'Outfit', system-ui, sans-serif; background: var(--bg); color: var(--text); line-height: 1.5; }
-    .hero { background: radial-gradient(circle at top, rgba(99,102,241,0.12) 0%, var(--bg) 70%); border-bottom: 1px solid var(--border); padding: 3rem 1.5rem 2rem; text-align: center; }
-    .hero h1 { font-size: clamp(1.8rem, 5vw, 2.8rem); font-weight: 800; background: linear-gradient(135deg,#fff 30%,var(--accent) 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; margin-bottom: 0.5rem; }
-    .hero p { color: var(--muted); max-width: 640px; margin: 0 auto; }
-    .wrap { max-width: 1080px; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
-    .onboard { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 1.5rem; margin-bottom: 2rem; }
-    .onboard input { width: 100%; padding: 0.7rem 0.9rem; border-radius: 8px; border: 1px solid var(--border); background: var(--s2); color: var(--text); font-family: inherit; margin-top: 0.4rem; }
-    .onboard label { font-size: 0.85rem; color: var(--muted); }
-    .onboard button { margin-top: 1rem; background: var(--accent); color: #030712; border: none; padding: 0.7rem 1.4rem; border-radius: 8px; font-weight: 700; cursor: pointer; }
-    .onboard button:hover { opacity: 0.9; }
-    #onboardStatus { margin-top: 0.9rem; font-size: 0.85rem; color: var(--muted); }
-    #onboardStatus.ok { color: var(--green); }
+    .hero { background: radial-gradient(circle at top, rgba(192,132,252,0.14) 0%, var(--bg) 70%); border-bottom: 1px solid var(--border); padding: 2.6rem 1.5rem 1.8rem; text-align: center; }
+    .hero h1 { font-size: clamp(1.7rem, 5vw, 2.6rem); font-weight: 800; background: linear-gradient(135deg,#fff 30%,var(--accent) 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; margin-bottom: 0.4rem; }
+    .hero p { color: var(--muted); max-width: 660px; margin: 0 auto; font-size: 0.95rem; }
+    .wrap { max-width: 1080px; margin: 0 auto; padding: 1.8rem 1.5rem 4rem; }
+
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 1.4rem; margin-bottom: 1.4rem; }
+    .card > label { display:block; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 700; margin-bottom: 0.7rem; }
+    .input-row { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+    .input-row input { flex: 1 1 240px; padding: 0.7rem 0.9rem; border-radius: 9px; border: 1px solid var(--border); background: var(--s2); color: var(--text); font-family: inherit; font-size: 0.9rem; }
+    .input-row input:focus { outline: none; border-color: var(--accent); }
+    .btn { background: var(--accent); color: #1a032e; border: none; padding: 0.7rem 1.3rem; border-radius: 9px; font-weight: 700; cursor: pointer; font-family: inherit; }
+    .btn:hover { background: var(--accent-2); color:#fff; }
+    .btn-sec { background: rgba(255,255,255,.05); color: var(--text); border: 1px solid rgba(255,255,255,.1); padding: 0.55rem 0.85rem; border-radius: 8px; font-size: 0.82rem; font-weight: 600; cursor: pointer; font-family: inherit; }
+    .btn-sec:hover { background: rgba(255,255,255,.12); }
+    .hint { font-size: 0.8rem; color: var(--muted); margin-top: 0.7rem; }
 
     .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1.1rem; }
-    .q-card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 1.4rem; display: flex; flex-direction: column; gap: 0.8rem; }
-    .q-header { display: flex; align-items: center; gap: 0.6rem; }
-    .q-badge { background: rgba(129,140,248,0.15); color: var(--accent); font-weight: 800; font-size: 0.75rem; padding: 0.2rem 0.55rem; border-radius: 999px; }
-    .q-title { font-weight: 700; font-size: 1.02rem; }
-    .q-desc { color: var(--muted); font-size: 0.85rem; }
-    .mono-path { font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; background: var(--s2); border: 1px solid var(--border); border-radius: 8px; padding: 0.55rem 0.7rem; word-break: break-all; }
+    .q-card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 1.3rem; display: flex; flex-direction: column; gap: 0.75rem; }
+    .q-head { display: flex; align-items: center; gap: 0.55rem; }
+    .q-badge { background: rgba(192,132,252,0.16); color: var(--accent); font-weight: 800; font-size: 0.72rem; padding: 0.18rem 0.5rem; border-radius: 999px; }
+    .q-title { font-weight: 700; font-size: 1rem; }
+    .q-type { margin-left:auto; font-size:0.68rem; font-weight:700; padding:0.15rem 0.5rem; border-radius:999px; }
+    .type-llm { background: rgba(248,113,113,0.15); color: var(--red); }
+    .type-calc { background: rgba(52,211,153,0.15); color: var(--green); }
+    .q-desc { color: var(--muted); font-size: 0.84rem; }
+    .mono { font-family: 'JetBrains Mono', monospace; font-size: 0.74rem; background: var(--s2); border: 1px solid var(--border); border-radius: 8px; padding: 0.55rem 0.65rem; word-break: break-all; }
     .row { display: flex; gap: 0.5rem; flex-wrap: wrap; }
-    .btn-sec { flex: 1; background: rgba(255,255,255,.05); color: var(--text); border: 1px solid rgba(255,255,255,.08); padding: 0.55rem 0.8rem; border-radius: 8px; font-size: 0.82rem; font-weight: 600; cursor: pointer; }
-    .btn-sec:hover { background: rgba(255,255,255,.1); }
-    .btn-test { background: var(--accent); color: #030712; border: none; padding: 0.55rem 0.8rem; border-radius: 8px; font-size: 0.82rem; font-weight: 700; cursor: pointer; flex: 1; }
-    .btn-test:hover { opacity: 0.9; }
+    .btn-test { background: var(--accent); color: #1a032e; border: none; padding: 0.55rem 0.8rem; border-radius: 8px; font-size: 0.82rem; font-weight: 700; cursor: pointer; flex: 1; }
+    .btn-test:hover { background: var(--accent-2); color:#fff; }
     .btn-test:disabled { opacity: 0.5; cursor: wait; }
-    .result { font-family: 'JetBrains Mono', monospace; font-size: 0.74rem; background: #000; border: 1px solid var(--border); border-radius: 8px; padding: 0.65rem; white-space: pre-wrap; word-break: break-all; max-height: 220px; overflow: auto; display: none; }
+    .result { font-family: 'JetBrains Mono', monospace; font-size: 0.73rem; background: #000; border: 1px solid var(--border); border-radius: 8px; padding: 0.6rem; white-space: pre-wrap; word-break: break-all; max-height: 220px; overflow: auto; display: none; }
     .result.show { display: block; }
     .result.err { color: var(--red); }
     .result.ok { color: var(--green); }
+
+    .toast { position: fixed; bottom: 24px; right: 24px; background: #10b981; color: #fff; padding: 12px 22px; border-radius: 9px; box-shadow: 0 4px 12px rgba(0,0,0,.3); font-weight: 600; opacity: 0; transform: translateY(100%); transition: opacity .3s, transform .3s; z-index: 1000; }
+    .toast.show { opacity: 1; transform: translateY(0); }
     footer { text-align: center; color: var(--muted); padding: 2rem; font-size: 0.8rem; }
   </style>
 </head>
 <body>
   <div class="hero">
     <h1>GA4 — Live RAG API Hub</h1>
-    <p>The 3 GA4 questions graded by calling a real, dynamically deployed API URL: anti-hallucination grounded QA, two-stage vector search + re-ranking, and a GraphRAG pipeline. One isolated set of URLs per student email — no shared state between students.</p>
+    <p>The 3 GA4 questions graded by calling a live API URL: grounded QA, vector search + re-ranking, and GraphRAG. Q3 &amp; Q5 use your own AIPipe token (embedded in the URL) — the owner never pays.</p>
   </div>
+
   <div class="wrap">
-    <div class="onboard">
-      <label for="emailInput">Your email</label>
-      <input id="emailInput" type="email" placeholder="you@example.com" />
-      <button onclick="onboard()">Generate my URLs</button>
-      <div id="onboardStatus">Enter your email, then click "Run test" on any card below — each card calls your own tenant URL live and shows the real response.</div>
+    <!-- CREDENTIALS -->
+    <div class="card">
+      <label>Credentials &amp; Configuration</label>
+      <div class="input-row">
+        <input type="email" id="student-email" placeholder="23f1000000@ds.study.iitm.ac.in" autocomplete="email" />
+        <input type="password" id="aipipe-token" placeholder="aipipe.org API key (required for Q3 &amp; Q5)" autocomplete="off" />
+        <button class="btn" onclick="generateUrls()">Generate URLs</button>
+      </div>
+      <p class="hint">Enter your IITM email and AIPipe token, then click Generate URLs. Your token is embedded in the Q3/Q5 submission URLs so each call is billed to <em>your</em> key. Q4 needs no token.</p>
     </div>
 
     <div class="grid">
       <!-- Q3 -->
       <div class="q-card">
-        <div class="q-header"><span class="q-badge">Q3</span><span class="q-title">Grounded Answer API</span></div>
-        <p class="q-desc">Answers strictly from provided chunks, cites chunk IDs, refuses with "I don't know" when unanswerable.</p>
-        <div class="mono-path" id="path-q3">POST /ga4/{email}/grounded-answer</div>
+        <div class="q-head"><span class="q-badge">Q3</span><span class="q-title">Grounded Answer API</span><span class="q-type type-llm">LLM · token</span></div>
+        <p class="q-desc">Answers strictly from provided chunks, cites chunk IDs, refuses when unanswerable.</p>
+        <div class="mono" id="url-q3" data-copy="">Enter email + token above…</div>
         <div class="row">
-          <button class="btn-sec" onclick="copyPath('path-q3')">Copy URL</button>
+          <button class="btn-sec" onclick="copyUrl('url-q3')">Copy submit URL</button>
           <button class="btn-test" onclick="testQ3(this)">Run test</button>
         </div>
-        <pre class="result" id="result-q3"></pre>
+        <pre class="result" id="res-q3"></pre>
       </div>
 
       <!-- Q4 -->
       <div class="q-card">
-        <div class="q-header"><span class="q-badge">Q4</span><span class="q-title">Vector Search + Re-ranking API</span></div>
-        <p class="q-desc">Metadata filter → cosine similarity top-k → re-rank via lookup table.</p>
-        <div class="mono-path" id="path-q4">POST /ga4/{email}/vector-search</div>
+        <div class="q-head"><span class="q-badge">Q4</span><span class="q-title">Vector Search + Re-ranking</span><span class="q-type type-calc">no token</span></div>
+        <p class="q-desc">Filters your seeded 500-doc corpus (generated in-memory from your email), cosine top-k, then re-ranks.</p>
+        <div class="mono" id="url-q4" data-copy="">Enter email above…</div>
         <div class="row">
-          <button class="btn-sec" onclick="copyPath('path-q4')">Copy URL</button>
+          <button class="btn-sec" onclick="copyUrl('url-q4')">Copy submit URL</button>
           <button class="btn-test" onclick="testQ4(this)">Run test</button>
         </div>
-        <pre class="result" id="result-q4"></pre>
+        <pre class="result" id="res-q4"></pre>
       </div>
 
       <!-- Q5 -->
       <div class="q-card">
-        <div class="q-header"><span class="q-badge">Q5</span><span class="q-title">GraphRAG Pipeline</span></div>
-        <p class="q-desc">Extracts entities/relationships, answers multi-hop questions over a graph, summarizes a community.</p>
-        <div class="mono-path" id="path-q5">POST /ga4/{email}/extract-graph, /graph-query, /community-summary</div>
+        <div class="q-head"><span class="q-badge">Q5</span><span class="q-title">GraphRAG Pipeline</span><span class="q-type type-llm">LLM · token</span></div>
+        <p class="q-desc">extract-graph → graph-query → community-summary. Submit the base URL; the grader appends the sub-paths.</p>
+        <div class="mono" id="url-q5" data-copy="">Enter email + token above…</div>
         <div class="row">
-          <button class="btn-sec" onclick="copyPath('path-q5')">Copy Base URL</button>
+          <button class="btn-sec" onclick="copyUrl('url-q5')">Copy base URL</button>
           <button class="btn-test" onclick="testQ5(this)">Run test</button>
         </div>
-        <pre class="result" id="result-q5"></pre>
+        <pre class="result" id="res-q5"></pre>
       </div>
     </div>
 
-    <p style="color:var(--muted); font-size:0.85rem; margin-top:1.5rem;">
-      Submit your tenant URL for each question directly as the exam answer — the grader calls it. The other 9 GA4
-      questions are pure client-side computation (paste ZIP data → get JSON answer) and are handled by a separate solver.
+    <p class="hint" style="margin-top:1.4rem;">
+      Submit the URLs above as your exam answers — the grader calls them directly. <strong>Warm the dyno</strong>
+      (click any Run test) right before checking Q3, since Render's free tier cold-starts and the grader's Q3 timeout is short.
+      The other 9 GA4 questions are pure client-side computation, handled by your separate solver.
     </p>
   </div>
-  <footer>IITM TDS 2026-05 · GA4 · Multi-tenant hub — same email always gets the same routes, works for every student independently.</footer>
+
+  <div id="toast" class="toast"></div>
+  <footer>IITM TDS 2026-05 · GA4 · Per-caller token model — same as GA3, owner never pays.</footer>
+
   <script>
-    function currentEmail() {
-      return document.getElementById('emailInput').value.trim() || 'student@example.com';
-    }
-    function tenantBase() {
-      return `${window.location.origin}/ga4/${encodeURIComponent(currentEmail())}`;
-    }
-    function refreshPaths() {
-      const base = tenantBase();
-      document.getElementById('path-q3').textContent = `POST ${base}/grounded-answer`;
-      document.getElementById('path-q4').textContent = `POST ${base}/vector-search`;
-      document.getElementById('path-q5').textContent = `POST ${base}/extract-graph, /graph-query, /community-summary`;
-    }
-    document.getElementById('emailInput').addEventListener('input', refreshPaths);
-    refreshPaths();
+    const ORIGIN = window.location.origin;
 
-    function copyPath(id) {
-      const text = document.getElementById(id).textContent;
-      navigator.clipboard.writeText(text).then(() => {
-        const el = document.getElementById(id);
-        const original = el.textContent;
-        el.textContent = 'Copied!';
-        setTimeout(() => { el.textContent = original; }, 900);
-      });
+    function emailVal() { return (document.getElementById('student-email').value || '').trim(); }
+    function tokenVal() { return (document.getElementById('aipipe-token').value || '').trim(); }
+    function encEmail() { return encodeURIComponent(emailVal() || 'student@example.com'); }
+
+    // base for live test calls (token embedded so LLM calls use the caller's key)
+    function callBase() {
+      const t = tokenVal();
+      const b = `${ORIGIN}/ga4/${encEmail()}`;
+      return t ? `${b}/${encodeURIComponent(t)}` : b;
     }
 
-    async function onboard() {
-      const email = currentEmail();
-      const out = document.getElementById('onboardStatus');
-      out.className = '';
-      out.textContent = 'Generating...';
-      try {
-        const res = await fetch('/ga4/onboard', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email })
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.detail || 'Failed');
-        refreshPaths();
-        out.className = 'ok';
-        out.textContent = `Ready. Your routes live under ${data.solver_url_prefix}`;
-      } catch (e) {
-        out.className = '';
-        out.textContent = 'Error: ' + e.message;
-      }
+    function refreshUrls() {
+      const enc = encEmail();
+      const t = tokenVal();
+      const tokSeg = t ? `/${encodeURIComponent(t)}` : '/<YOUR_AIPIPE_TOKEN>';
+      setUrl('url-q3', `${ORIGIN}/ga4/${enc}${tokSeg}/grounded-answer`);
+      setUrl('url-q4', `${ORIGIN}/ga4/${enc}/vector-search`);        // no token
+      setUrl('url-q5', `${ORIGIN}/ga4/${enc}${tokSeg}`);            // base URL
+    }
+    function setUrl(id, url) {
+      const el = document.getElementById(id);
+      el.textContent = url;
+      el.dataset.copy = url;
     }
 
-    async function runTest(btn, resultId, path, method, body) {
-      const el = document.getElementById(resultId);
+    function generateUrls() {
+      const email = emailVal();
+      if (!email || !email.includes('@')) { toast('Enter a valid email.', true); return; }
+      if (!tokenVal()) { toast('Q4 ready. Add your AIPipe token for Q3 & Q5.', true); }
+      localStorage.setItem('ga4_email', email);
+      localStorage.setItem('ga4_token', tokenVal());
+      refreshUrls();
+      if (emailVal() && tokenVal()) toast('URLs ready — token embedded for Q3 & Q5.');
+    }
+
+    function copyUrl(id) {
+      const url = document.getElementById(id).dataset.copy || '';
+      if (!url || url.includes('<YOUR_AIPIPE_TOKEN>') || url.includes('Enter ')) { toast('Generate URLs first.', true); return; }
+      navigator.clipboard.writeText(url).then(() => toast('URL copied to clipboard!'));
+    }
+
+    async function runTest(btn, resId, path, payload) {
+      const el = document.getElementById(resId);
       btn.disabled = true;
-      el.className = 'result show';
-      el.textContent = 'Calling ' + path + ' ...';
+      el.className = 'result show'; el.textContent = 'Calling ' + path + ' …';
       try {
-        const res = await fetch(path, {
-          method,
-          headers: { 'Content-Type': 'application/json' },
-          body: body ? JSON.stringify(body) : undefined
-        });
-        const data = await res.json();
-        el.className = 'result show ' + (res.ok ? 'ok' : 'err');
+        const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        const data = await r.json();
+        el.className = 'result show ' + (r.ok ? 'ok' : 'err');
         el.textContent = JSON.stringify(data, null, 2);
         return data;
       } catch (e) {
-        el.className = 'result show err';
-        el.textContent = 'Request failed: ' + e.message;
+        el.className = 'result show err'; el.textContent = 'Request failed: ' + e.message;
         return null;
-      } finally {
-        btn.disabled = false;
-      }
+      } finally { btn.disabled = false; }
     }
 
-    async function testQ3(btn) {
-      await runTest(btn, 'result-q3', `${tenantBase()}/grounded-answer`, 'POST', {
-        question: "What year was FAISS released?",
+    function testQ3(btn) {
+      return runTest(btn, 'res-q3', `${callBase()}/grounded-answer`, {
+        question: 'What year was FAISS released?',
         chunks: [
-          { chunk_id: "C1", text: "FAISS was developed by Facebook AI Research and open-sourced in 2017." },
-          { chunk_id: "C2", text: "Qdrant is a vector database written in Rust, released in 2021." }
+          { chunk_id: 'C1', text: 'FAISS was developed by Facebook AI Research and open-sourced in 2017.' },
+          { chunk_id: 'C2', text: 'Qdrant is a vector database written in Rust, released in 2021.' }
         ]
       });
     }
 
-    async function testQ4(btn) {
-      await runTest(btn, 'result-q4', `${tenantBase()}/vector-search`, 'POST', {
-        query_id: "Q001",
-        query_vector: [0.9, 0.1],
-        top_k: 3,
-        rerank_top_n: 2,
-        filter: { department: "finance" },
-        documents: [
-          { doc_id: "D1", department: "finance", year: 2024 },
-          { doc_id: "D2", department: "finance", year: 2023 },
-          { doc_id: "D3", department: "hr", year: 2024 }
-        ],
-        embeddings: { D1: [1, 0], D2: [0.9, 0.1], D3: [1, 0] },
-        reranker_scores: { Q001: { D1: 0.5, D2: 0.9 } }
+    function testQ4(btn) {
+      // grader-style call: only the query; server generates the corpus from the email
+      return runTest(btn, 'res-q4', `${ORIGIN}/ga4/${encEmail()}/vector-search`, {
+        query_id: 'Q001',
+        query_vector: Array.from({ length: 100 }, (_, i) => Math.sin(i) * 0.1),
+        top_k: 10, rerank_top_n: 3,
+        filter: { department: 'finance' }
       });
     }
 
     async function testQ5(btn) {
-      const base = tenantBase();
-      const graph = await runTest(btn, 'result-q5', `${base}/extract-graph`, 'POST', {
-        chunk_id: "C001",
-        text: "LangChain was created by Harrison Chase. LangChain integrates with OpenAI."
+      const base = callBase();
+      const graph = await runTest(btn, 'res-q5', `${base}/extract-graph`, {
+        chunk_id: 'C001', text: 'LangChain was created by Harrison Chase. LangChain integrates with OpenAI.'
       });
       if (!graph) return;
-      const query = await runTest(btn, 'result-q5', `${base}/graph-query`, 'POST', {
-        question: "Who created the framework that integrates with OpenAI?",
-        graph
+      const query = await runTest(btn, 'res-q5', `${base}/graph-query`, {
+        question: 'Who created the framework that integrates with OpenAI?', graph
       });
-      const el = document.getElementById('result-q5');
-      el.textContent = 'extract-graph:\n' + JSON.stringify(graph, null, 2) + '\n\ngraph-query:\n' + JSON.stringify(query, null, 2);
+      document.getElementById('res-q5').textContent =
+        'extract-graph:\n' + JSON.stringify(graph, null, 2) + '\n\ngraph-query:\n' + JSON.stringify(query, null, 2);
     }
+
+    function toast(msg, isErr = false) {
+      const t = document.getElementById('toast');
+      t.textContent = msg;
+      t.style.background = isErr ? '#ef4444' : '#10b981';
+      t.classList.add('show');
+      setTimeout(() => t.classList.remove('show'), 2600);
+    }
+
+    // restore + init
+    document.getElementById('student-email').value = localStorage.getItem('ga4_email') || '';
+    document.getElementById('aipipe-token').value = localStorage.getItem('ga4_token') || '';
+    document.getElementById('student-email').addEventListener('input', refreshUrls);
+    document.getElementById('aipipe-token').addEventListener('input', refreshUrls);
+    refreshUrls();
   </script>
 </body>
 </html>
