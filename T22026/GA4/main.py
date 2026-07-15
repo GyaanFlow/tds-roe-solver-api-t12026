@@ -11,17 +11,32 @@ from T22026.GA4.shared.tenant import (
     build_ready_routes,
     build_solver_url_prefix,
     current_email,
+    current_token,
     get_tenant_config,
     normalize_email,
     set_tenant_config,
 )
 from T22026.GA4.solvers import (
+    aipipe_chat,  # noqa: F401  (re-exported for tests)
     community_summary,
+    community_summary_llm,
     extract_graph,
+    extract_graph_llm,
     graph_query,
+    graph_query_llm,
     grounded_answer,
+    grounded_answer_llm,
+    resolve_aipipe_token,
+    vector_search_from_dataset,
     vector_search_rerank,
 )
+
+
+def _tenant_token() -> str | None:
+    """Resolve the AIPipe token for the current request: request > stored config > env."""
+    email = current_email.get()
+    stored = get_tenant_config(email).get("aipipe_token")
+    return resolve_aipipe_token(current_token.get(), stored)
 
 logger = logging.getLogger("ga4_router")
 router = APIRouter()
@@ -67,6 +82,13 @@ def _as_str(value: Any) -> str:
     return "" if value is None else str(value)
 
 
+def _require_object_items(items: List[Any], field: str, required_keys: set[str]) -> None:
+    for item in items:
+        if not isinstance(item, dict) or not required_keys <= item.keys():
+            keys = ", ".join(sorted(required_keys))
+            raise ValueError(f"each item in '{field}' must be an object with {keys}")
+
+
 async def _run_solver(handler: Callable[[], Awaitable[T]], label: str) -> T | JSONResponse:
     email = current_email.get()
     start = time.time()
@@ -75,6 +97,10 @@ async def _run_solver(handler: Callable[[], Awaitable[T]], label: str) -> T | JS
         elapsed = time.time() - start
         logger.info("GA4 %s by %s completed in %.2fs", label, email, elapsed)
         return result
+    except HTTPException as exc:
+        elapsed = time.time() - start
+        logger.warning("GA4 %s HTTP error for %s after %.2fs: %s", label, email, elapsed, exc.detail)
+        return JSONResponse(status_code=exc.status_code, content={"error": str(exc.detail)})
     except (RuntimeError, ValueError, KeyError) as exc:
         elapsed = time.time() - start
         logger.warning("GA4 %s client error for %s after %.2fs: %s", label, email, elapsed, exc)
@@ -99,14 +125,22 @@ async def grounded_answer_endpoint(request: Request):
         for c in chunks:
             if not isinstance(c, dict) or "chunk_id" not in c:
                 raise ValueError("each item in 'chunks' must be an object with a 'chunk_id'")
+        token = _tenant_token()
+        if token:
+            try:
+                return await grounded_answer_llm(question, chunks, token)
+            except Exception as exc:  # noqa: BLE001 — fall back, never hard-fail grading
+                logger.warning("Q3 LLM failed, using heuristic fallback: %s", exc)
         return grounded_answer(question, chunks)
     return await _run_solver(_handle, "Q3")
 
 
 # ---------------------------------------------------------------------------
 # Q4: live Vector Search + Re-ranking API.
-# The grader posts documents/embeddings/reranker_scores inline with each
-# query so the endpoint is stateless across requests.
+# The grader posts ONLY the query (query_id, query_vector, filter, top_k,
+# rerank_top_n). The 500-doc corpus is generated in-memory per email (q4data.py),
+# reproducing the exact seeded dataset the student downloaded. Inline
+# documents/embeddings (e.g. from the dashboard tester) override the generated set.
 # ---------------------------------------------------------------------------
 @router.post("/vector-search")
 @router.post("/q4/vector-search")
@@ -114,18 +148,25 @@ async def grounded_answer_endpoint(request: Request):
 async def vector_search_endpoint(request: Request):
     async def _handle():
         body = await _read_json_body(request)
-        documents = _as_list(body.get("documents"), "documents")
-        embeddings = _as_dict(body.get("embeddings"), "embeddings")
-        reranker_scores = _as_dict(body.get("reranker_scores"), "reranker_scores")
-        if not documents or not embeddings:
-            raise ValueError("'documents' and 'embeddings' are required")
-        for d in documents:
-            if not isinstance(d, dict) or "doc_id" not in d:
-                raise ValueError("each item in 'documents' must be an object with a 'doc_id'")
         query_vector = body.get("query_vector")
         if not isinstance(query_vector, list):
             raise ValueError("'query_vector' must be a numeric array")
-        return vector_search_rerank(body, documents, embeddings, reranker_scores)
+
+        documents = _as_list(body.get("documents"), "documents")
+        embeddings = _as_dict(body.get("embeddings"), "embeddings")
+        reranker_scores = _as_dict(body.get("reranker_scores"), "reranker_scores")
+
+        if documents and embeddings:
+            # Explicit corpus supplied — use it as-is (dashboard/self-test path).
+            _require_object_items(documents, "documents", {"doc_id"})
+            for doc_id, vector in embeddings.items():
+                if not isinstance(doc_id, str) or not isinstance(vector, list):
+                    raise ValueError("'embeddings' must map doc_id strings to numeric arrays")
+            return vector_search_rerank(body, documents, embeddings, reranker_scores)
+
+        # Grader path: generate the student's corpus from the tenant email.
+        email = current_email.get()
+        return vector_search_from_dataset(body, email)
     return await _run_solver(_handle, "Q4")
 
 
@@ -143,6 +184,12 @@ async def extract_graph_endpoint(request: Request):
         text = _as_str(body.get("text"))
         if len(text) > MAX_EXTRACT_TEXT_CHARS:
             raise ValueError(f"'text' too long (max {MAX_EXTRACT_TEXT_CHARS} chars)")
+        token = _tenant_token()
+        if token:
+            try:
+                return await extract_graph_llm(text, token)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Q5 extract-graph LLM failed, using heuristic fallback: %s", exc)
         return extract_graph(text)
     return await _run_solver(_handle, "Q5/extract-graph")
 
@@ -156,6 +203,14 @@ async def graph_query_endpoint(request: Request):
         graph = _as_dict(body.get("graph"), "graph")
         graph["entities"] = _as_list(graph.get("entities"), "graph.entities")
         graph["relationships"] = _as_list(graph.get("relationships"), "graph.relationships")
+        _require_object_items(graph["entities"], "graph.entities", {"name"})
+        _require_object_items(graph["relationships"], "graph.relationships", {"source", "target", "relation"})
+        token = _tenant_token()
+        if token:
+            try:
+                return await graph_query_llm(question, graph, token)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Q5 graph-query LLM failed, using heuristic fallback: %s", exc)
         return graph_query(question, graph)
     return await _run_solver(_handle, "Q5/graph-query")
 
@@ -171,6 +226,12 @@ async def community_summary_endpoint(request: Request):
         for r in relationships:
             if not isinstance(r, dict) or not {"source", "target", "relation"} <= r.keys():
                 raise ValueError("each item in 'relationships' must have 'source', 'target', 'relation'")
+        token = _tenant_token()
+        if token:
+            try:
+                return await community_summary_llm(community_id, entities, relationships, token)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Q5 community-summary LLM failed, using heuristic fallback: %s", exc)
         return community_summary(community_id, entities, relationships)
     return await _run_solver(_handle, "Q5/community-summary")
 

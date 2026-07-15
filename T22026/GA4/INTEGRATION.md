@@ -14,8 +14,12 @@ This contract is **stable and additive-only**. Code your other solver against it
   - e.g. `https://<host>/ga4/23f1000805%40ds.study.iitm.ac.in`
   - The `<host>` is your Render or Hugging Face Space origin. Both behave identically.
 - **Method:** every functional endpoint is `POST` with `Content-Type: application/json`.
-- **No auth / no token needed.** These 3 questions are pure algorithms — unlike GA3, there is no
-  AI Pipe token or per-tenant config required. Any email works immediately and independently.
+- **AIPipe token required for Q3 & Q5.** These call an LLM (via AIPipe). Provide the token one of two ways:
+  1. **Env var (recommended):** set `AIPIPE_TOKEN=<your-key>` on Render (and the HF Space). Applies to every request.
+  2. **Onboard:** `POST /ga4/onboard {"email","aipipe_token"}` stores it for that email (lost on dyno restart — env var is more durable).
+  If no token is resolvable, Q3/Q5 fall back to a weak heuristic (won't pass grading). **Q4 needs no token.**
+- **Q4 is fully self-contained.** The server regenerates the student's seeded 500-doc corpus in-memory from
+  the email in the URL — no dataset upload, no token.
 - **CORS:** open (`Access-Control-Allow-Origin: *`); preflight `OPTIONS` returns `200`.
 - **Multi-tenant:** the `<email>` segment isolates callers but does not change behavior — the same
   input yields the same output for every email.
@@ -101,45 +105,39 @@ Two-stage retrieval: metadata filter → cosine top-k → re-rank via a lookup t
 **Route:** `POST /ga4/<email>/vector-search`
 (aliases: `/ga4/<email>/q4/vector-search`, `/ga4/<email>/q4`)
 
-> **Stateless design:** the corpus (`documents`, `embeddings`, `reranker_scores`) is sent **inline
-> with every request**, so the endpoint holds no server-side dataset. Post the parsed contents of the
-> question's ZIP alongside each query.
+> **Grader contract:** the grader posts **only the query** — no corpus. The server regenerates the
+> student's exact seeded 500-doc dataset (documents, 100-dim embeddings, per-query reranker scores)
+> in-memory from the email in the URL, using a verified Python port of the exam's JS `seedrandom`.
 
-### Request
+### Request (what the grader actually sends)
 ```json
 {
   "query_id": "Q001",
-  "query_vector": [0.9, 0.1],
-  "top_k": 3,
-  "rerank_top_n": 2,
+  "query_vector": [0.12, -0.45, 0.87, "... 100 floats total"],
+  "top_k": 10,
+  "rerank_top_n": 3,
   "filter": {
     "department": "finance",
     "year": {"gte": 2023},
     "region": {"in": ["north_america", "europe"]}
-  },
-  "documents": [
-    {"doc_id": "D1", "department": "finance", "year": 2024},
-    {"doc_id": "D2", "department": "finance", "year": 2023},
-    {"doc_id": "D3", "department": "hr", "year": 2024}
-  ],
-  "embeddings": {"D1": [1, 0], "D2": [0.9, 0.1], "D3": [1, 0]},
-  "reranker_scores": {"Q001": {"D1": 0.5, "D2": 0.9}}
+  }
 }
 ```
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `query_id` | string | Key into `reranker_scores` |
-| `query_vector` | number[] | **Required**, must be an array |
+| `query_id` | string | Selects the per-query reranker score table (`Q001`–`Q010`) |
+| `query_vector` | number[] | **Required**, 100-dim array |
 | `top_k` | int | Stage-1 candidates kept after cosine (default 10) |
 | `rerank_top_n` | int | Final results returned after re-rank (default 3) |
-| `filter` | object | Optional. Supports exact match, `{"gte":n}`, `{"lte":n}`, `{"in":[...]}` |
-| `documents` | object[] | **Required**, each needs `doc_id` |
-| `embeddings` | object | **Required**, `doc_id → number[]` |
-| `reranker_scores` | object | `query_id → {doc_id → score}` (optional; missing → score 0) |
+| `filter` | object | Optional. Exact match, `{"gte":n}`, `{"lte":n}`, `{"in":[...]}` |
 
 **Filter operators:** exact (`{"department":"finance"}`), `gte`, `lte`, `in`. Tie-break in both stages
-is by **lexicographically smaller `doc_id`**.
+is by **lexicographically smaller `doc_id`**. Missing rerank score sinks a doc to the bottom.
+
+> **Optional self-test override:** if you *do* include `documents` + `embeddings` (+ optional
+> `reranker_scores`) in the body, the endpoint uses that supplied corpus instead of the generated one.
+> This is only for your own testing — the grader never sends it.
 
 ### Response
 ```json

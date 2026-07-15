@@ -7,6 +7,10 @@ services:
     envVars:
       - key: CORS_ALLOW_ORIGINS
         value: "*"
+      # Required for GA4 Q3 & Q5 (AIPipe LLM calls). Set the value in the Render
+      # dashboard — sync:false keeps the secret out of the repo.
+      - key: AIPIPE_TOKEN
+        sync: false
       - key: Q10_CSV_PATH
         value: "/app/T22026/GA0/Q10/q-fastapi.csv"
       - key: Q14_OUTPUT_DIR

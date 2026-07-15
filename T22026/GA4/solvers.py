@@ -6,13 +6,95 @@ graded by calling a deployed endpoint (rather than by submitting a precomputed
 JSON blob): Q3 grounded-answer, Q4 vector-search + rerank, Q5 GraphRAG.
 """
 
+import hashlib
+import json
+import logging
 import math
+import os
 import re
 from collections import defaultdict, deque
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, List, Optional, Sequence
+
+logger = logging.getLogger("ga4_solvers")
 
 TOKEN_RE = re.compile(r"\b[a-z0-9]+\b")
 SENTENCE_SPLIT_RE = re.compile(r"[.!?]\s+")
+
+# ---------------------------------------------------------------------------
+# AIPipe LLM client (Q3 grounded QA + Q5 GraphRAG). Q4 needs no LLM.
+# ---------------------------------------------------------------------------
+AIPIPE_BASE = os.getenv("AIPIPE_BASE_URL", "https://aipipe.org/openai/v1")
+_LLM_CACHE: Dict[str, str] = {}
+
+
+def resolve_aipipe_token(request_token: Optional[str] = None, tenant_token: Optional[str] = None) -> Optional[str]:
+    """Precedence: explicit request token > stored tenant token > env fallback."""
+    return (
+        request_token
+        or tenant_token
+        or os.environ.get("AIPIPE_TOKEN")
+        or os.environ.get("AIPIPE_API_KEY")
+        or None
+    )
+
+
+def _cache_key(*parts: Any) -> str:
+    return hashlib.sha256("||".join(map(str, parts)).encode()).hexdigest()
+
+
+async def aipipe_chat(
+    messages: List[dict],
+    token: str,
+    model: str = "gpt-4o-mini",
+    max_tokens: int = 1000,
+    force_json: bool = True,
+    timeout: float = 30.0,
+    retries: int = 3,
+) -> str:
+    """Call AIPipe's OpenAI-compatible chat endpoint. Cached + retried."""
+    import asyncio
+
+    import httpx
+
+    key = _cache_key("chat", model, force_json, json.dumps(messages, sort_keys=True, default=str))
+    if key in _LLM_CACHE:
+        return _LLM_CACHE[key]
+
+    body: Dict[str, Any] = {"model": model, "messages": messages, "temperature": 0, "max_tokens": max_tokens}
+    if force_json:
+        body["response_format"] = {"type": "json_object"}
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+    last_err = None
+    async with httpx.AsyncClient(timeout=httpx.Timeout(timeout)) as client:
+        for attempt in range(retries):
+            try:
+                r = await client.post(f"{AIPIPE_BASE}/chat/completions", headers=headers, json=body)
+            except httpx.RequestError as exc:
+                last_err = f"network error: {exc}"
+                await asyncio.sleep(1.0 * (attempt + 1))
+                continue
+            if r.status_code in (429, 500, 502, 503, 504):
+                last_err = f"HTTP {r.status_code}: {r.text[:160]}"
+                await asyncio.sleep(1.2 * (attempt + 1))
+                continue
+            r.raise_for_status()
+            out = r.json()["choices"][0]["message"]["content"]
+            _LLM_CACHE[key] = out
+            return out
+    raise RuntimeError(f"AIPipe chat failed after {retries} retries: {last_err}")
+
+
+def parse_json_block(s: str) -> dict:
+    """Robustly parse a JSON object out of an LLM response (handles code fences)."""
+    s = (s or "").strip()
+    if s.startswith("```"):
+        s = re.sub(r"^```[a-z]*\n?|\n?```$", "", s).strip()
+    try:
+        return json.loads(s)
+    except Exception:
+        m = re.search(r"\{.*\}", s, re.DOTALL)
+        return json.loads(m.group(0)) if m else {}
 
 
 # ---------------------------------------------------------------------------
@@ -108,7 +190,8 @@ def vector_search_rerank(
     stage1 = [doc_id for doc_id, _ in scored[:top_k]]
 
     lookup = reranker_scores.get(query_id, {}) if query_id else {}
-    reranked = sorted(stage1, key=lambda doc_id: (-lookup.get(doc_id, 0.0), doc_id))
+    # Missing rerank score sinks the doc to the bottom (matches reference -999.0).
+    reranked = sorted(stage1, key=lambda doc_id: (-lookup.get(doc_id, -999.0), doc_id))
     return {"matches": reranked[:rerank_top_n]}
 
 
@@ -226,3 +309,86 @@ def community_summary(community_id: str, entities: List[str], relationships: Lis
     body = "; ".join(rel_sentences) if rel_sentences else f"a group of related entities: {', '.join(entities)}"
     summary = f"This community centers around {entities[0]}. It involves {body}."
     return {"community_id": community_id, "summary": summary}
+
+
+# ===========================================================================
+# LLM-backed implementations (preferred when an AIPipe token is available).
+# These match the exam grader's expectations far better than the regex/heuristic
+# versions above, which remain as offline fallbacks when no token is configured.
+# ===========================================================================
+async def grounded_answer_llm(question: str, chunks: List[Dict[str, str]], token: str) -> Dict[str, Any]:
+    prompt = (
+        "You are a highly reliable Grounded QA API for medical and legal compliance.\n"
+        "Answer the user's question strictly using ONLY the provided context chunks.\n"
+        "1. If the question CANNOT be answered from the chunks, return:\n"
+        '   answerable: false, answer: "I don\'t know" (exact match), citations: [], confidence: 0.1\n'
+        "2. If it CAN be answered, return:\n"
+        "   answerable: true, answer: <grounded answer>, citations: [<ONLY the chunk_ids you used>],\n"
+        "   confidence: <float 0.8-1.0>\n"
+        "NEVER use outside knowledge. Return strictly JSON with exactly these 4 keys.\n\n"
+        f"QUESTION:\n{question}\n\nCHUNKS:\n{json.dumps(chunks, indent=2)}"
+    )
+    out = parse_json_block(await aipipe_chat([{"role": "user", "content": prompt}], token, model="gpt-4o-mini", max_tokens=1000))
+    if not out.get("answerable", False) or float(out.get("confidence", 1.0)) <= 0.3:
+        return {"answer": "I don't know", "citations": [], "confidence": 0.1, "answerable": False}
+    valid_ids = {c.get("chunk_id") for c in chunks if isinstance(c, dict)}
+    cites = [c for c in out.get("citations", []) if c in valid_ids]
+    return {
+        "answer": out.get("answer", "I don't know"),
+        "citations": cites,
+        "confidence": float(out.get("confidence", 0.9)),
+        "answerable": True,
+    }
+
+
+async def extract_graph_llm(text: str, token: str) -> Dict[str, Any]:
+    prompt = (
+        "You are an expert GraphRAG Entity and Relationship extractor.\n"
+        "Extract entities and relationships from the provided text according to these EXACT rules:\n"
+        "Allowed Entity Types: Person, Organization, Product, Framework\n"
+        "Allowed Relationship Types: FOUNDED, DEVELOPED, INTEGRATED_INTO, HIRED, AUTHORED\n\n"
+        "Return strictly JSON in this format:\n"
+        '{"entities": [{"name": "Entity Name", "type": "AllowedType"}], '
+        '"relationships": [{"source": "Entity1", "target": "Entity2", "relation": "ALLOWED_RELATION"}]}\n\n'
+        f"TEXT:\n{text}"
+    )
+    out = parse_json_block(await aipipe_chat([{"role": "user", "content": prompt}], token, model="gpt-4o", max_tokens=1500))
+    return {"entities": out.get("entities", []), "relationships": out.get("relationships", [])}
+
+
+async def graph_query_llm(question: str, graph: Dict[str, Any], token: str) -> Dict[str, Any]:
+    prompt = (
+        "You are a GraphRAG multi-hop reasoning agent.\n"
+        "Given the knowledge graph (entities and relationships), answer the natural language question.\n"
+        "Determine the logical path through the graph to find the answer.\n"
+        "Return strictly JSON in this format:\n"
+        '{"answer": "Brief factual answer", "reasoning_path": ["Entity1", "Entity2", "Entity3"], "hops": 2}\n\n'
+        f"QUESTION:\n{question}\n\nGRAPH:\n{json.dumps(graph, indent=2)}"
+    )
+    out = parse_json_block(await aipipe_chat([{"role": "user", "content": prompt}], token, model="gpt-4o", max_tokens=1500))
+    path = out.get("reasoning_path", []) or []
+    return {"answer": out.get("answer", ""), "reasoning_path": path, "hops": len(path) - 1 if path else 0}
+
+
+async def community_summary_llm(community_id: str, entities: List[Any], relationships: List[dict], token: str) -> Dict[str, str]:
+    prompt = (
+        "You are a GraphRAG community summarizer. Summarize the following community of entities and relationships.\n"
+        "The summary should be a concise paragraph explaining how these entities are connected and their overall theme.\n"
+        "Return strictly JSON in this format:\n"
+        f'{{"community_id": "{community_id}", "summary": "Your summary here."}}\n\n'
+        f"ENTITIES:\n{json.dumps(entities, indent=2)}\n\nRELATIONSHIPS:\n{json.dumps(relationships, indent=2)}"
+    )
+    out = parse_json_block(await aipipe_chat([{"role": "user", "content": prompt}], token, model="gpt-4o", max_tokens=1500))
+    return {"community_id": community_id, "summary": out.get("summary", "")}
+
+
+# ---------------------------------------------------------------------------
+# Q4: in-memory dataset variant. The grader posts only the query; the corpus is
+# generated per-email (see q4data.py). Inline documents/embeddings (if supplied,
+# e.g. from the dashboard tester) take precedence over the generated corpus.
+# ---------------------------------------------------------------------------
+def vector_search_from_dataset(payload: Dict[str, Any], email: str) -> Dict[str, List[str]]:
+    from T22026.GA4.q4data import get_q4_dataset
+
+    documents, embeddings, reranker_scores = get_q4_dataset(email)
+    return vector_search_rerank(payload, documents, embeddings, reranker_scores)

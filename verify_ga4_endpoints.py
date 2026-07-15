@@ -67,6 +67,30 @@ def test_q4_vector_search_rerank():
     assert "D3" not in r.json()["matches"]  # filtered out by department
 
 
+def test_q4_grader_path_generates_corpus_from_email():
+    # The real grader posts ONLY the query (no documents/embeddings). The server
+    # must generate the student's seeded 500-doc corpus in-memory and not 400.
+    payload = {"query_id": "Q001", "query_vector": [0.1] * 100,
+               "top_k": 10, "rerank_top_n": 3, "filter": {"department": "finance"}}
+    r = client.post(f"{BASE}/vector-search", json=payload)
+    assert r.status_code == 200, r.text
+    matches = r.json()["matches"]
+    assert isinstance(matches, list) and len(matches) == 3
+    assert all(m.startswith("D") for m in matches)
+    # deterministic for the same email
+    r2 = client.post(f"{BASE}/vector-search", json=payload)
+    assert r2.json()["matches"] == matches
+
+
+def test_q4_seedrandom_matches_grader_values():
+    # Python seedrandom port must reproduce the exam's JS seedrandom output.
+    from T22026.GA4.q4data import seedrandom, _WE
+    email = "23f1000805@ds.study.iitm.ac.in"
+    dr = seedrandom(f"{_WE}#{email}#q4#doc#D001")
+    doc = [round(dr() * 2 - 1, 4) for _ in range(5)]
+    assert doc == [-0.0985, 0.062, -0.4543, 0.301, -0.4066]
+
+
 def test_q5_graphrag_pipeline():
     r = client.post(f"{BASE}/extract-graph", json={
         "chunk_id": "C001",
