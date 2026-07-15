@@ -19,8 +19,13 @@ from pydantic import BaseModel
 APP_NAME = "T22026 GA0 Q16 Move Rename Hash API"
 APP_VERSION = "1.0.0"
 MAX_ZIP_MB = int(os.getenv("MAX_ZIP_MB", "40"))
-WORK_ROOT = Path(os.getenv("Q16_WORK_ROOT", "work"))
-WORK_ROOT.mkdir(parents=True, exist_ok=True)
+WORK_ROOT = Path(os.getenv("Q16_WORK_ROOT", "/tmp/q16_work"))
+try:
+    WORK_ROOT.mkdir(parents=True, exist_ok=True)
+except Exception:
+    # Fallback for restricted/containerized filesystems (e.g. read-only HF Space FS).
+    WORK_ROOT = Path(tempfile.gettempdir()) / "q16_work"
+    WORK_ROOT.mkdir(parents=True, exist_ok=True)
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 DIGIT_MAP = str.maketrans({str(i): str((i + 1) % 10) for i in range(10)})
@@ -386,10 +391,21 @@ def _safe_extract(zf: zipfile.ZipFile, target: Path) -> None:
 
 def _flatten_files(extract_dir: Path, flat_dir: Path) -> int:
     moved = 0
+    seen: set[str] = set()
     for root, _, files in os.walk(extract_dir):
         for fname in files:
             src = Path(root) / fname
             dest = flat_dir / fname
+            if dest.exists():
+                base, ext = fname.rsplit(".", 1) if "." in fname else (fname, "")
+                idx = 1
+                while True:
+                    dedup_name = f"{base}_{idx}.{ext}" if ext else f"{base}_{idx}"
+                    dest = flat_dir / dedup_name
+                    if not dest.exists():
+                        break
+                    idx += 1
+            seen.add(dest.name)
             shutil.move(str(src), str(dest))
             moved += 1
     return moved

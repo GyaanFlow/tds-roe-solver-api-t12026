@@ -17,3 +17,7 @@ node_modules/
 # Graphify outputs (keep placeholders/tracked indexes if needed)
 context/graphify/tmp/
 context/graphify/cache/
+
+# Generated runtime artifacts (Q14 image outputs) — not app assets.
+# Kept out of git; HF Spaces rejects tracked binaries (Xet/LFS policy).
+output/

@@ -18,8 +18,13 @@ from pydantic import BaseModel
 APP_NAME = "T22026 GA0 Q19 Replace Across Files API"
 APP_VERSION = "1.0.0"
 MAX_ZIP_MB = int(os.getenv("MAX_ZIP_MB", "40"))
-WORK_ROOT = Path(os.getenv("Q19_WORK_ROOT", "work"))
-WORK_ROOT.mkdir(parents=True, exist_ok=True)
+WORK_ROOT = Path(os.getenv("Q19_WORK_ROOT", "/tmp/q19_work"))
+try:
+    WORK_ROOT.mkdir(parents=True, exist_ok=True)
+except Exception:
+    # Fallback for restricted/containerized filesystems (e.g. read-only HF Space FS).
+    WORK_ROOT = Path(tempfile.gettempdir()) / "q19_work"
+    WORK_ROOT.mkdir(parents=True, exist_ok=True)
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
@@ -318,37 +323,37 @@ Q19_UI = """<!doctype html>
         const j = await r.json();
         
         if (!r.ok) {
-          out.innerHTML = `<div class="error-card">❌ Error: \${j.detail || 'Failed to process files.'}</div>`;
+          out.innerHTML = `<div class="error-card">❌ Error: \\${j.detail || 'Failed to process files.'}</div>`;
           return;
         }
         
-        out.innerHTML = \`
+        out.innerHTML = \\`
           <div class="success-grid">
             <div class="result-tile">
               <span>REQUEST ID</span>
-              <strong>\${j.request_id}</strong>
+              <strong>\\${j.request_id}</strong>
             </div>
             <div class="result-tile">
               <span>EMAIL</span>
-              <strong>\${j.email}</strong>
+              <strong>\\${j.email}</strong>
             </div>
             <div class="result-tile">
               <span>FILES PROCESSED</span>
-              <strong>\${j.files_processed}</strong>
+              <strong>\\${j.files_processed}</strong>
             </div>
             <div class="result-tile">
               <span>FILES MODIFIED</span>
-              <strong>\${j.files_modified}</strong>
+              <strong>\\${j.files_modified}</strong>
             </div>
           </div>
           <div class="hash-card">
             <div class="hash-title">✅ SUBMIT THIS HASH FOR Q19</div>
-            <div class="hash-value" id="hash-text">\${j.sha256}</div>
+            <div class="hash-value" id="hash-text">\\${j.sha256}</div>
             <button class="copy-btn" onclick="copyHash()">📋 Copy Hash</button>
           </div>
-        \`;
+        \\`;
       } catch (err) {
-        out.innerHTML = `<div class="error-card">❌ Exception: \${err.message}</div>`;
+        out.innerHTML = `<div class="error-card">❌ Exception: \\${err.message}</div>`;
       }
     }
 

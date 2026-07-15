@@ -32,7 +32,7 @@ def create_ga3_session(email: str, token: str) -> str:
         GA3_SESSIONS[session_id] = {
             "email": normalize_email(email),
             "token": token,
-            "expires_at": now + 1800  # 30 minutes lifetime
+            "expires_at": now + 10800  # 3 hour lifetime (covers full exam session)
         }
     return session_id
 
@@ -46,8 +46,8 @@ def get_ga3_session_token(session_id: str) -> str | None:
             
         sess = GA3_SESSIONS.get(session_id)
         if sess:
-            # Touch / extend lifetime on use
-            sess["expires_at"] = now + 1800
+            # Touch / extend lifetime on use (rolling 3-hour window)
+            sess["expires_at"] = now + 10800
             return sess["token"]
     return None
 
@@ -75,6 +75,24 @@ def build_ready_routes(base_url: str, email: str) -> list[str]:
     prefix = build_solver_url_prefix(base_url, email)
     suffixes = GA3_API_ROUTE_SUFFIXES + GA3_SOLVER_ROUTE_SUFFIXES
     return [f"{prefix}{suffix}" for suffix in suffixes]
+
+
+def get_stored_token(email: str) -> str | None:
+    """Return the user's personal AIPipe token from stored config (ignoring JWT override)."""
+    email_key = normalize_email(email)
+    with _lock:
+        if email_key in _MEMORY_CONFIG:
+            return _MEMORY_CONFIG[email_key].get("aipipe_token")
+        if _CONFIG_FILE.exists():
+            try:
+                with open(_CONFIG_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                token = data.get(email_key, {}).get("aipipe_token")
+                _MEMORY_CONFIG[email_key] = dict(data.get(email_key, {}))
+                return token
+            except Exception:
+                pass
+    return None
 
 
 def get_tenant_config(email: str) -> dict:

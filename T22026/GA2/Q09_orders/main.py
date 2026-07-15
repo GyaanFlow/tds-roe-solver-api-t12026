@@ -28,6 +28,8 @@ router = APIRouter(tags=["Q09 Orders"])
 _store_lock       = threading.Lock()
 _idempotency: Dict[str, str]          = {}   # key -> order_id
 _rate_windows: Dict[str, List[float]] = {}   # client_id -> [timestamps]
+_IDEMPOTENCY_MAX = 10_000
+_RATE_WINDOW_MAX = 1_000
 
 
 def _cors(origin: str | None) -> dict:
@@ -39,9 +41,25 @@ def _cors(origin: str | None) -> dict:
     }
 
 
+def _evict_stale():
+    now = time.monotonic()
+    stale_clients = [c for c, ts in _rate_windows.items() if all(now - t >= 10.0 for t in ts)]
+    for c in stale_clients:
+        del _rate_windows[c]
+    if len(_idempotency) > _IDEMPOTENCY_MAX:
+        keys = sorted(_idempotency.keys())[:_IDEMPOTENCY_MAX // 2]
+        for k in keys:
+            del _idempotency[k]
+    if len(_rate_windows) > _RATE_WINDOW_MAX:
+        clients = sorted(_rate_windows.keys())[:_RATE_WINDOW_MAX // 2]
+        for c in clients:
+            del _rate_windows[c]
+
+
 def _check_rate(client_id: str, limit: int) -> bool:
     now = time.monotonic()
     with _store_lock:
+        _evict_stale()
         ts = _rate_windows.get(client_id, [])
         ts = [t for t in ts if now - t < 10.0]
         if len(ts) >= limit:

@@ -24,13 +24,26 @@ router = APIRouter(tags=["Q10 Middleware"])
 
 _store_lock  = threading.Lock()
 _windows: Dict[str, List[float]] = {}
+_WINDOW_MAX = 1_000
 
 EXAM_ORIGINS = {"https://exam.sanand.workers.dev", "https://sanand0.github.io"}
+
+
+def _evict_stale():
+    now = time.monotonic()
+    stale = [c for c, ts in _windows.items() if all(now - t >= 10.0 for t in ts)]
+    for c in stale:
+        del _windows[c]
+    if len(_windows) > _WINDOW_MAX:
+        clients = sorted(_windows.keys())[:_WINDOW_MAX // 2]
+        for c in clients:
+            del _windows[c]
 
 
 def _check_rate(client_id: str, bucket: int) -> bool:
     now = time.monotonic()
     with _store_lock:
+        _evict_stale()
         ts = _windows.get(client_id, [])
         ts = [t for t in ts if now - t < 10.0]
         if len(ts) >= bucket:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import os
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -16,12 +17,12 @@ APP_NAME = "T22026 GA0 Q14 Image Rebuild API"
 APP_VERSION = "1.0.0"
 GRID = 5
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "12"))
-OUTPUT_DIR = Path(os.getenv("Q14_OUTPUT_DIR", "output"))
+OUTPUT_DIR = Path(os.getenv("Q14_OUTPUT_DIR", "/tmp/q14_output"))
 try:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 except Exception:
-    # Fallback for restricted/containerized filesystems.
-    OUTPUT_DIR = Path("/tmp/q14_output")
+    # Fallback for restricted/containerized filesystems (e.g. read-only HF Space FS).
+    OUTPUT_DIR = Path(tempfile.gettempdir()) / "q14_output"
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 TILE_MAP: Dict[Tuple[int, int], Tuple[int, int]] = {
@@ -484,7 +485,7 @@ Q14_UI = """<!doctype html>
         
         // Show reconstructed image
         // Resolve absolute URL from the relative file path (works whether mounted or standalone)
-        const absBase = window.location.origin + window.location.pathname.replace(/\/$/, '') + '/';
+        const absBase = window.location.origin + window.location.pathname.replace(/\\/$/, '') + '/';
         const imgAbsUrl = absBase + data.png_url;
         reconImg.src = imgAbsUrl;
         dlBtn.href = imgAbsUrl;
@@ -571,6 +572,25 @@ def get_file(name: str):
     return FileResponse(path=str(path), media_type=media, filename=name)
 
 
+_last_cleanup = 0.0
+_CLEANUP_INTERVAL = 300.0
+_MAX_OUTPUT_FILES = 50
+
+
+def _cleanup_output_dir():
+    global _last_cleanup
+    now = time.time()
+    if now - _last_cleanup < _CLEANUP_INTERVAL:
+        return
+    _last_cleanup = now
+    try:
+        files = sorted(OUTPUT_DIR.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
+        for f in files[_MAX_OUTPUT_FILES:]:
+            f.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
 def _rebuild_grayscale(image: UploadFile) -> dict:
     if not image.filename:
         raise HTTPException(status_code=400, detail="Missing file name.")
@@ -596,6 +616,8 @@ def _rebuild_grayscale(image: UploadFile) -> dict:
     if webp is not None:
         webp_name = f"{rid}.webp"
         (OUTPUT_DIR / webp_name).write_bytes(webp)
+
+    _cleanup_output_dir()
 
     return {
         "request_id": rid,

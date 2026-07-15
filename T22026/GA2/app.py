@@ -43,7 +43,7 @@ async def _inject_tenant(request: Request, call_next):
     token = current_email.set(email)
     try:
         response = await call_next(request)
-        if "/q6/" in rewritten or rewritten.endswith("/q6"):
+        if "/q6/" in rewritten or rewritten == "/q6" or rewritten.endswith("/q6"):
             from T22026.GA2.Q06_observability.main import record_request
             req_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
             record_request(rewritten, req_id, response.status_code)

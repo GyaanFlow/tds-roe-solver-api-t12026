@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import threading
 from pathlib import Path
 from typing import List, Optional
 
@@ -19,6 +20,7 @@ _base_dir = Path(os.getenv("Q25_DATA_DIR", ""))
 if not _base_dir or not _base_dir.is_absolute():
     _base_dir = Path("/tmp") if Path("/tmp").exists() else Path(__file__).resolve().parent.parent
 TELEMETRY_FILE = _base_dir / "q-vercel-latency.json"
+_telemetry_lock = threading.Lock()
 
 
 class AnalyzeRequest(BaseModel):
@@ -197,8 +199,8 @@ def generate_telemetry(payload: dict) -> dict:
         raise HTTPException(status_code=400, detail="Email is required")
     data = generate_telemetry_for_email(email)
     
-    # Save the generated telemetry to our local file so it can be queried
-    TELEMETRY_FILE.write_text(json.dumps(data["telemetry"], indent=2), encoding="utf-8")
+    with _telemetry_lock:
+        TELEMETRY_FILE.write_text(json.dumps(data["telemetry"], indent=2), encoding="utf-8")
     
     return data
 
@@ -210,8 +212,8 @@ def upload_telemetry(file: UploadFile = File(...)) -> dict:
         if not isinstance(parsed, list):
             raise HTTPException(status_code=400, detail="Telemetry must be a JSON list of pings")
         
-        # Save to local file
-        TELEMETRY_FILE.write_text(json.dumps(parsed, indent=2), encoding="utf-8")
+        with _telemetry_lock:
+            TELEMETRY_FILE.write_text(json.dumps(parsed, indent=2), encoding="utf-8")
         return {"status": "success", "records": len(parsed)}
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid file: {e}")
@@ -224,10 +226,11 @@ def analyze(req: AnalyzeRequest) -> dict:
             detail="No telemetry data found. Please set your email in the UI or upload a telemetry file first."
         )
     
-    try:
-        pings = json.loads(TELEMETRY_FILE.read_text(encoding="utf-8"))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to read telemetry: {e}")
+    with _telemetry_lock:
+        try:
+            pings = json.loads(TELEMETRY_FILE.read_text(encoding="utf-8"))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to read telemetry: {e}")
     
     results = []
     for region in req.regions:

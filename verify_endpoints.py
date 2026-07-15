@@ -3,7 +3,7 @@ from hf_space.app import app
 
 client = TestClient(app)
 
-def test_endpoint(method, path, data=None, json_data=None, expected_status=200):
+def check_endpoint(method, path, data=None, json_data=None, expected_status=200):
     try:
         if method.upper() == "GET":
             resp = client.get(path, timeout=5)
@@ -27,17 +27,17 @@ def main():
     print("=== STARTING VERIFICATION TESTS ===")
     
     # 1. Main Hub
-    test_endpoint("GET", "/")
-    test_endpoint("GET", "/api/version")
+    check_endpoint("GET", "/")
+    check_endpoint("GET", "/api/version")
     
     # 2. Q5 Code Interpreter
-    test_endpoint("GET", "/q-code-interpreter-ai-analysis/health")
+    check_endpoint("GET", "/q-code-interpreter-ai-analysis/health")
     # Test execution with traceback line extraction
     code_interpreter_payload = {
         "code": "a = 5\nb = 0\nc = a / b\n",
         "aipipe_token": "" # optional
     }
-    resp = test_endpoint("POST", "/q-code-interpreter-ai-analysis/code-interpreter", json_data=code_interpreter_payload)
+    resp = check_endpoint("POST", "/q-code-interpreter-ai-analysis/code-interpreter", json_data=code_interpreter_payload)
     if resp:
         data = resp.json()
         print("Q5 error lines extracted:", data.get("error"))
@@ -48,8 +48,8 @@ def main():
             print("[FAIL] Q5 traceback line number extraction failed! Got:", data.get("error"))
 
     # 3. Q10 Student API
-    test_endpoint("GET", "/q-fastapi/health")
-    resp = test_endpoint("GET", "/q-fastapi/api?class=1A")
+    check_endpoint("GET", "/q-fastapi/health")
+    resp = check_endpoint("GET", "/q-fastapi/api?class=1A")
     if resp:
         data = resp.json()
         print(f"Q10 students returned: {len(data.get('students', []))}")
@@ -59,11 +59,11 @@ def main():
             print("[FAIL] Q10 student query returned 0 students!")
 
     # 4. Q11 Sentiment API
-    test_endpoint("GET", "/q-fastapi-sentiment-batch/health")
+    check_endpoint("GET", "/q-fastapi-sentiment-batch/health")
     sentiment_payload = {
         "sentences": ["I love this product", "This is terrible", "The table is brown"]
     }
-    resp = test_endpoint("POST", "/q-fastapi-sentiment-batch/sentiment", json_data=sentiment_payload)
+    resp = check_endpoint("POST", "/q-fastapi-sentiment-batch/sentiment", json_data=sentiment_payload)
     if resp:
         data = resp.json()
         results = {r["sentence"]: r["sentiment"] for r in data.get("results", [])}
@@ -74,25 +74,25 @@ def main():
             print("[FAIL] Q11 sentiment classification failed!")
 
     # 5. Q14 Image Grayscale
-    test_endpoint("GET", "/q-image-grayscale-rebuild/health")
+    check_endpoint("GET", "/q-image-grayscale-rebuild/health")
 
     # 6. Q16 Move/Rename Zip
-    test_endpoint("GET", "/q-move-rename-files/health")
+    check_endpoint("GET", "/q-move-rename-files/health")
 
     # 7. Q18 Ollama Proxy Helper
-    test_endpoint("GET", "/q-ollama/health")
+    check_endpoint("GET", "/q-ollama/health")
     setup_payload = {
         "email": "student@example.com",
         "ngrok_token": None
     }
-    resp = test_endpoint("POST", "/q-ollama/ga0/q18/setup", json_data=setup_payload)
+    resp = check_endpoint("POST", "/q-ollama/ga0/q18/setup", json_data=setup_payload)
     if resp:
         data = resp.json()
         session_id = data.get("session_id")
         print("Q18 setup returned session_id:", session_id)
         
         # Test proxy fallback version endpoint
-        resp_version = test_endpoint("GET", f"/q-ollama/session/{session_id}/api/version")
+        resp_version = check_endpoint("GET", f"/q-ollama/session/{session_id}/api/version")
         if resp_version:
             v_data = resp_version.json()
             x_email_header = resp_version.headers.get("x-email")
@@ -103,15 +103,15 @@ def main():
                 print("[FAIL] Q18 session version proxy/fallback failed!")
 
     # 8. Q25 Vercel Latency API
-    test_endpoint("GET", "/q-vercel-latency/health")
-    gen_resp = test_endpoint("POST", "/q-vercel-latency/generate-telemetry", json_data={"email": "student@example.com"})
+    check_endpoint("GET", "/q-vercel-latency/health")
+    gen_resp = check_endpoint("POST", "/q-vercel-latency/generate-telemetry", json_data={"email": "student@example.com"})
     if gen_resp:
         # Now run analyze
         analyze_payload = {
             "regions": ["apac", "emea"],
             "threshold_ms": 180.0
         }
-        analyze_resp = test_endpoint("POST", "/q-vercel-latency/api/latency", json_data=analyze_payload)
+        analyze_resp = check_endpoint("POST", "/q-vercel-latency/api/latency", json_data=analyze_payload)
         if analyze_resp:
             data = analyze_resp.json()
             print("Q25 analysis returned regions:", [r["region"] for r in data.get("regions", [])])

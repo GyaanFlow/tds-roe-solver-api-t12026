@@ -63,5 +63,5 @@ async def verify_token(req: VerifyRequest):
         return JSONResponse(status_code=401, content={"valid": False, "reason": "wrong_issuer"})
     except jwt.InvalidSignatureError:
         return JSONResponse(status_code=401, content={"valid": False, "reason": "invalid_signature"})
-    except Exception:
-        return JSONResponse(status_code=401, content={"valid": False})
+    except jwt.PyJWTError:
+        return JSONResponse(status_code=401, content={"valid": False, "reason": "invalid_token"})
