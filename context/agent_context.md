@@ -173,3 +173,33 @@ This file stores durable context across terms, graded assignments (GA), and ques
 - No new runtime deps (pure-Python cosine, not numpy). 18/18 tests pass. Pushed to GitHub + HF (squashed
   clean-tree commit to dodge the output/ binary-history that HF's Xet policy rejects).
 - **OUTSTANDING (user action)**: set `AIPIPE_TOKEN` env var on Render + HF Space for Q3/Q5 to grade correctly.
+
+### 2026-07-18 (GA5 Agent Safety/Infra Hub — Q2/Q3/Q4/Q5/Q6)
+- Reverse-engineered `exam-tds-2026-05-ga5.js` (11 questions, agentic-AI-safety/infra themed —
+  a very different shape from GA4's RAG focus). Full question map saved in conversation/agent notes:
+  Q1 maze (offline BFS, no API), Q2 proration, Q3 tool guardrail, Q4 skill scanner, Q5 budget/loop
+  guard, Q6 live MCP server, Q7 LXD sandbox (manual infra, not automatable), Q8 guardrail red-team
+  (extends Q3 + must execute real tool calls), Q9/Q10/Q11 durable stateful AI agents (mailroom,
+  A2A invoice, incident-response+OTLP) — each needs its own persistent store, out of scope for now.
+- Built `T22026/GA5/` mirroring GA4's architecture exactly (`app.py`, `main.py`, `solvers.py`,
+  `dashboard.py`, `shared/tenant.py`, `seedgen.py`) for the 5 tractable questions: Q2, Q3, Q5, Q6
+  (pure deterministic policy engines, **no AIPipe token needed at all**) and Q4 (heuristic regex
+  scanner, optional LLM upgrade via per-caller token in the URL — same no-owner-cost model as GA4).
+- **Critical correctness step**: Q3 and Q5's policies (secret file / write dir / allowed hosts for
+  Q3; token budget / tracing-field-to-ignore / tool pair for Q5) are seeded per-student from the
+  exam's JS `seedrandom`. Ported the exact ARC4 PRNG + seed string `${email}#${questionId}#${version}`
+  (unconditional trailing `#` when version is empty) to Python in `seedgen.py`, and verified it
+  byte-identical against the real Node `seedrandom` package for both questions before writing any
+  policy logic — same rigor as GA4's Q4 dataset port.
+- Verified every solver against the exam's own worked examples and stated probe categories: Q3
+  (direct/tilde/`$HOME`/traversal/base64-wrapped secret reads all blocked; unrelated reads, in-bounds
+  writes, allowed hosts stay allowed; traversal-escape writes and domain-confusion hosts blocked);
+  Q5 (exact budget-halt worked example reason string matches; 2x-repeat must NOT halt but 3x must;
+  cosmetic JSON-key-reorder/whitespace/tracing-id diffs still count as a repeat; 6-step A/B cycle
+  halts; non-consecutive decoy repeats and empty history don't); Q6 (JSON-RPC handshake, header-based
+  challenge hashing — confirmed the exam's own "8f4a2c6e1b90d735" example is explicitly fake/illustrative,
+  not a real test vector, by recomputing the stated formula by hand).
+- Mounted `/ga5/{email}/...` in `hf_space/app.py` (regex, known-prefixes, CORS bypass, session-token
+  branch, cyan "GA5 Agent Safety/Infra Hub" homepage card) — identical wiring pattern to GA4.
+- `verify_ga5_endpoints.py` (7 tests) passes alongside the existing 18 GA2/3/4 tests — 25 total.
+  Also probed null/malformed inputs across every GA5 endpoint (no 500s).

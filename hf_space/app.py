@@ -45,7 +45,7 @@ class MultiTenantASGIMiddleware:
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http":
             path = scope.get("path", "")
-            match = re.match(r"^/(ga2|ga3|ga4)/([^/]+@[^/]+)(/.*)?$", path)
+            match = re.match(r"^/(ga2|ga3|ga4|ga5)/([^/]+@[^/]+)(/.*)?$", path)
             if match:
                 ga_version = match.group(1)
                 email = match.group(2).strip()
@@ -57,12 +57,15 @@ class MultiTenantASGIMiddleware:
                     "q1", "q2", "q3", "q4", "q5", "q6", "q7", "q8", "q9", "q10", "q11", "q12", "q13",
                     "solve", "health", "onboard", "status", "config", "docs", "redoc", "cache-stats",
                     "answer-image", "extract", "dynamic-extract", "answer-audio", "rank",
-                    "grounded-answer", "vector-search", "extract-graph", "graph-query", "community-summary"
+                    "grounded-answer", "vector-search", "extract-graph", "graph-query", "community-summary",
+                    "proration", "guardrail", "skill-scan", "budget-guard", "mcp"
                 }
                 if parts and (parts[0].startswith("sess_") or parts[0] not in known_prefixes):
                     possible_session_or_token = parts[0]
                     if ga_version == "ga4":
                         from T22026.GA4.shared.tenant import get_ga4_session_token as _get_session_token
+                    elif ga_version == "ga5":
+                        from T22026.GA5.shared.tenant import get_ga5_session_token as _get_session_token
                     else:
                         from T22026.GA3.shared.tenant import get_ga3_session_token as _get_session_token
                     resolved = _get_session_token(possible_session_or_token)
@@ -84,7 +87,7 @@ class ConditionalCORSMiddleware(CORSMiddleware):
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http":
             path = scope.get("path", "")
-            if path.startswith("/ga2") or path.startswith("/ga3") or path.startswith("/ga4"):
+            if path.startswith("/ga2") or path.startswith("/ga3") or path.startswith("/ga4") or path.startswith("/ga5"):
                 await self.app(scope, receive, send)
                 return
         await super().__call__(scope, receive, send)
@@ -135,6 +138,8 @@ def home() -> str:
       --orange-border: rgba(251,146,60,0.25);
       --purple: #c084fc;
       --purple-border: rgba(192,132,252,0.25);
+      --cyan: #38bdf8;
+      --cyan-border: rgba(56,189,248,0.25);
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -203,11 +208,15 @@ def home() -> str:
     .hub-card.ga4 { border-color: var(--purple-border); }
     .hub-card.ga4:hover { border-color: var(--purple); box-shadow: 0 15px 35px rgba(192,132,252,0.12); }
 
+    .hub-card.ga5 { border-color: var(--cyan-border); }
+    .hub-card.ga5:hover { border-color: var(--cyan); box-shadow: 0 15px 35px rgba(56,189,248,0.12); }
+
     .hub-meta { font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 12px; }
     .hub-meta.c-ga3 { color: var(--orange); }
     .hub-meta.c-ga2 { color: var(--green); }
     .hub-meta.c-ga0 { color: var(--accent); }
     .hub-meta.c-ga4 { color: var(--purple); }
+    .hub-meta.c-ga5 { color: var(--cyan); }
     
     .hub-title { font-size: 1.35rem; font-weight: 700; color: #ffffff; margin-bottom: 10px; }
     .hub-desc { font-size: 0.9rem; color: var(--muted); line-height: 1.6; margin-bottom: 24px; flex-grow: 1; }
@@ -226,6 +235,7 @@ def home() -> str:
     .btn.b-ga2 { background: var(--green); }
     .btn.b-ga0 { background: var(--accent); color: #ffffff; }
     .btn.b-ga4 { background: var(--purple); }
+    .btn.b-ga5 { background: var(--cyan); }
     
     .btn-secondary {
       background: rgba(255,255,255,.05); color: var(--text);
@@ -273,6 +283,19 @@ def home() -> str:
       <div class="btn-stack">
         <a href="/ga3/" class="btn b-ga3">Open GA3 Dashboard</a>
         <a href="/ga3/docs" class="btn btn-secondary">API Reference</a>
+      </div>
+    </div>
+
+    <!-- GA5 -->
+    <div class="hub-card ga5">
+      <div>
+        <div class="hub-meta c-ga5">Graded Assignment 5</div>
+        <div class="hub-title">GA5 Agent Safety/Infra Hub</div>
+        <div class="hub-desc">5 GA5 questions with live API URLs: proration billing fix, pre-tool-call guardrail, skill safety audit, run budget/loop guard, and a real MCP server — all seeded per student email, no shared cost.</div>
+      </div>
+      <div class="btn-stack">
+        <a href="/ga5/" class="btn b-ga5">Open GA5 Dashboard</a>
+        <a href="/ga5/docs" class="btn btn-secondary">API Reference</a>
       </div>
     </div>
 
@@ -358,3 +381,7 @@ app.mount("/ga3", ga3)
 # Mount GA4 Multi-Tenant Service Hub
 ga4 = load_app("ga4_app", BASE / "T22026" / "GA4" / "app.py")
 app.mount("/ga4", ga4)
+
+# Mount GA5 Multi-Tenant Service Hub
+ga5 = load_app("ga5_app", BASE / "T22026" / "GA5" / "app.py")
+app.mount("/ga5", ga5)
