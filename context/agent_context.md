@@ -229,3 +229,32 @@ This file stores durable context across terms, graded assignments (GA), and ques
   `skill-scan`, `budget-guard`, `mcp` when I first wired GA5 up — caught immediately via a
   live smoke test (405s) rather than shipping it. All now present.
 - `verify_ga5_endpoints.py` grew to 8 tests (was 7); 26/26 total across the whole project.
+
+### 2026-07-18 (GA5 Tier 3, part 1 — Q9 Mailroom Action Gate)
+- Added Q9 to the GA5 hub: a durable, idempotent two-phase (`propose`/`commit`) AI agent —
+  the first "stateful durable agent" question built (Q10/Q11 share this shape and can reuse
+  the template). Requires an AIPipe token (embedded in URL, same as Q4) since dossier triage
+  into 1-of-6 typed actions is a genuine semantic judgment call, not something deterministic.
+- `T22026/GA5/mailroom.py`: canonical-JSON + SHA-256 digest helpers (`inputDigest` over
+  recursively key-sorted compact JSON of `dossiers`; `proposalDigest` over the frozen
+  dossierId/callId/action/target/payload/evidence view) exactly matching the spec's wording;
+  exact frozen target/payload key-sets for all 6 actions (create_draft, update_internal_record,
+  send_approved_notice, request_confirmation, quarantine_item, no_action) with a validator;
+  a file-based per-tenant durable store (dossier-content-fingerprint cache for stable-core
+  reuse across evaluations + per-evaluation propose/commit record for idempotency).
+- **Found and fixed a real logic bug before shipping**: a second `commit()` call for an
+  already-committed evaluation was returning the cached response *unconditionally* — meaning
+  a tampered/forged receipt submitted after a legitimate commit would silently "succeed"
+  without re-validation. Fixed by storing a digest of the original receipts and only treating
+  a second commit as a valid replay when the receipts are byte-identical; anything else is
+  now a 409 conflict (the record is terminal/immutable once committed). Caught this via a
+  deliberate mocked-LLM protocol test before it ever reached a live endpoint.
+- Verified deterministically (LLM mocked, since the protocol/persistence logic is what's
+  actually testable without a real model): exact propose replay, 409 on same-evaluationId
+  changed-content, 422 on empty/duplicate/malformed dossiers, commit executed-vs-rejected per
+  receipt.accepted, commit replay, 400 on tampered proposalDigest, 404 on unknown evaluationId,
+  409 on a differing receipt set post-commit.
+- **Same known_prefixes class of bug, caught proactively this time**: added `"mailroom"` to
+  `hf_space/app.py`'s allowlist *before* the first live smoke test (habit formed from the two
+  earlier incidents), rather than discovering it via a 405 afterward.
+- `verify_ga5_endpoints.py` grew to 9 tests (was 8); 27/27 total across the whole project.

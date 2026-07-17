@@ -27,6 +27,7 @@ from T22026.GA5.solvers import (
     solve_proration,
 )
 from T22026.GA4.solvers import resolve_aipipe_token
+from T22026.GA5 import mailroom
 
 logger = logging.getLogger("ga5_router")
 router = APIRouter()
@@ -194,6 +195,29 @@ async def mcp_endpoint(request: Request):
             return Response(status_code=202)
         return response
     return await _run_solver(_handle, "Q6")
+
+
+# ---------------------------------------------------------------------------
+# Q9: Lethal-Trifecta Mailroom Action Gate (durable propose/commit AI agent).
+# Single endpoint dispatching on body["operation"].
+# ---------------------------------------------------------------------------
+@router.post("/mailroom")
+@router.post("/q9")
+async def mailroom_endpoint(request: Request):
+    async def _handle():
+        body = await _read_json_body(request)
+        operation = body.get("operation")
+        email = current_email.get()
+        try:
+            if operation == "propose":
+                token = _tenant_token()
+                return await mailroom.propose(body, email, token)
+            if operation == "commit":
+                return await mailroom.commit(body, email)
+            raise mailroom.MailroomError(400, "'operation' must be 'propose' or 'commit'")
+        except mailroom.MailroomError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
+    return await _run_solver(_handle, "Q9")
 
 
 # ---------------------------------------------------------------------------

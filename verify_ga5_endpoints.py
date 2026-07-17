@@ -1,18 +1,33 @@
 """Smoke tests for the GA5 agent-safety/infra hub, mounted at /ga5/{email}/...
 
-Covers the 5 GA5 questions implemented as live endpoints: Q2 (proration), Q3
+Covers the GA5 questions implemented as live endpoints: Q2 (proration), Q3
 (pre-tool-call guardrail), Q4 (skill safety audit), Q5 (budget/loop guard),
-Q6 (MCP server). All are deterministic and seeded per-student email except Q4,
-which optionally upgrades to an LLM pass with a caller-supplied AIPipe token.
+Q6 (MCP server), Q8 (guardrail red-team, real execution), Q9 (durable mailroom
+action gate). All are deterministic and seeded per-student email except Q4 and
+Q9, which call an LLM using a caller-supplied AIPipe token (Q9's triage is
+mocked here to keep the test suite network-free and deterministic).
 """
 
 from fastapi.testclient import TestClient
 
+import T22026.GA5.mailroom as mailroom
 from hf_space.app import app
 
 client = TestClient(app)
 EMAIL = "23f1000805@ds.study.iitm.ac.in"
 BASE = f"/ga5/{EMAIL}"
+
+
+async def _fake_triage(dossier, token):
+    call_id = mailroom.call_id_for(dossier["dossierId"], mailroom.dossier_fingerprint(dossier))
+    return {
+        "dossierId": dossier["dossierId"], "callId": call_id, "action": "no_action",
+        "target": None, "payload": {"reasonCode": "INFORMATIONAL", "referenceId": dossier["dossierId"]},
+        "evidence": [],
+    }
+
+
+mailroom.triage_dossier_llm = _fake_triage  # module-level patch: main.py calls mailroom.propose -> mailroom.triage_dossier_llm
 
 
 def test_health():
@@ -28,7 +43,7 @@ def test_onboard_and_status():
 
     r = client.get(f"{BASE}/status")
     assert r.status_code == 200
-    assert len(r.json()["ready_routes"]) == 6
+    assert len(r.json()["ready_routes"]) == 7
 
 
 def test_q2_proration():
@@ -213,6 +228,78 @@ def test_q8_guardrail_redteam_executes_real_calls():
     assert r.json()["action"] == "block"
     r = client.post(f"{BASE}/guardrail-redteam", json={"tool": "fetch_url", "arguments": {"url": "http://127.0.0.1/"}})
     assert r.json()["action"] == "block"
+
+
+def _mailroom_dossier(dossier_id: str) -> dict:
+    return {
+        "dossierId": dossier_id, "partition": "stable_core", "receivedAt": "2026-01-01T00:00:00Z",
+        "mailbox": "support@example.com", "objective": "test",
+        "sources": [{"sourceId": "S1", "kind": "email", "provenance": "customer", "title": "t",
+                     "lines": [{"lineId": "L1", "text": "hello"}]}],
+    }
+
+
+def test_q9_mailroom_propose_commit_lifecycle():
+    mailroom.MailroomStore(EMAIL).path.unlink(missing_ok=True)
+    token_base = f"/ga5/{EMAIL}/faketoken"
+    eval_id = "TEST_EVAL_" + EMAIL
+
+    propose_body = {
+        "profile": mailroom.PROFILE, "operation": "propose", "evaluationId": eval_id,
+        "corpus": {"coreId": "c", "auditId": "a", "stableCount": 1, "freshCount": 0},
+        "allowedActions": list(mailroom.ALLOWED_ACTIONS),
+        "dossiers": [_mailroom_dossier("MD1")],
+    }
+
+    # no token -> clean 400, not a crash
+    r = client.post(f"/ga5/{EMAIL}/mailroom", json={**propose_body, "evaluationId": eval_id + "-notoken"})
+    assert r.status_code == 400
+
+    # propose with token -> one proposal, valid schema
+    r1 = client.post(f"{token_base}/mailroom", json=propose_body)
+    assert r1.status_code == 200, r1.text
+    body1 = r1.json()
+    assert body1["status"] == "awaiting_receipts"
+    assert len(body1["proposals"]) == 1
+    proposal = body1["proposals"][0]
+    ok, reason = mailroom.validate_proposal_shape(proposal["action"], proposal["target"], proposal["payload"])
+    assert ok, reason
+
+    # exact replay -> byte-identical, no re-run
+    r2 = client.post(f"{token_base}/mailroom", json=propose_body)
+    assert r2.json() == body1
+
+    # same evaluationId, different content -> 409
+    r3 = client.post(f"{token_base}/mailroom", json={**propose_body, "dossiers": [_mailroom_dossier("MD2")]})
+    assert r3.status_code == 409
+
+    # commit with a valid receipt -> executed
+    receipt = {
+        "dossierId": proposal["dossierId"], "callId": proposal["callId"], "action": proposal["action"],
+        "accepted": True, "proposalDigest": mailroom.compute_proposal_digest(proposal), "receiptId": "R1",
+    }
+    commit_body = {"profile": mailroom.PROFILE, "operation": "commit", "evaluationId": eval_id,
+                   "inputDigest": body1["inputDigest"], "receipts": [receipt]}
+    r4 = client.post(f"{token_base}/mailroom", json=commit_body)
+    assert r4.status_code == 200
+    assert r4.json()["outcomes"][0]["status"] == "executed"
+
+    # commit replay -> identical
+    r5 = client.post(f"{token_base}/mailroom", json=commit_body)
+    assert r5.json() == r4.json()
+
+    # tampered receipt after a legitimate commit -> rejected as a conflict
+    tampered = {**receipt, "proposalDigest": "deadbeef"}
+    r6 = client.post(f"{token_base}/mailroom", json={**commit_body, "receipts": [tampered]})
+    assert r6.status_code == 409
+
+    # unknown evaluationId on commit -> 404
+    r7 = client.post(f"{token_base}/mailroom", json={**commit_body, "evaluationId": "NEVER_PROPOSED"})
+    assert r7.status_code == 404
+
+    # malformed operation -> 400
+    r8 = client.post(f"{token_base}/mailroom", json={"profile": mailroom.PROFILE, "operation": "bogus"})
+    assert r8.status_code == 400
 
 
 if __name__ == "__main__":

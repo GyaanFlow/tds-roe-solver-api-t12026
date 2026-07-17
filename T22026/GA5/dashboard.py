@@ -65,7 +65,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <body>
   <div class="hero">
     <h1>GA5 — Agent Safety/Infra API Hub</h1>
-    <p>6 GA5 questions graded by calling a live API URL: proration billing, a pre-tool-call guardrail, a skill-safety scanner, a run-budget/loop guard, a real MCP server, and a guardrail that actually executes red-teamed tool calls. Only Q4 uses your own AIPipe token (embedded in the URL) — the owner never pays.</p>
+    <p>7 GA5 questions graded by calling a live API URL: proration billing, a pre-tool-call guardrail, a skill-safety scanner, a run-budget/loop guard, a real MCP server, a guardrail that actually executes red-teamed tool calls, and a durable mailroom action-gate agent. Q4 and Q9 use your own AIPipe token (embedded in the URL) — the owner never pays.</p>
   </div>
 
   <div class="wrap">
@@ -77,7 +77,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         <input type="password" id="aipipe-token" placeholder="aipipe.org API key (optional — improves Q4 accuracy)" autocomplete="off" />
         <button class="btn" onclick="generateUrls()">Generate URLs</button>
       </div>
-      <p class="hint">Q2, Q3, Q5, Q6, Q8 need no token — they're pure deterministic policy engines, per-student seeded from your email. Q4 works without a token (heuristic scan) but is more accurate with one embedded in the URL.</p>
+      <p class="hint">Q2, Q3, Q5, Q6, Q8 need no token — they're pure deterministic policy engines, per-student seeded from your email. Q4 works without a token (heuristic scan) but is more accurate with one embedded in the URL. Q9 requires a token — it triages dossiers with an LLM.</p>
     </div>
 
     <div class="grid">
@@ -152,6 +152,18 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         </div>
         <pre class="result" id="res-q8"></pre>
       </div>
+
+      <!-- Q9 -->
+      <div class="q-card">
+        <div class="q-head"><span class="q-badge">Q9</span><span class="q-title">Mailroom Action Gate</span><span class="q-type type-llm">token required</span></div>
+        <p class="q-desc">Durable propose/commit AI agent: triages dossiers into one of 6 typed actions, persists proposals, executes only receipt-approved ones.</p>
+        <div class="mono" id="url-q9" data-copy="">Enter email + token above…</div>
+        <div class="row">
+          <button class="btn-sec" onclick="copyUrl('url-q9')">Copy submit URL</button>
+          <button class="btn-test" onclick="testQ9(this)">Run test</button>
+        </div>
+        <pre class="result" id="res-q9"></pre>
+      </div>
     </div>
 
     <p class="hint" style="margin-top:1.4rem;">
@@ -186,6 +198,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       setUrl('url-q5', `${ORIGIN}/ga5/${enc}/budget-guard`);
       setUrl('url-q6', `${ORIGIN}/ga5/${enc}/mcp`);
       setUrl('url-q8', `${ORIGIN}/ga5/${enc}/guardrail-redteam`);
+      setUrl('url-q9', `${ORIGIN}/ga5/${enc}${tokSeg}/mailroom`);
     }
     function setUrl(id, url) {
       const el = document.getElementById(id);
@@ -274,6 +287,33 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       await runTest(btn, 'res-q8', path, { tool: 'read_file', arguments: { path: '/etc/passwd' } });
       const result = await runTest(btn, 'res-q8', path, { tool: 'fetch_url', arguments: { url: 'https://example.com/' } });
       document.getElementById('res-q8').textContent = 'fetch_url (allowed host) result:\n' + JSON.stringify(result, null, 2);
+    }
+
+    async function testQ9(btn) {
+      if (!tokenVal()) { toast('Q9 needs an AIPipe token to triage dossiers.', true); return; }
+      const path = callBase() + '/mailroom';
+      const evalId = 'dashboard-test-' + Date.now();
+      const propose = await runTest(btn, 'res-q9', path, {
+        profile: 'ga5-mailroom-action-gate/v2', operation: 'propose', evaluationId: evalId,
+        corpus: { coreId: 'c', auditId: 'a', stableCount: 1, freshCount: 0 },
+        allowedActions: ['create_draft','update_internal_record','send_approved_notice','request_confirmation','quarantine_item','no_action'],
+        dossiers: [{
+          dossierId: 'DEMO1', partition: 'stable_core', receivedAt: new Date().toISOString(),
+          mailbox: 'support@example.com', objective: 'Duplicate order status request',
+          sources: [{ sourceId: 'S1', kind: 'email', provenance: 'customer', title: 'Order status',
+            lines: [{ lineId: 'L1', text: 'This is a duplicate of ticket #4821, already resolved yesterday.' }] }]
+        }]
+      });
+      if (!propose || !propose.proposals) { return; }
+      const p = propose.proposals[0];
+      const commitResult = await runTest(btn, 'res-q9', path, {
+        profile: 'ga5-mailroom-action-gate/v2', operation: 'commit', evaluationId: evalId, inputDigest: propose.inputDigest,
+        receipts: [{ dossierId: p.dossierId, callId: p.callId, action: p.action, accepted: true,
+          proposalDigest: 'CLIENT_CANNOT_COMPUTE_SHA256_HERE', receiptId: 'demo-receipt' }]
+      });
+      document.getElementById('res-q9').textContent =
+        'propose:\n' + JSON.stringify(propose, null, 2) +
+        '\n\ncommit (expected to fail: this demo can\'t compute the real SHA-256 proposalDigest client-side):\n' + JSON.stringify(commitResult, null, 2);
     }
 
     function toast(msg, isErr = false) {

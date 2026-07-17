@@ -1,10 +1,11 @@
 # GA5 Live API — Integration Spec
 
-Fixed request/response contract for the 6 GA5 questions implemented as live API endpoints
+Fixed request/response contract for the 7 GA5 questions implemented as live API endpoints
 (Q2 proration, Q3 pre-tool-call guardrail, Q4 skill safety audit, Q5 budget/loop guard,
-Q6 MCP server, Q8 guardrail red-team). The remaining GA5 questions (Q1 maze, Q7 LXD sandbox,
-Q9/Q10/Q11 durable agents) are out of scope for this hub — Q1 is pure offline compute for
-your other solver, Q7 is manual infrastructure work, and Q9-11 need dedicated stateful services.
+Q6 MCP server, Q8 guardrail red-team, Q9 mailroom action gate). The remaining GA5 questions
+(Q1 maze, Q7 LXD sandbox, Q10/Q11 durable agents) are out of scope for this hub — Q1 is pure
+offline compute for your other solver, Q7 is manual infrastructure work, and Q10/Q11 each
+need their own dedicated stateful service (same shape as Q9, not yet built).
 
 This contract is **stable and additive-only**.
 
@@ -37,7 +38,8 @@ This contract is **stable and additive-only**.
     "https://<host>/ga5/me%40x.com/skill-scan",
     "https://<host>/ga5/me%40x.com/budget-guard",
     "https://<host>/ga5/me%40x.com/mcp",
-    "https://<host>/ga5/me%40x.com/guardrail-redteam"
+    "https://<host>/ga5/me%40x.com/guardrail-redteam",
+    "https://<host>/ga5/me%40x.com/mailroom"
   ],
   "session_id": null
 }
@@ -203,7 +205,73 @@ body (truncated to 4000 chars for `fetch_url`).
 
 ---
 
-## 8. Quick client snippet
+## 8. Q9 — Lethal-Trifecta Mailroom Action Gate
+
+A durable, idempotent two-phase agent. **Requires an AIPipe token** (embedded in the URL
+path, same as Q4) — dossier triage is a genuine semantic judgment call, so it uses an LLM.
+
+**Route:** `POST /ga5/<email>/<YOUR_AIPIPE_TOKEN>/mailroom` (alias `/q9`) — single endpoint,
+dispatches on `"operation"`.
+
+### Phase 1 — `propose`
+```json
+{
+  "profile": "ga5-mailroom-action-gate/v2",
+  "operation": "propose",
+  "evaluationId": "opaque id",
+  "corpus": {"coreId": "...", "auditId": "...", "stableCount": 64, "freshCount": 3},
+  "allowedActions": ["create_draft","update_internal_record","send_approved_notice","request_confirmation","quarantine_item","no_action"],
+  "dossiers": [{"dossierId":"...","partition":"stable_core","receivedAt":"...","mailbox":"...","objective":"...",
+                "sources":[{"sourceId":"...","kind":"...","provenance":"...","title":"...","lines":[{"lineId":"...","text":"..."}]}]}]
+}
+```
+Response:
+```json
+{
+  "profile": "ga5-mailroom-action-gate/v2", "evaluationId": "...", "status": "awaiting_receipts",
+  "inputDigest": "sha256 hex over recursively key-sorted compact JSON of `dossiers`",
+  "proposals": [{"dossierId":"...","callId":"...","action":"...","target":{"kind":"...","id":"..."}|null,
+                 "payload":{"...":"..."},"evidence":["lineId",...]}]
+}
+```
+- Exactly one proposal per dossier, unique `callId`s, target/payload keys are **exact** per
+  the frozen schema for each of the 6 actions (see `T22026/GA5/mailroom.py::_ACTION_SCHEMAS`).
+- **Idempotent**: replaying the exact same `evaluationId` + `dossiers` returns the
+  byte-identical cached response — no re-triage. The same `evaluationId` with *different*
+  content → **HTTP 409**.
+- **Stable-core reuse**: proposals are cached by `(dossierId, content fingerprint)`, so
+  identical dossier content across different evaluations reuses the cached decision —
+  only genuinely new/changed dossiers trigger an LLM call.
+- Malformed schema (missing `dossierId`, duplicate `dossierId`s, empty `dossiers`, wrong
+  `profile`) → **400/422**, before any AI work.
+
+### Phase 2 — `commit`
+```json
+{
+  "profile": "ga5-mailroom-action-gate/v2", "operation": "commit",
+  "evaluationId": "same id", "inputDigest": "same digest",
+  "receipts": [{"dossierId":"...","callId":"...","action":"...","accepted":true,
+                "proposalDigest":"...","receiptId":"..."}]
+}
+```
+Response:
+```json
+{
+  "profile": "ga5-mailroom-action-gate/v2", "evaluationId": "...", "status": "completed",
+  "inputDigest": "...", "outcomes": [{"dossierId":"...","callId":"...","action":"...",
+                "proposalDigest":"...","receiptId":"...","status":"executed"|"rejected"}]
+}
+```
+- `status` is `"executed"` only when `receipt.accepted` is `true`, else `"rejected"`.
+- Every receipt is validated against the **persisted** proposal (its `dossierId`, `action`,
+  and recomputed `proposalDigest` must match exactly) — a forged/tampered receipt → **400**.
+- Unknown `evaluationId` → **404**. Exact commit replay → byte-identical cached response.
+  A *different* receipt set submitted against an already-committed evaluation → **409**
+  (the terminal state is immutable — this is a conflict, not a replay).
+
+---
+
+## 9. Quick client snippet
 
 ```python
 import requests

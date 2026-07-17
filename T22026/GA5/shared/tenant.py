@@ -59,6 +59,7 @@ GA5_API_ROUTE_SUFFIXES = (
     "/budget-guard",
     "/mcp",
     "/guardrail-redteam",
+    "/mailroom",
 )
 
 
