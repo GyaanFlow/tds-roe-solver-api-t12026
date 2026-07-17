@@ -1,10 +1,10 @@
 # GA5 Live API — Integration Spec
 
-Fixed request/response contract for the 5 GA5 questions implemented as live API endpoints
+Fixed request/response contract for the 6 GA5 questions implemented as live API endpoints
 (Q2 proration, Q3 pre-tool-call guardrail, Q4 skill safety audit, Q5 budget/loop guard,
-Q6 MCP server). The remaining GA5 questions (Q1 maze, Q7 LXD sandbox, Q9/Q10/Q11 durable
-agents) are out of scope for this hub — Q1 is pure offline compute for your other solver,
-Q7 is manual infrastructure work, and Q9-11 need dedicated stateful services.
+Q6 MCP server, Q8 guardrail red-team). The remaining GA5 questions (Q1 maze, Q7 LXD sandbox,
+Q9/Q10/Q11 durable agents) are out of scope for this hub — Q1 is pure offline compute for
+your other solver, Q7 is manual infrastructure work, and Q9-11 need dedicated stateful services.
 
 This contract is **stable and additive-only**.
 
@@ -36,7 +36,8 @@ This contract is **stable and additive-only**.
     "https://<host>/ga5/me%40x.com/guardrail",
     "https://<host>/ga5/me%40x.com/skill-scan",
     "https://<host>/ga5/me%40x.com/budget-guard",
-    "https://<host>/ga5/me%40x.com/mcp"
+    "https://<host>/ga5/me%40x.com/mcp",
+    "https://<host>/ga5/me%40x.com/guardrail-redteam"
   ],
   "session_id": null
 }
@@ -171,7 +172,38 @@ where `normalizedEmail` is the tenant email (trimmed, lowercased) from the URL p
 
 ---
 
-## 7. Quick client snippet
+## 7. Q8 — Guardrail Red-Team Round-Trip
+
+Extends Q3: this endpoint doesn't just decide `allow`/`block` — when it allows a call, it
+**actually executes** `read_file`/`fetch_url` and returns the real result. No LLM.
+
+Your seeded scenario (derivable via `T22026/GA5/seedgen.derive_q8_scenario(email)`):
+- **sandbox_root**: the only directory `read_file` may read from (subdirs included).
+- **outside_dir / canary_path**: a seeded file *outside* the sandbox that must never be
+  readable, under any obfuscation (traversal, absolute reference, lookalike names).
+- **allowed_hosts**: exactly `["example.com", "www.iana.org"]` for `fetch_url` (fixed, not
+  per-student) — private/loopback/link-local/metadata hosts and userinfo-confusion tricks
+  (`https://example.com@evil.com/`) are rejected, and redirects are followed only if every
+  hop's host stays on the allowlist.
+
+**Route:** `POST /ga5/<email>/guardrail-redteam` (alias `/q8`)
+
+### Request
+```json
+{ "tool": "read_file", "arguments": { "path": "..." } }
+{ "tool": "fetch_url", "arguments": { "url": "..." } }
+```
+
+### Response
+```json
+{ "action": "allow" | "block", "reason": "short explanation", "result": "..." }
+```
+`result` is present only when `action` is `"allow"` — the actual file contents or fetched
+body (truncated to 4000 chars for `fetch_url`).
+
+---
+
+## 8. Quick client snippet
 
 ```python
 import requests

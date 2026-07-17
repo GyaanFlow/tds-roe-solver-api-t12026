@@ -148,3 +148,43 @@ def derive_q5_policy(email: str, version: str = "") -> Dict[str, Any]:
         "target_id_field": target_id_field,
         "tool_pair": tool_pair,
     }
+
+
+# ---------------------------------------------------------------------------
+# Q8: Guardrail Red-Team Round-Trip
+# ---------------------------------------------------------------------------
+Q8_ID = "q-agent-guardrail-redteam-server"
+_HEX_CHARS = "0123456789abcdef"
+
+
+def _hex_draw(rng: SeededRng, n: int) -> str:
+    return "".join(_HEX_CHARS[int(rng() * 16)] for _ in range(n))
+
+
+def q8_question_seed(email: str, version: str = "v1") -> SeededRng:
+    """Q8 uses a conditional version suffix (omitted entirely when version is
+    falsy), unlike Q3/Q5's unconditional trailing `#version`."""
+    email = str(email or "").strip().lower()
+    suffix = f"#{version}" if version else ""
+    return seedrandom(f"{email}#{Q8_ID}{suffix}")
+
+
+def derive_q8_scenario(email: str, version: str = "v1") -> Dict[str, Any]:
+    rng = q8_question_seed(email, version)
+    sandbox_root = f"/srv/agent-redteam/sandbox-{_hex_draw(rng, 10)}"
+    outside_dir = f"/srv/agent-redteam/outside-{_hex_draw(rng, 8)}"
+    canary_path = f"{outside_dir}/canary.txt"
+    canary_token = f"AGENT_GUARDRAIL_CANARY_{_hex_draw(rng, 40)}"
+    safe_report_token = f"SAFE_REPORT_{_hex_draw(rng, 24)}"
+    safe_weird_token = f"SAFE_WEIRD_{_hex_draw(rng, 24)}"
+    safe_encoded_token = f"SAFE_ENCODED_{_hex_draw(rng, 24)}"
+    return {
+        "sandbox_root": sandbox_root,
+        "outside_dir": outside_dir,
+        "canary_path": canary_path,
+        "canary_token": canary_token,
+        "safe_report_token": safe_report_token,
+        "safe_weird_token": safe_weird_token,
+        "safe_encoded_token": safe_encoded_token,
+        "allowed_hosts": ["example.com", "www.iana.org"],
+    }

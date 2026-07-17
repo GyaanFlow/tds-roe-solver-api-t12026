@@ -28,7 +28,7 @@ def test_onboard_and_status():
 
     r = client.get(f"{BASE}/status")
     assert r.status_code == 200
-    assert len(r.json()["ready_routes"]) == 5
+    assert len(r.json()["ready_routes"]) == 6
 
 
 def test_q2_proration():
@@ -165,6 +165,54 @@ def test_q6_mcp_server():
     expected = hashlib.sha256(f"{challenge}:{EMAIL}".encode()).hexdigest()[:16]
     assert text == expected
     assert len(text) == 16
+
+
+def test_q8_guardrail_redteam_executes_real_calls():
+    from T22026.GA5.seedgen import derive_q8_scenario
+    scenario = derive_q8_scenario(EMAIL)
+
+    # in-sandbox read actually returns the seeded file content
+    r = client.post(f"{BASE}/guardrail-redteam", json={
+        "tool": "read_file", "arguments": {"path": scenario["sandbox_root"] + "/notes/report.txt"},
+    })
+    assert r.status_code == 200
+    assert r.json() == {"action": "allow", "reason": "Path is inside the sandbox.", "result": scenario["safe_report_token"]}
+
+    # filename that merely looks like a traversal but is a safe literal name -> allowed
+    r = client.post(f"{BASE}/guardrail-redteam", json={
+        "tool": "read_file", "arguments": {"path": scenario["sandbox_root"] + "/notes/looks-like-..-but-safe.txt"},
+    })
+    assert r.json()["result"] == scenario["safe_weird_token"]
+
+    # literal %2e%2e in a filename must not be decoded as traversal
+    r = client.post(f"{BASE}/guardrail-redteam", json={
+        "tool": "read_file", "arguments": {"path": scenario["sandbox_root"] + "/encoded/%2e%2e-literal.txt"},
+    })
+    assert r.json()["result"] == scenario["safe_encoded_token"]
+
+    # the canary, outside the sandbox, must never be readable -- and never leaked
+    r = client.post(f"{BASE}/guardrail-redteam", json={"tool": "read_file", "arguments": {"path": scenario["canary_path"]}})
+    assert r.json()["action"] == "block"
+    assert scenario["canary_token"] not in r.text
+
+    # traversal escape from inside the sandbox to the canary must also block
+    outside_name = scenario["outside_dir"].rsplit("/", 1)[-1]
+    r = client.post(f"{BASE}/guardrail-redteam", json={
+        "tool": "read_file", "arguments": {"path": scenario["sandbox_root"] + f"/../{outside_name}/canary.txt"},
+    })
+    assert r.json()["action"] == "block"
+
+    # arbitrary unrelated path is blocked (only the sandbox is readable at all)
+    r = client.post(f"{BASE}/guardrail-redteam", json={"tool": "read_file", "arguments": {"path": "/etc/passwd"}})
+    assert r.json()["action"] == "block"
+
+    # fetch_url: disallowed host, userinfo confusion, and loopback are all blocked
+    r = client.post(f"{BASE}/guardrail-redteam", json={"tool": "fetch_url", "arguments": {"url": "https://evil.example.org/"}})
+    assert r.json()["action"] == "block"
+    r = client.post(f"{BASE}/guardrail-redteam", json={"tool": "fetch_url", "arguments": {"url": "https://example.com@evil.example.org/"}})
+    assert r.json()["action"] == "block"
+    r = client.post(f"{BASE}/guardrail-redteam", json={"tool": "fetch_url", "arguments": {"url": "http://127.0.0.1/"}})
+    assert r.json()["action"] == "block"
 
 
 if __name__ == "__main__":

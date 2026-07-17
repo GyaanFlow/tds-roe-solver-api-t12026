@@ -203,3 +203,29 @@ This file stores durable context across terms, graded assignments (GA), and ques
   branch, cyan "GA5 Agent Safety/Infra Hub" homepage card) — identical wiring pattern to GA4.
 - `verify_ga5_endpoints.py` (7 tests) passes alongside the existing 18 GA2/3/4 tests — 25 total.
   Also probed null/malformed inputs across every GA5 endpoint (no 500s).
+
+### 2026-07-18 (GA5 Tier 2 — Q8 Guardrail Red-Team Round-Trip)
+- Added Q8 to the GA5 hub: extends Q3's guardrail concept but must *execute* allowed
+  `read_file`/`fetch_url` calls and return real results, not just an allow/block decision.
+- Seed derivation (`derive_q8_scenario` in `seedgen.py`) uses a *different* seed convention
+  than Q3/Q5: conditional `#version` suffix (omitted when falsy, vs. Q3/Q5's unconditional
+  trailing `#`), and raw hex-digit draws (`D(rng,n)`) rather than array-index selection.
+  Verified byte-identical against real Node `seedrandom` before writing any logic — same
+  discipline as every other seeded question.
+- Design: the *logical* paths (sandboxRoot/outsideDir/canaryPath) are the literal strings the
+  grader sends and checks — used only for the security boundary decision. Actual file bytes
+  are stored under a real always-writable location (`/tmp/ga5_q8_sandbox/<sha256(email)>/`),
+  decoupling policy correctness from whatever the container's real `/srv` permissions are.
+  `fetch_url` uses an exact-match host allowlist (`example.com`, `www.iana.org` — fixed, not
+  seeded) plus a private/loopback/link-local/metadata regex guard, and re-validates the final
+  URL's host after following redirects (blocks redirect-to-private).
+- Verified against every explicitly-stated probe case: direct/traversal/absolute canary reads
+  all blocked (and canary token never appears in any response); a filename that merely *looks*
+  like a traversal ("looks-like-..-but-safe.txt") and a literal `%2e%2e` filename (must NOT be
+  URL-decoded) both correctly readable; disallowed host, userinfo-confusion, and loopback fetch
+  attempts all blocked.
+- **Found and fixed the same class of bug as the earlier GA3 fix**: `hf_space/app.py`'s
+  `known_prefixes` allowlist didn't yet include `guardrail-redteam`, `proration`, `guardrail`,
+  `skill-scan`, `budget-guard`, `mcp` when I first wired GA5 up — caught immediately via a
+  live smoke test (405s) rather than shipping it. All now present.
+- `verify_ga5_endpoints.py` grew to 8 tests (was 7); 26/26 total across the whole project.

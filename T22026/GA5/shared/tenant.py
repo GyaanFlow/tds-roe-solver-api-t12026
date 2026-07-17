@@ -58,6 +58,7 @@ GA5_API_ROUTE_SUFFIXES = (
     "/skill-scan",
     "/budget-guard",
     "/mcp",
+    "/guardrail-redteam",
 )
 
 

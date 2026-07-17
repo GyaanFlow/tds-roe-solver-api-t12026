@@ -58,7 +58,7 @@ class MultiTenantASGIMiddleware:
                     "solve", "health", "onboard", "status", "config", "docs", "redoc", "cache-stats",
                     "answer-image", "extract", "dynamic-extract", "answer-audio", "rank",
                     "grounded-answer", "vector-search", "extract-graph", "graph-query", "community-summary",
-                    "proration", "guardrail", "skill-scan", "budget-guard", "mcp"
+                    "proration", "guardrail", "skill-scan", "budget-guard", "mcp", "guardrail-redteam"
                 }
                 if parts and (parts[0].startswith("sess_") or parts[0] not in known_prefixes):
                     possible_session_or_token = parts[0]

@@ -15,7 +15,7 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from T22026.GA4.solvers import aipipe_chat, parse_json_block
-from T22026.GA5.seedgen import derive_q3_policy, derive_q5_policy
+from T22026.GA5.seedgen import derive_q3_policy, derive_q5_policy, derive_q8_scenario
 
 # ---------------------------------------------------------------------------
 # Q2: Spec-Driven Development — The Proration Bug
@@ -321,3 +321,124 @@ async def audit_skill_llm(skill_text: str, token: str) -> List[str]:
     if not isinstance(categories, list):
         return []
     return sorted({c for c in categories if c in _Q4_ALLOWED_CATEGORIES})
+
+
+# ---------------------------------------------------------------------------
+# Q8: Guardrail Red-Team Round-Trip — actually executes read_file / fetch_url,
+# it doesn't just decide allow/block. The *logical* paths (sandboxRoot,
+# outsideDir, canaryPath) are the exact per-student seeded strings the grader
+# sends and checks — those are used purely for the security boundary decision.
+# Actual bytes are stored under a real, always-writable directory (tempdir),
+# so the endpoint works regardless of whether the container can write to the
+# literal /srv/... path.
+# ---------------------------------------------------------------------------
+import tempfile as _tempfile
+from pathlib import Path as _Path
+
+
+def _q8_physical_root(email: str) -> _Path:
+    key = hashlib.sha256(str(email or "").strip().lower().encode()).hexdigest()[:20]
+    return _Path(_tempfile.gettempdir()) / "ga5_q8_sandbox" / key
+
+
+def ensure_q8_sandbox_files(email: str, scenario: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Idempotently create the seeded canary/safe files for this student. Safe
+    to call on every request — writes only happen once per email (checked via
+    file existence)."""
+    scenario = scenario or derive_q8_scenario(email)
+    physical = _q8_physical_root(email)
+    sandbox_dir = physical / "sandbox"
+    outside_dir = physical / "outside"
+    (sandbox_dir / "notes").mkdir(parents=True, exist_ok=True)
+    (sandbox_dir / "encoded").mkdir(parents=True, exist_ok=True)
+    outside_dir.mkdir(parents=True, exist_ok=True)
+
+    _write_if_absent(sandbox_dir / "notes" / "report.txt", scenario["safe_report_token"])
+    _write_if_absent(sandbox_dir / "notes" / "looks-like-..-but-safe.txt", scenario["safe_weird_token"])
+    _write_if_absent(sandbox_dir / "encoded" / "%2e%2e-literal.txt", scenario["safe_encoded_token"])
+    _write_if_absent(outside_dir / "canary.txt", scenario["canary_token"])
+    return scenario
+
+
+def _write_if_absent(path: _Path, content: str) -> None:
+    if not path.exists():
+        path.write_text(content, encoding="utf-8")
+
+
+def _q8_logical_to_physical(logical_path: str, scenario: Dict[str, Any], email: str) -> Tuple[bool, Optional[_Path]]:
+    """Returns (is_allowed, physical_path_or_None). No URL-decoding — a literal
+    `%2e%2e` in the request must stay a literal filename component, never be
+    interpreted as `..`."""
+    normalized = posixpath.normpath(logical_path)
+    sandbox_root = posixpath.normpath(scenario["sandbox_root"])
+    outside_dir = posixpath.normpath(scenario["outside_dir"])
+
+    physical = _q8_physical_root(email)
+
+    if normalized == sandbox_root or normalized.startswith(sandbox_root.rstrip("/") + "/"):
+        rel = posixpath.relpath(normalized, sandbox_root)
+        return True, (physical / "sandbox" / rel)
+
+    if normalized == outside_dir or normalized.startswith(outside_dir.rstrip("/") + "/"):
+        return False, None
+
+    return False, None
+
+
+def q8_read_file(arguments: Dict[str, Any], email: str) -> Dict[str, Any]:
+    scenario = ensure_q8_sandbox_files(email)
+    path = str(arguments.get("path", ""))
+    allowed, physical = _q8_logical_to_physical(path, scenario, email)
+    if not allowed:
+        return {"action": "block", "reason": f"'read_file' may only read inside {scenario['sandbox_root']}."}
+    try:
+        content = physical.read_text(encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        content = ""
+    except Exception as exc:  # noqa: BLE001
+        return {"action": "allow", "reason": "Path is inside the sandbox.", "result": f"(error reading file: {exc})"}
+    return {"action": "allow", "reason": "Path is inside the sandbox.", "result": content}
+
+
+_PRIVATE_HOST_RE = re.compile(
+    r"^(localhost|127\.|0\.0\.0\.0|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|\[?::1\]?|metadata\.google\.internal)",
+    re.IGNORECASE,
+)
+
+
+async def q8_fetch_url(arguments: Dict[str, Any], scenario: Dict[str, Any]) -> Dict[str, Any]:
+    import httpx
+    from urllib.parse import urlparse
+
+    url = str(arguments.get("url", ""))
+    try:
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower()
+    except Exception:
+        return {"action": "block", "reason": "Malformed URL."}
+
+    allowed_hosts = {h.lower() for h in scenario["allowed_hosts"]}
+    if not host or host not in allowed_hosts or _PRIVATE_HOST_RE.match(host):
+        return {"action": "block", "reason": "Destination host is not on the allowed list."}
+
+    try:
+        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True, max_redirects=5) as client:
+            resp = await client.get(url)
+        final_host = (urlparse(str(resp.url)).hostname or "").lower()
+        if final_host not in allowed_hosts or _PRIVATE_HOST_RE.match(final_host):
+            return {"action": "block", "reason": "Request redirected to a host that is not on the allowed list."}
+        return {"action": "allow", "reason": "Destination host is on the allowed list.", "result": resp.text[:4000]}
+    except Exception as exc:  # noqa: BLE001
+        return {"action": "allow", "reason": "Destination host is on the allowed list.", "result": f"(fetch error: {exc})"}
+
+
+async def redteam_guardrail_decision(payload: Dict[str, Any], email: str) -> Dict[str, Any]:
+    scenario = derive_q8_scenario(email)
+    tool = payload.get("tool")
+    arguments = payload.get("arguments", {}) or {}
+
+    if tool == "read_file":
+        return q8_read_file(arguments, email)
+    if tool == "fetch_url":
+        return await q8_fetch_url(arguments, scenario)
+    return {"action": "block", "reason": f"Unrecognized tool '{tool}'."}

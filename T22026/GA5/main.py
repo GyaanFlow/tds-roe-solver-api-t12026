@@ -23,6 +23,7 @@ from T22026.GA5.solvers import (
     budget_loop_decision,
     guardrail_decision,
     mcp_handle,
+    redteam_guardrail_decision,
     solve_proration,
 )
 from T22026.GA4.solvers import resolve_aipipe_token
@@ -157,6 +158,26 @@ async def budget_guard_endpoint(request: Request):
         policy = derive_q5_policy(email)
         return budget_loop_decision(body, policy=policy)
     return await _run_solver(_handle, "Q5")
+
+
+# ---------------------------------------------------------------------------
+# Q8: Guardrail Red-Team Round-Trip (extends Q3: must actually execute allowed
+# tool calls and return real results, not just a decision).
+# ---------------------------------------------------------------------------
+@router.post("/guardrail-redteam")
+@router.post("/q8")
+async def guardrail_redteam_endpoint(request: Request):
+    async def _handle():
+        body = await _read_json_body(request)
+        tool = body.get("tool")
+        if tool not in ("read_file", "fetch_url"):
+            raise ValueError("'tool' must be 'read_file' or 'fetch_url'")
+        arguments = body.get("arguments")
+        if not isinstance(arguments, dict):
+            raise ValueError("'arguments' must be an object")
+        email = current_email.get()
+        return await redteam_guardrail_decision(body, email)
+    return await _run_solver(_handle, "Q8")
 
 
 # ---------------------------------------------------------------------------
