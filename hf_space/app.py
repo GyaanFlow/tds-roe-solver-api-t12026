@@ -58,7 +58,7 @@ class MultiTenantASGIMiddleware:
                     "solve", "health", "onboard", "status", "config", "docs", "redoc", "cache-stats",
                     "answer-image", "extract", "dynamic-extract", "answer-audio", "rank",
                     "grounded-answer", "vector-search", "extract-graph", "graph-query", "community-summary",
-                    "proration", "guardrail", "skill-scan", "budget-guard", "mcp", "guardrail-redteam", "mailroom"
+                    "proration", "guardrail", "skill-scan", "budget-guard", "mcp", "guardrail-redteam", "mailroom", "a2a"
                 }
                 if parts and (parts[0].startswith("sess_") or parts[0] not in known_prefixes):
                     possible_session_or_token = parts[0]
@@ -109,6 +109,16 @@ def api_version():
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/.well-known/agent-card.json")
+def a2a_agent_card():
+    """GA5 Q10's A2A Agent Card. Origin-level per the A2A 1.0 spec (one card per
+    origin), even though this hub serves many students from one origin -- see
+    T22026/GA5/a2a_agent.py for how supportedInterfaces accumulates per-student
+    base URLs registered via POST /ga5/onboard."""
+    from T22026.GA5.a2a_agent import agent_card_json
+    return agent_card_json()
 
 
 @app.get("/", response_class=HTMLResponse)

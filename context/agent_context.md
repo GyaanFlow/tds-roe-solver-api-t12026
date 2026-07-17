@@ -258,3 +258,37 @@ This file stores durable context across terms, graded assignments (GA), and ques
   `hf_space/app.py`'s allowlist *before* the first live smoke test (habit formed from the two
   earlier incidents), rather than discovering it via a 405 afterward.
 - `verify_ga5_endpoints.py` grew to 9 tests (was 8); 27/27 total across the whole project.
+
+### 2026-07-18 (GA5 Tier 3, part 2 — Q10 A2A Invoice Action Agent)
+- Added Q10: implements the actual A2A 1.0 HTTP+JSON spec (agent-card discovery,
+  `message:send`, task lifecycle `SUBMITTED→WORKING→INPUT_REQUIRED→WORKING→COMPLETED`,
+  Bearer-token tenant isolation) plus semantic invoice triage into 5 typed actions
+  (settle_invoice/request_approval/hold_invoice/reject_duplicate/open_exception).
+  Requires an AIPipe token (embedded in URL, same model as Q4/Q9).
+- **Key architectural wrinkle unique to Q10**: the A2A spec assumes one agent per origin,
+  with the Agent Card at a *fixed origin-level* path (`/.well-known/agent-card.json`). This
+  hub serves every student from one shared origin, so a single per-student card is
+  impossible. Solution: the Agent Card's `supportedInterfaces` is a shared, accumulating
+  registry (file-based, origin-level, populated via `POST /ga5/onboard`) listing every
+  student's base URL — so each individual grading check finds its own submitted base
+  present. Documented clearly in INTEGRATION.md and the dashboard: students must click
+  "Generate URLs" (which now calls `/ga5/onboard` server-side, previously a client-only,
+  no-op button) at least once before Q10 grading.
+- `T22026/GA5/a2a_agent.py` reuses Q9's `mailroom.py` canonical-JSON/digest helpers (message
+  fingerprint dedup by `(principal, messageId)`, package-content fingerprint cache for
+  stable-core reuse). Deterministic `task_id`/`context_id`/`action_id` derivation (stable
+  across evaluations for the same principal+batch, matching the "5 stable task IDs" replay
+  requirement in the spec).
+- Verified deterministically with a mocked LLM (same discipline as Q9): exact message
+  replay, 409 `IDEMPOTENCY_CONFLICT` on reused messageId with different content, full
+  propose→continuation→completed lifecycle, cross-principal task isolation (404, not 403,
+  to avoid confirming existence), and — a real edge case caught by the test — cancel on an
+  already-terminal task is a correct no-op rather than a race that could produce both
+  COMPLETED and CANCELED.
+- Root-level `/.well-known/agent-card.json` route added to `hf_space/app.py` (sibling to
+  `/health`, `/api/version` — NOT under `/ga5`, since it must be origin-level per spec).
+  Added `"a2a"` to `known_prefixes` proactively (third time avoiding the 405-after-deploy
+  mistake from GA3/early-GA5).
+- `verify_ga5_endpoints.py` grew to 11 tests (was 9); caught and fixed one test-only bug
+  (comparing a raw vs. URL-encoded email in an assertion — not a product bug). 29/29 total
+  across the whole project.

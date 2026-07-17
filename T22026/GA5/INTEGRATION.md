@@ -1,11 +1,12 @@
 # GA5 Live API — Integration Spec
 
-Fixed request/response contract for the 7 GA5 questions implemented as live API endpoints
+Fixed request/response contract for the 8 GA5 questions implemented as live API endpoints
 (Q2 proration, Q3 pre-tool-call guardrail, Q4 skill safety audit, Q5 budget/loop guard,
-Q6 MCP server, Q8 guardrail red-team, Q9 mailroom action gate). The remaining GA5 questions
-(Q1 maze, Q7 LXD sandbox, Q10/Q11 durable agents) are out of scope for this hub — Q1 is pure
-offline compute for your other solver, Q7 is manual infrastructure work, and Q10/Q11 each
-need their own dedicated stateful service (same shape as Q9, not yet built).
+Q6 MCP server, Q8 guardrail red-team, Q9 mailroom action gate, Q10 A2A invoice agent). The
+remaining GA5 questions (Q1 maze, Q7 LXD sandbox, Q11 durable incident-response+OTLP agent)
+are out of scope for this hub — Q1 is pure offline compute for your other solver, Q7 is
+manual infrastructure work, and Q11 needs its own dedicated stateful service (same shape as
+Q9/Q10, not yet built).
 
 This contract is **stable and additive-only**.
 
@@ -271,7 +272,88 @@ Response:
 
 ---
 
-## 9. Quick client snippet
+## 9. Q10 — A2A Invoice Action Agent
+
+Implements the actual [A2A 1.0 HTTP+JSON spec](https://a2a-protocol.org/latest/specification/):
+agent-card discovery, `message:send`, and a task lifecycle, plus semantic invoice triage.
+**Requires an AIPipe token** — embedded in the URL, same as Q4/Q9.
+
+**⚠️ Multi-tenancy caveat you must know:** A2A assumes **one agent per origin**, with the
+Agent Card published at a *fixed origin-level path*. This hub serves every student from one
+shared origin, so the Agent Card's `supportedInterfaces` is a **shared, accumulating
+registry** of every student's base URL — populated by `POST /ga5/onboard`. **You must call
+`/ga5/onboard` with your `aipipe_token` at least once** (opening the `/ga5/` dashboard and
+clicking "Generate URLs" does this automatically) **before your Q10 submission is graded**,
+or your base URL won't be in the card yet.
+
+### Agent Card — `GET https://<host>/.well-known/agent-card.json` (origin-level, public, no auth)
+```json
+{
+  "name": "GA5 Invoice Action Agent", "description": "...", "version": "1.0.0",
+  "capabilities": {"streaming": false, "pushNotifications": false},
+  "skills": [{"id": "invoice_action_agent", "name": "...", "description": "...", "tags": [...]}],
+  "supportedInterfaces": [{"url": "https://<host>/ga5/<email>/<token>/a2a/", "protocolBinding": "HTTP+JSON", "protocolVersion": "1.0"}],
+  "defaultInputModes": ["application/vnd.ga5.invoice-claim-batch+json"],
+  "defaultOutputModes": ["application/vnd.ga5.invoice-action-proposals+json", "application/vnd.ga5.invoice-action-receipts+json"]
+}
+```
+
+### All other routes — under your base: `https://<host>/ga5/<email>/<TOKEN>/a2a/`
+```
+POST {base}/message:send
+GET  {base}/tasks/{id}
+GET  {base}/tasks
+POST {base}/tasks/{id}:cancel
+```
+Required headers on every call: `A2A-Version: 1.0` and `Authorization: Bearer <TOKEN>` (the
+same token embedded in your URL — an exact match is required; wrong/missing → 401/403;
+a different `A2A-Version` → 400).
+
+### `message:send` — initial batch
+```json
+{
+  "message": {
+    "messageId": "...", "role": "ROLE_USER",
+    "parts": [{"mediaType": "application/vnd.ga5.invoice-claim-batch+json",
+               "data": {"batchId": "...", "policyRevision": "...", "packages": [{"packageId": "...", "...": "..."}]}}]
+  },
+  "configuration": {"returnImmediately": false, "historyLength": 20, "acceptedOutputModes": [...]}
+}
+```
+Response: `{"task": Task}` with `Task.state == "TASK_STATE_INPUT_REQUIRED"` and one artifact
+Part (`application/vnd.ga5.invoice-action-proposals+json`) containing one proposal per
+package: `{"packageId","actionId","action","facts":{"vendorName","invoiceNumber","amountMinor","currency"},"evidenceRefs":[...],"rationale":"60-1500 chars"}`.
+`action` ∈ `{settle_invoice, request_approval, hold_invoice, reject_duplicate, open_exception}`.
+
+### `message:send` — continuation (after your proposals are checked)
+```json
+{
+  "message": {
+    "messageId": "new id", "taskId": "exact task id", "contextId": "exact context id", "role": "ROLE_USER",
+    "parts": [{"mediaType": "application/vnd.ga5.invoice-action-results+json",
+               "data": {"batchId": "...", "results": [{"packageId","actionId","action","outcome": "ACCEPTED"|"REJECTED","receiptNonce"}]}}]
+  }
+}
+```
+Response: `Task.state == "TASK_STATE_COMPLETED"`, with an added receipts artifact
+(`application/vnd.ga5.invoice-action-receipts+json`) whose `executions` array contains only
+the `ACCEPTED` results, each bound to the persisted proposal's `facts`/`evidenceRefs`.
+
+### Durability guarantees
+- **Dedup by `(Bearer principal, messageId)`**: exact replay of the same message → byte-identical
+  cached response, no re-triage. Same `messageId` with *different* semantic content → **409**
+  (`IDEMPOTENCY_CONFLICT`). `configuration` is excluded from the fingerprint.
+- **Stable-core reuse**: proposals are cached by package content fingerprint — unchanged
+  packages across batches reuse the cached decision, no re-triage.
+- **Tenant isolation**: tasks are strictly scoped to the `(email, token)` principal that
+  created them — `GET`/`cancel` for another principal's task returns **404** (never reveals
+  whether the ID exists).
+- **Cancel**: only affects a non-terminal task; canceling an already-completed task is a
+  no-op that returns the completed state (never both `COMPLETED` and `CANCELED`).
+
+---
+
+## 10. Quick client snippet
 
 ```python
 import requests

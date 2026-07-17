@@ -65,7 +65,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <body>
   <div class="hero">
     <h1>GA5 — Agent Safety/Infra API Hub</h1>
-    <p>7 GA5 questions graded by calling a live API URL: proration billing, a pre-tool-call guardrail, a skill-safety scanner, a run-budget/loop guard, a real MCP server, a guardrail that actually executes red-teamed tool calls, and a durable mailroom action-gate agent. Q4 and Q9 use your own AIPipe token (embedded in the URL) — the owner never pays.</p>
+    <p>8 GA5 questions graded by calling a live API URL: proration billing, a pre-tool-call guardrail, a skill-safety scanner, a run-budget/loop guard, a real MCP server, a guardrail that actually executes red-teamed tool calls, a durable mailroom action-gate agent, and a real A2A protocol invoice agent. Q4, Q9, Q10 use your own AIPipe token (embedded in the URL) — the owner never pays.</p>
   </div>
 
   <div class="wrap">
@@ -77,7 +77,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         <input type="password" id="aipipe-token" placeholder="aipipe.org API key (optional — improves Q4 accuracy)" autocomplete="off" />
         <button class="btn" onclick="generateUrls()">Generate URLs</button>
       </div>
-      <p class="hint">Q2, Q3, Q5, Q6, Q8 need no token — they're pure deterministic policy engines, per-student seeded from your email. Q4 works without a token (heuristic scan) but is more accurate with one embedded in the URL. Q9 requires a token — it triages dossiers with an LLM.</p>
+      <p class="hint">Q2, Q3, Q5, Q6, Q8 need no token — they're pure deterministic policy engines, per-student seeded from your email. Q4 works without a token (heuristic scan) but is more accurate with one embedded in the URL. Q9 and Q10 require a token — both triage real content with an LLM.</p>
     </div>
 
     <div class="grid">
@@ -164,6 +164,19 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         </div>
         <pre class="result" id="res-q9"></pre>
       </div>
+
+      <!-- Q10 -->
+      <div class="q-card">
+        <div class="q-head"><span class="q-badge">Q10</span><span class="q-title">A2A Invoice Action Agent</span><span class="q-type type-llm">token required</span></div>
+        <p class="q-desc">Real A2A 1.0 protocol: agent-card discovery, Bearer-isolated task lifecycle, invoice triage into 5 typed actions with receipt-bound execution.</p>
+        <div class="mono" id="url-q10" data-copy="">Enter email + token above…</div>
+        <div class="row">
+          <button class="btn-sec" onclick="copyUrl('url-q10')">Copy submit URL</button>
+          <button class="btn-test" onclick="testQ10(this)">Run test</button>
+        </div>
+        <pre class="result" id="res-q10"></pre>
+        <p class="hint" style="margin:0;">Click <strong>Generate URLs</strong> above first — it registers your base URL in the shared Agent Card at <code>/.well-known/agent-card.json</code> (required before grading).</p>
+      </div>
     </div>
 
     <p class="hint" style="margin-top:1.4rem;">
@@ -199,6 +212,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       setUrl('url-q6', `${ORIGIN}/ga5/${enc}/mcp`);
       setUrl('url-q8', `${ORIGIN}/ga5/${enc}/guardrail-redteam`);
       setUrl('url-q9', `${ORIGIN}/ga5/${enc}${tokSeg}/mailroom`);
+      setUrl('url-q10', `${ORIGIN}/ga5/${enc}${tokSeg}/a2a/`);
     }
     function setUrl(id, url) {
       const el = document.getElementById(id);
@@ -206,12 +220,19 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       el.dataset.copy = url;
     }
 
-    function generateUrls() {
+    async function generateUrls() {
       const email = emailVal();
       if (!email || !email.includes('@')) { toast('Enter a valid email.', true); return; }
       localStorage.setItem('ga5_email', email);
       localStorage.setItem('ga5_token', tokenVal());
       refreshUrls();
+      try {
+        // Registers this base URL in the shared Q10 Agent Card (no-op if no token yet).
+        await fetch(`${ORIGIN}/ga5/onboard`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, aipipe_token: tokenVal() || null })
+        });
+      } catch (e) { /* URLs are still usable even if this registration call fails */ }
       toast('URLs ready for ' + email + '.');
     }
 
@@ -314,6 +335,25 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       document.getElementById('res-q9').textContent =
         'propose:\n' + JSON.stringify(propose, null, 2) +
         '\n\ncommit (expected to fail: this demo can\'t compute the real SHA-256 proposalDigest client-side):\n' + JSON.stringify(commitResult, null, 2);
+    }
+
+    async function testQ10(btn) {
+      if (!tokenVal()) { toast('Q10 needs an AIPipe token to triage invoices.', true); return; }
+      const path = callBase() + '/a2a';
+      const headers = { 'A2A-Version': '1.0', 'Content-Type': 'application/a2a+json', 'Authorization': 'Bearer ' + tokenVal() };
+      const card = await (await fetch(`${ORIGIN}/.well-known/agent-card.json`)).json();
+      const registered = (card.supportedInterfaces || []).some(i => i.url === `${ORIGIN}/ga5/${encEmail()}/${encodeURIComponent(tokenVal())}/a2a/`);
+      const sendResult = await runTest(btn, 'res-q10', path + '/message:send', {
+        message: {
+          messageId: 'dashboard-test-' + Date.now(), role: 'ROLE_USER',
+          parts: [{ mediaType: 'application/vnd.ga5.invoice-claim-batch+json', data: {
+            batchId: 'demo-batch', policyRevision: 'v1',
+            packages: [{ packageId: 'DEMO_PKG_1', vendor: 'Acme Corp', invoiceNumber: 'INV-1001', amount: '10.00 INR' }]
+          }}]
+        }
+      }, headers);
+      document.getElementById('res-q10').textContent =
+        'agent-card registered: ' + registered + '\n\nmessage:send result:\n' + JSON.stringify(sendResult, null, 2);
     }
 
     function toast(msg, isErr = false) {

@@ -27,7 +27,7 @@ from T22026.GA5.solvers import (
     solve_proration,
 )
 from T22026.GA4.solvers import resolve_aipipe_token
-from T22026.GA5 import mailroom
+from T22026.GA5 import a2a_agent, mailroom
 
 logger = logging.getLogger("ga5_router")
 router = APIRouter()
@@ -221,6 +221,82 @@ async def mailroom_endpoint(request: Request):
 
 
 # ---------------------------------------------------------------------------
+# Q10: A2A Invoice Action Agent (A2A 1.0 HTTP+JSON surface).
+# The Agent Card itself is served at the origin-level well-known path by
+# hf_space/app.py (not here) -- see T22026/GA5/a2a_agent.register_base_url.
+# ---------------------------------------------------------------------------
+def _a2a_principal(request: Request) -> str:
+    """Tenant isolation key: email + the tenant token embedded in the URL. The
+    Bearer header is validated against this same token below."""
+    email = normalize_email(current_email.get())
+    token = current_token.get() or ""
+    return f"{email}:{token}"
+
+
+def _check_a2a_auth(request: Request) -> None:
+    version = request.headers.get("A2A-Version") or request.headers.get("a2a-version")
+    if version and version != "1.0":
+        raise HTTPException(status_code=400, detail="Unsupported A2A-Version")
+    auth = request.headers.get("Authorization") or request.headers.get("authorization") or ""
+    expected = current_token.get()
+    if not expected:
+        raise HTTPException(status_code=401, detail="Missing bearer token in tenant URL")
+    if not auth.lower().startswith("bearer ") or auth[7:].strip() != expected:
+        raise HTTPException(status_code=403, detail="Invalid or missing Bearer token")
+
+
+@router.post("/a2a/message:send")
+async def a2a_message_send(request: Request):
+    _check_a2a_auth(request)
+
+    async def _handle():
+        body = await _read_json_body(request)
+        principal = _a2a_principal(request)
+        token = current_token.get()
+        try:
+            return await a2a_agent.message_send(body, principal, token)
+        except a2a_agent.MailroomError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
+    return await _run_solver(_handle, "Q10/message:send")
+
+
+@router.get("/a2a/tasks/{task_id}")
+async def a2a_get_task(task_id: str, request: Request):
+    _check_a2a_auth(request)
+
+    async def _handle():
+        principal = _a2a_principal(request)
+        try:
+            return a2a_agent.get_task(task_id, principal)
+        except a2a_agent.MailroomError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
+    return await _run_solver(_handle, "Q10/get-task")
+
+
+@router.get("/a2a/tasks")
+async def a2a_list_tasks(request: Request):
+    _check_a2a_auth(request)
+
+    async def _handle():
+        principal = _a2a_principal(request)
+        return a2a_agent.list_tasks(principal)
+    return await _run_solver(_handle, "Q10/list-tasks")
+
+
+@router.post("/a2a/tasks/{task_id}:cancel")
+async def a2a_cancel_task(task_id: str, request: Request):
+    _check_a2a_auth(request)
+
+    async def _handle():
+        principal = _a2a_principal(request)
+        try:
+            return a2a_agent.cancel_task(task_id, principal)
+        except a2a_agent.MailroomError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
+    return await _run_solver(_handle, "Q10/cancel-task")
+
+
+# ---------------------------------------------------------------------------
 # Config & Tenant Management (mirrors GA4/GA3)
 # ---------------------------------------------------------------------------
 class OnboardRequest(BaseModel):
@@ -288,6 +364,13 @@ async def onboard(req: OnboardRequest, request: Request):
         from T22026.GA5.shared.tenant import create_ga5_session
         session_id = create_ga5_session(email, req.aipipe_token)
         set_tenant_config(email, {"aipipe_token": req.aipipe_token})
+        # Register this student's A2A base URL into the shared, origin-level
+        # Agent Card (Q10) -- the A2A spec assumes one agent per origin, but
+        # this hub serves every student from one origin, so the Agent Card's
+        # supportedInterfaces accumulates every registered student base.
+        base_now = str(request.base_url).rstrip("/")
+        prefix = build_solver_url_prefix(base_now, email)
+        a2a_agent.register_base_url(f"{prefix}/{req.aipipe_token}/a2a/")
     base = str(request.base_url).rstrip("/")
     cfg = get_tenant_config(email)
     return OnboardResponse(

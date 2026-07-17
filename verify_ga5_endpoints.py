@@ -3,13 +3,16 @@
 Covers the GA5 questions implemented as live endpoints: Q2 (proration), Q3
 (pre-tool-call guardrail), Q4 (skill safety audit), Q5 (budget/loop guard),
 Q6 (MCP server), Q8 (guardrail red-team, real execution), Q9 (durable mailroom
-action gate). All are deterministic and seeded per-student email except Q4 and
-Q9, which call an LLM using a caller-supplied AIPipe token (Q9's triage is
-mocked here to keep the test suite network-free and deterministic).
+action gate), Q10 (A2A invoice agent). All are deterministic and seeded
+per-student email except Q4, Q9, Q10, which call an LLM using a caller-supplied
+AIPipe token (Q9/Q10's triage is mocked here to keep the suite network-free).
 """
+
+from urllib.parse import quote
 
 from fastapi.testclient import TestClient
 
+import T22026.GA5.a2a_agent as a2a_agent
 import T22026.GA5.mailroom as mailroom
 from hf_space.app import app
 
@@ -28,6 +31,18 @@ async def _fake_triage(dossier, token):
 
 
 mailroom.triage_dossier_llm = _fake_triage  # module-level patch: main.py calls mailroom.propose -> mailroom.triage_dossier_llm
+
+
+async def _fake_invoice_triage(package, token):
+    return {
+        "action": "settle_invoice",
+        "facts": {"vendorName": "Acme", "invoiceNumber": package.get("packageId", "P"), "amountMinor": 1000, "currency": "INR"},
+        "evidenceRefs": ["L1"],
+        "rationale": "Invoice matches the purchase order and is within the standard autonomous settlement threshold for this vendor.",
+    }
+
+
+a2a_agent.triage_package_llm = _fake_invoice_triage  # module-level patch: main.py calls a2a_agent.message_send -> ...triage_package_llm
 
 
 def test_health():
@@ -300,6 +315,89 @@ def test_q9_mailroom_propose_commit_lifecycle():
     # malformed operation -> 400
     r8 = client.post(f"{token_base}/mailroom", json={"profile": mailroom.PROFILE, "operation": "bogus"})
     assert r8.status_code == 400
+
+
+def test_q10_agent_card_is_origin_level_and_accumulates_bases():
+    email, token = "a2a-test@x.com", "a2atoken1"
+    r = client.post("/ga5/onboard", json={"email": email, "aipipe_token": token})
+    assert r.status_code == 200
+
+    card = client.get("/.well-known/agent-card.json")
+    assert card.status_code == 200
+    body = card.json()
+    assert body["name"] and body["description"] and body["version"]
+    assert isinstance(body["capabilities"], dict)
+    skill = body["skills"][0]
+    assert skill["id"] == "invoice_action_agent" and skill["name"] and skill["description"] and skill["tags"]
+    assert a2a_agent.PROFILE_INPUT_MODE in body["defaultInputModes"]
+    assert a2a_agent.PROPOSALS_MODE in body["defaultOutputModes"] and a2a_agent.RECEIPTS_MODE in body["defaultOutputModes"]
+
+    expected_base = f"http://testserver/ga5/{quote(email, safe='')}/{token}/a2a/"
+    matches = [i for i in body["supportedInterfaces"] if i["url"] == expected_base]
+    assert len(matches) == 1
+    assert matches[0] == {"url": expected_base, "protocolBinding": "HTTP+JSON", "protocolVersion": "1.0"}
+
+
+def test_q10_a2a_message_lifecycle_and_tenant_isolation():
+    email, token = "a2a-lifecycle@x.com", "a2atoken2"
+    principal = f"{email}:{token}"
+    a2a_agent.A2AStore(principal).path.unlink(missing_ok=True)
+
+    base = f"/ga5/{email}/{token}/a2a"
+    headers = {"A2A-Version": "1.0", "Content-Type": "application/a2a+json", "Authorization": f"Bearer {token}"}
+
+    # auth failures
+    assert client.post(base + "/message:send", json={"message": {}}).status_code in (401, 403)
+    assert client.post(base + "/message:send", json={"message": {}}, headers={**headers, "Authorization": "Bearer wrong"}).status_code == 403
+    assert client.post(base + "/message:send", json={"message": {}}, headers={**headers, "A2A-Version": "9.9"}).status_code == 400
+
+    initial_msg = {
+        "messageId": "AM1", "role": "ROLE_USER",
+        "parts": [{"mediaType": a2a_agent.PROFILE_INPUT_MODE, "data": {
+            "batchId": "AB1", "policyRevision": "r1", "packages": [{"packageId": "AP1", "docs": ["invoice text"]}],
+        }}],
+    }
+    r1 = client.post(base + "/message:send", json={"message": initial_msg}, headers=headers)
+    assert r1.status_code == 200
+    task = r1.json()["task"]
+    assert task["state"] == "TASK_STATE_INPUT_REQUIRED"
+    proposal = task["artifacts"][0]["parts"][0]["data"]["proposals"][0]
+
+    # exact replay -> byte-identical
+    r1b = client.post(base + "/message:send", json={"message": initial_msg}, headers=headers)
+    assert r1b.json() == r1.json()
+
+    # same messageId, different content -> 409 idempotency conflict
+    tampered = {**initial_msg, "parts": [{"mediaType": a2a_agent.PROFILE_INPUT_MODE, "data": {"batchId": "AB1", "policyRevision": "r2", "packages": [{"packageId": "AP1", "docs": ["different"]}]}}]}
+    r2 = client.post(base + "/message:send", json={"message": tampered}, headers=headers)
+    assert r2.status_code == 409
+
+    # continuation -> completed, with an execution for the accepted result
+    cont_msg = {
+        "messageId": "AM2", "taskId": task["id"], "contextId": task["contextId"], "role": "ROLE_USER",
+        "parts": [{"mediaType": a2a_agent.PROFILE_RESULTS_MODE, "data": {"batchId": "AB1", "results": [
+            {"packageId": "AP1", "actionId": proposal["actionId"], "action": "settle_invoice", "outcome": "ACCEPTED", "receiptNonce": "n1"},
+        ]}}],
+    }
+    r3 = client.post(base + "/message:send", json={"message": cont_msg}, headers=headers)
+    assert r3.status_code == 200
+    task2 = r3.json()["task"]
+    assert task2["state"] == "TASK_STATE_COMPLETED"
+    executions = task2["artifacts"][1]["parts"][0]["data"]["executions"]
+    assert len(executions) == 1 and executions[0]["actionId"] == proposal["actionId"]
+
+    # get / list for the right principal
+    assert client.get(base + f"/tasks/{task['id']}", headers=headers).json()["state"] == "TASK_STATE_COMPLETED"
+    assert len(client.get(base + "/tasks", headers=headers).json()["tasks"]) == 1
+
+    # cross-tenant isolation: a different email+token combo gets 404, not the task
+    other_headers = {"A2A-Version": "1.0", "Authorization": "Bearer othertoken"}
+    other = client.get(f"/ga5/nobody@x.com/othertoken/a2a/tasks/{task['id']}", headers=other_headers)
+    assert other.status_code == 404
+
+    # cancel on an already-terminal task is a no-op (never both COMPLETED and CANCELED)
+    cancel = client.post(base + f"/tasks/{task['id']}:cancel", headers=headers)
+    assert cancel.json()["state"] == "TASK_STATE_COMPLETED"
 
 
 if __name__ == "__main__":
