@@ -199,7 +199,7 @@ async def triage_package_llm(package: Dict[str, Any], token: str) -> Dict[str, A
     ]
     for attempt in range(3):  # retry up to 3x for hallucination/schema errors
         try:
-            raw = await aipipe_chat(messages, token, model="gpt-4o", max_tokens=600)
+            raw = await aipipe_chat(messages, token, model="gpt-4o-mini", max_tokens=600, timeout=12.0, retries=1)
             out = parse_json_block(raw)
             action = out.get("action")
             facts = out.get("facts")
