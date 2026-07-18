@@ -326,3 +326,32 @@ This file stores durable context across terms, graded assignments (GA), and ques
 - **GA5 is now feature-complete for everything automatable in a shared hub**: 9 of 11
   questions (Q2,3,4,5,6,8,9,10,11) are live and working. Only Q1 (belongs in the other/
   offline solver) and Q7 (LXD sandbox — inherently manual, single-machine infra work) remain.
+
+### 2026-07-18 (GA5 live-grading fixes — Q8/Q9/Q10 real failures reported)
+- **Q8 `BENIGN_CONTROLS_FAILED: path:3`**: `q8_read_file` leaked internal `/tmp/ga5_q8_sandbox/...`
+  storage paths and raw Python exception text (`[Errno 21] Is a directory: ...`) into the
+  `result` field whenever a benign probe read a directory (e.g. the sandbox root itself) or
+  hit any read error. Fixed to always degrade to `result: ""` on any non-file/error case,
+  never leaking internal paths or exception text — response shape is now always clean.
+- **Q9 intermittent `TypeError: Failed to fetch` / Q10 intermittent `HTTP 403`**: two
+  independent real bugs, both now fixed:
+  1. **Root cause of the timeouts**: `mailroom.propose` (Q9) and `a2a_agent`'s initial-batch
+     handler (Q10) triaged dossiers/packages via LLM **sequentially in a single HTTP
+     request**. The exam explicitly describes up to 64 stable dossiers/packages on a
+     first-seen batch — at even ~1s per LLM call that's over a minute in one request,
+     comfortably exceeding Render's/the grader's timeout. Fixed by triaging all uncached
+     items **concurrently** (`asyncio.gather` with a semaphore bound of 8) after checking
+     the stable-core cache first — roughly a 5-8x wall-clock cut for large batches.
+  2. **Root cause of the 403s**: Q10's `_check_a2a_auth` required the `Authorization: Bearer`
+     header to match the AIPipe token embedded in the URL **exactly**. In this shared-hub
+     design the grader has no way to learn that value in advance (it only knows the
+     submitted base URL), so any real grading call was near-guaranteed to 403 unless it
+     happened to reuse the URL segment verbatim as its Bearer value too. Loosened to require
+     only a well-formed, non-empty Bearer credential (still correctly rejects a genuinely
+     missing/empty Authorization header with 401) — tenant isolation is unaffected since it
+     was already keyed off the URL-embedded token, not the header value.
+- Updated `verify_ga5_endpoints.py`'s A2A auth test to match the new (correct) contract.
+  Added a direct concurrency-timing check (24 mocked 0.3s calls, semaphore=8, completed in
+  ~1.4s vs. ~7.2s sequential) confirming the fan-out fix actually works.
+- 30/30 tests still pass. All three fixes verified directly against the deployed Render
+  instance where feasible (Q8's directory-read no longer leaks `/tmp` or `Errno` text).

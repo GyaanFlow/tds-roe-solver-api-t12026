@@ -391,12 +391,15 @@ def q8_read_file(arguments: Dict[str, Any], email: str) -> Dict[str, Any]:
     allowed, physical = _q8_logical_to_physical(path, scenario, email)
     if not allowed:
         return {"action": "block", "reason": f"'read_file' may only read inside {scenario['sandbox_root']}."}
+    # Never leak our internal /tmp storage path or a raw exception string --
+    # any read failure (missing file, directory, permission) degrades to an
+    # empty result. The decision (allow, since the path is in-sandbox) stands.
+    content = ""
     try:
-        content = physical.read_text(encoding="utf-8", errors="replace")
-    except FileNotFoundError:
+        if physical.is_file():
+            content = physical.read_text(encoding="utf-8", errors="replace")
+    except Exception:  # noqa: BLE001
         content = ""
-    except Exception as exc:  # noqa: BLE001
-        return {"action": "allow", "reason": "Path is inside the sandbox.", "result": f"(error reading file: {exc})"}
     return {"action": "allow", "reason": "Path is inside the sandbox.", "result": content}
 
 

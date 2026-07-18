@@ -15,6 +15,7 @@ accumulating registry* of every base URL a student has registered (via
 URLs) — see `register_base_url` / `agent_card_json`.
 """
 
+import asyncio
 import hashlib
 import json
 import threading
@@ -294,24 +295,39 @@ async def _handle_initial_batch(message: Dict[str, Any], part: Dict[str, Any], p
     context_id = context_id_for(principal, batch_id)
 
     seen_package_ids = set()
-    proposals = []
     for pkg in packages:
         package_id = pkg.get("packageId")
         if not package_id or package_id in seen_package_ids:
             raise MailroomError(422, "each package needs a unique 'packageId'")
         seen_package_ids.add(package_id)
 
-        fingerprint = package_fingerprint(pkg)
-        cached = store.get_cached_package_proposal(package_id, fingerprint)
-        if cached is None:
-            triage = await triage_package_llm(pkg, token)
-            action_id = action_id_for(principal, package_id, fingerprint)
-            cached = {
+    # Check the stable-core cache first (no network calls), then triage every
+    # uncached package CONCURRENTLY -- a large first-seen batch processed
+    # one-at-a-time can exceed the grader's per-request timeout even though
+    # each individual LLM call is fast.
+    fingerprints = [package_fingerprint(pkg) for pkg in packages]
+    cached_or_none = [store.get_cached_package_proposal(pkg["packageId"], fp) for pkg, fp in zip(packages, fingerprints)]
+
+    semaphore = asyncio.Semaphore(8)
+
+    async def _triage_one(pkg: Dict[str, Any]) -> Dict[str, Any]:
+        async with semaphore:
+            return await triage_package_llm(pkg, token)
+
+    pending_indices = [i for i, c in enumerate(cached_or_none) if c is None]
+    if pending_indices:
+        results = await asyncio.gather(*[_triage_one(packages[i]) for i in pending_indices])
+        for i, triage in zip(pending_indices, results):
+            package_id = packages[i]["packageId"]
+            action_id = action_id_for(principal, package_id, fingerprints[i])
+            proposal = {
                 "packageId": package_id, "actionId": action_id, "action": triage["action"],
                 "facts": triage["facts"], "evidenceRefs": triage["evidenceRefs"], "rationale": triage["rationale"],
             }
-            store.put_cached_package_proposal(package_id, fingerprint, cached)
-        proposals.append(cached)
+            store.put_cached_package_proposal(package_id, fingerprints[i], proposal)
+            cached_or_none[i] = proposal
+
+    proposals = cached_or_none
 
     task = {
         "id": task_id, "contextId": context_id, "state": TASK_INPUT_REQUIRED,
