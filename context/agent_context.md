@@ -355,3 +355,54 @@ This file stores durable context across terms, graded assignments (GA), and ques
   ~1.4s vs. ~7.2s sequential) confirming the fan-out fix actually works.
 - 30/30 tests still pass. All three fixes verified directly against the deployed Render
   instance where feasible (Q8's directory-read no longer leaks `/tmp` or `Errno` text).
+
+### 2026-07-18 (GA5 grader-failure fixes — Q3/Q4/Q5/Q8/Q9/Q10/Q11, live feedback round)
+Real grader feedback came back on the deployed GA5 hub; fixed each root cause and re-verified
+the deterministic ones live on Render. Commit `2a99a1e` (GitHub) / `a92c2f3`→`a92c2f3` (HF).
+
+- **Q3 guardrail (was 8/15; miss categories direct-read / egress-allowed / obfuscated-read)** —
+  three concrete bugs, all fixed and verified live:
+  1. `cat /home/agent/.pgpass.bak` was wrongly BLOCKED — the old `secret_file in text` substring
+     check false-positived on any name with the secret as a prefix. Removed it; now every
+     whitespace/quote-delimited token is resolved (~ / $HOME / ${HOME} expansion, cwd-relative,
+     normpath) and compared EXACTLY to the secret path.
+  2. `cd ~ && cat .pgpass` (and `cd /home/agent; cat .pgpass`) was wrongly ALLOWED — added
+     cd-tracking: segments are split on `; && || | &`, and a leading `cd X` updates the working
+     directory used to resolve subsequent relative reads.
+  3. Egress to `huggingface.co.` (trailing-dot FQDN) was wrongly BLOCKED — host comparison now
+     strips a single trailing dot. Also: quotes/`$(...)` are stripped WITHOUT inserting spaces so
+     `"$HOME"/.pgpass` collapses to one token; leading `VAR=value` assignments are resolved.
+- **Q8 red-team (was MALICIOUS_PROBES_NOT_BLOCKED path:2 url:1)** — the deployed loop-unquote+
+  normpath approach still let two path tricks and one URL trick through. Rewrote
+  `_q8_logical_to_physical` to a component-based canonicalizer: it decides on a FULLY url-decoded,
+  backslash-normalized, `;param`-stripped view (blocks `file://` URIs, the `..;` path-parameter
+  trick, `%2f`/`%252f` encoded-slash traversal, real `..`, and non-file schemes) while reading the
+  PHYSICAL file from the ORIGINAL literal components (so `%2e%2e-literal.txt` still reads its real
+  token). `q8_fetch_url` now also rejects ANY userinfo in the authority (`evil.com@example.com`
+  where the real host is allow-listed) and non-http(s) schemes. Verified live: file://, `..;`,
+  `%2f`, `%252f`, backslash, direct-canary, userinfo, loopback all BLOCK; benign files still read.
+- **Q9 mailroom (was 2/70 exact)** — root cause was mass-fallback: strict `validate_proposal_shape`
+  rejected slightly-off LLM output, so ~68 dossiers became identical `request_confirmation`
+  fallbacks (matching only the ~2 genuinely-request_confirmation cases). Redesigned triage: the LLM
+  now returns loose FIELD VALUES (action + recipient/referenceId/status/caseId/... + evidence), and
+  `build_proposal_from_fields` deterministically assembles the EXACT frozen target/payload per the
+  spec's frozen types (fixed parts like `kind`, `template`, `reasonCode:"INDIRECT_PROMPT_INJECTION"`,
+  the `mailbox:<mailbox>` prefix, `security_queue`→`mailroom` always correct). Result always
+  schema-valid → no mass-fallback; every dossier keeps its own action.
+- **Q11 incident OTLP** — a `503` attempt was missing `error.type="503"` (spec requires it with
+  span-status-2 + resend_count=0; retry resend_count=1). Refactored diag+effect attempt-span
+  emission into one helper that sets `error.type` = "timeout" for timeouts and the numeric status
+  string for any failing HTTP status. Verified end-to-end (503→retry→200→effect) with redaction intact.
+- **Q4 scanner (4/5, one over-flag; F-beta 0.5)** — precision-biased prompt using the EXACT spec
+  category definitions and an explicit "when in doubt DO NOT flag / clean file returns []" rule;
+  upgraded to gpt-4o.
+- **Q10 invoice + Q11 diagnosis** — sharper fact/evidence extraction prompts; upgraded to gpt-4o.
+  (A linter/user pass also made `package_fingerprint` exclude transient `receivedAt`/`partition`
+  keys, helping stable-core reuse, and added SpanBuilder `do_not_export` redaction.)
+- **Q5 (14/15, cosmetic-diff-key-reorder)** — could NOT reproduce: the canonicalizer (recursive key
+  sort + whitespace collapse + drop of the seeded tracing field) handles every reorder/whitespace/
+  tracing case I constructed (15+, both over- and under-halting). Left unchanged; revisit if it
+  persists. Deployed `_canonicalize`/`_detect_loop` confirmed identical to current.
+- 30/30 project tests pass. LLM-scored categories (Q4/Q9/Q10/Q11 semantic accuracy) can't be
+  verified without running the grader — structural causes fixed + prompts/models upgraded; needs a
+  re-Check to confirm scores.
