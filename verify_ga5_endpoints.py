@@ -23,7 +23,7 @@ EMAIL = "23f1000805@ds.study.iitm.ac.in"
 BASE = f"/ga5/{EMAIL}"
 
 
-async def _fake_triage(dossier, token):
+async def _fake_triage(dossier, token, **kwargs):
     call_id = mailroom.call_id_for(dossier["dossierId"], mailroom.dossier_fingerprint(dossier))
     return {
         "dossierId": dossier["dossierId"], "callId": call_id, "action": "no_action",
@@ -47,14 +47,15 @@ async def _fake_invoice_triage(package, token):
 a2a_agent.triage_package_llm = _fake_invoice_triage  # module-level patch: main.py calls a2a_agent.message_send -> ...triage_package_llm
 
 
-async def _fake_diagnose_incident(incident, tool_catalog, max_diagnostics, token):
+async def _fake_diagnose_incident(incident, tool_catalog, max_diagnostics, token, *args, **kwargs):
     return {
         "rootCause": incident["allowedRootCauses"][0], "evidence": ["ev_1", "ev_2"],
         "diagnosticCalls": [{"toolName": "query_metrics", "arguments": {"service": "api"}}],
     }
 
 
-async def _fake_choose_effect(root_cause, effect_tools, tool_catalog, token):
+async def _fake_choose_effect(root_cause, effect_tools, tool_catalog, token, *args, **kwargs):
+    # Support if token or incident is passed positionally
     return {"chosenEffect": effect_tools[0] if effect_tools else None, "arguments": {"service": "api"}}
 
 

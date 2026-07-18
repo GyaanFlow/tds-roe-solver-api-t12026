@@ -15,7 +15,7 @@ from T22026.GA5.shared.tenant import current_email, current_token, normalize_ema
 _CORS_HEADERS = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, X-Request-ID, Authorization, X-AIPipe-Token, X-Exam-Challenge, X-Exam-Timestamp, X-Exam-Signature",
+    "Access-Control-Allow-Headers": "Content-Type, X-Request-ID, Authorization, X-AIPipe-Token, X-Exam-Challenge, X-Exam-Timestamp, X-Exam-Signature, A2A-Version",
     "Access-Control-Expose-Headers": "Retry-After, X-Request-ID",
 }
 
@@ -60,6 +60,11 @@ async def _inject_tenant(request: Request, call_next):
         response = await call_next(request)
         for key, value in _CORS_HEADERS.items():
             response.headers[key] = value
+        
+        path = request.url.path
+        if "/a2a/" in path or "agent-card.json" in path:
+            response.headers["Content-Type"] = "application/a2a+json"
+            
         return response
     finally:
         current_email.reset(token_cv)

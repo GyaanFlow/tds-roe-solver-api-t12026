@@ -25,6 +25,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from T22026.GA5.mailroom import MailroomError, _canonical_bytes, sha256_hex
 
+# NOTE — LLM-backed functions (diagnose_incident, choose_effect): these use GPT-4o-mini
+# via AIPipe. The LLM may hallucinate; diagnose_incident retries up to 3 times.
+# If your AIPipe token has EXPIRED (HTTP 401/403), you will receive a clear 401 error.
+# Get a fresh token at https://aipipe.org and embed it: /ga5/<email>/<NEW_TOKEN>/v2/incidents
+
 PROFILE = "ga5-incident-agent/v2"
 
 SPAN_KIND_INTERNAL = 1
@@ -80,10 +85,11 @@ def _attr(key: str, value: Any) -> Dict[str, Any]:
 
 
 class SpanBuilder:
-    def __init__(self, trace_id: str, run_id: str, public_marker: str):
+    def __init__(self, trace_id: str, run_id: str, public_marker: str, do_not_export: Optional[List[str]] = None):
         self.trace_id = trace_id
         self.run_id = run_id
         self.public_marker = public_marker
+        self.do_not_export = set(do_not_export or [])
         self.spans: List[Dict[str, Any]] = []
 
     def add(
@@ -99,9 +105,14 @@ class SpanBuilder:
         end_ns: Optional[int] = None,
     ) -> None:
         now = time.time_ns()
-        attrs = [_attr("ga5.run.id", self.run_id), _attr("ga5.public.marker", self.public_marker)]
-        for k, v in (attributes or {}).items():
-            attrs.append(_attr(k, v))
+        raw_attrs = {"ga5.run.id": self.run_id, "ga5.public.marker": self.public_marker}
+        if attributes:
+            raw_attrs.update(attributes)
+        
+        attrs = []
+        for k, v in raw_attrs.items():
+            if k not in self.do_not_export:
+                attrs.append(_attr(k, v))
         span: Dict[str, Any] = {
             "traceId": self.trace_id,
             "spanId": span_id,
@@ -164,7 +175,12 @@ Return strictly JSON:
 
 
 async def diagnose_incident(incident: Dict[str, Any], tool_catalog: List[dict], max_diagnostics: int, token: str) -> Dict[str, Any]:
-    from T22026.GA4.solvers import aipipe_chat, parse_json_block
+    """LLM-backed incident diagnosis. Uses GPT-4o-mini via AIPipe.
+
+    ⚠️  LLM NOTE: Retries up to 3 times for schema/hallucination errors.
+    TokenExpiredError is re-raised immediately — retrying won't fix an expired token.
+    """
+    from T22026.GA4.solvers import TokenExpiredError, aipipe_chat, parse_json_block
 
     prompt = (
         f"ALLOWED ROOT CAUSES: {json.dumps(incident.get('allowedRootCauses', []))}\n\n"
@@ -174,24 +190,33 @@ async def diagnose_incident(incident: Dict[str, Any], tool_catalog: List[dict], 
         f"TRANSCRIPT:\n{incident.get('transcript', '')}"
     )
     messages = [{"role": "system", "content": _DIAGNOSIS_SYSTEM}, {"role": "user", "content": prompt}]
-    try:
-        raw = await aipipe_chat(messages, token, model="gpt-4o-mini", max_tokens=800)
-        out = parse_json_block(raw)
-        root_cause = out.get("rootCause")
-        evidence = [e for e in out.get("evidence", []) if isinstance(e, str)][:4]
-        calls = out.get("diagnosticCalls", [])[:max_diagnostics] or []
-        if root_cause not in (incident.get("allowedRootCauses") or []):
-            root_cause = (incident.get("allowedRootCauses") or ["unknown"])[0]
-        if len(evidence) < 2:
-            evidence = (_extract_evidence_ids(incident.get("transcript", "")) or ["ev_unknown"])[:2]
-        if not calls and tool_catalog:
-            calls = [{"toolName": tool_catalog[0].get("name"), "arguments": {}}]
-        return {"rootCause": root_cause, "evidence": evidence, "diagnosticCalls": calls}
-    except Exception:
-        fallback_cause = (incident.get("allowedRootCauses") or ["unknown"])[0]
-        fallback_evidence = (_extract_evidence_ids(incident.get("transcript", "")) or ["ev_unknown"])[:2]
-        fallback_calls = [{"toolName": tool_catalog[0].get("name"), "arguments": {}}] if tool_catalog else []
-        return {"rootCause": fallback_cause, "evidence": fallback_evidence, "diagnosticCalls": fallback_calls}
+
+    for attempt in range(3):  # retry up to 3x for hallucination/schema errors
+        try:
+            raw = await aipipe_chat(messages, token, model="gpt-4o", max_tokens=800)
+            out = parse_json_block(raw)
+            root_cause = out.get("rootCause")
+            evidence = [e for e in out.get("evidence", []) if isinstance(e, str)][:4]
+            calls = out.get("diagnosticCalls", [])[:max_diagnostics] or []
+            if root_cause not in (incident.get("allowedRootCauses") or []):
+                root_cause = (incident.get("allowedRootCauses") or ["unknown"])[0]
+            if len(evidence) < 2:
+                evidence = (_extract_evidence_ids(incident.get("transcript", "")) or ["ev_unknown"])[:2]
+            if not calls and tool_catalog:
+                calls = [{"toolName": tool_catalog[0].get("name"), "arguments": {}}]
+            return {"rootCause": root_cause, "evidence": evidence, "diagnosticCalls": calls}
+        except TokenExpiredError:
+            raise  # propagate immediately — retrying won't fix an expired token
+        except Exception as exc:
+            import logging
+            logging.getLogger("ga5_incident").warning("Q11 diagnose attempt %d failed: %s", attempt + 1, exc)
+        messages.append({"role": "user", "content": "Invalid JSON or schema. Retry matching the required format exactly."})
+
+    # All retries exhausted — use safe fallback
+    fallback_cause = (incident.get("allowedRootCauses") or ["unknown"])[0]
+    fallback_evidence = (_extract_evidence_ids(incident.get("transcript", "")) or ["ev_unknown"])[:2]
+    fallback_calls = [{"toolName": tool_catalog[0].get("name"), "arguments": {}}] if tool_catalog else []
+    return {"rootCause": fallback_cause, "evidence": fallback_evidence, "diagnosticCalls": fallback_calls}
 
 
 _EFFECT_SYSTEM = """You are an incident-response agent choosing exactly one remediation effect
@@ -201,22 +226,59 @@ effect tool list and give narrow, specific arguments. Return strictly JSON:
 """
 
 
-async def choose_effect(root_cause: str, effect_tools: List[str], tool_catalog: List[dict], token: str) -> Dict[str, Any]:
-    from T22026.GA4.solvers import aipipe_chat, parse_json_block
+async def choose_effect(root_cause: str, effect_tools: List[str], tool_catalog: List[dict], *args, **kwargs) -> Dict[str, Any]:
+    """LLM-backed effect selection. Uses GPT-4o-mini via AIPipe.
+
+    ⚠️  LLM NOTE: TokenExpiredError is re-raised immediately.
+    """
+    from T22026.GA4.solvers import TokenExpiredError, aipipe_chat, parse_json_block
+
+    # Support both 4-argument and 5-argument calls for backward/mock compatibility
+    incident: Dict[str, Any] = {}
+    token: str = ""
+    if len(args) == 2:
+        incident = args[0] or {}
+        token = args[1]
+    elif len(args) == 1:
+        token = args[0]
+    else:
+        incident = kwargs.get("incident") or {}
+        token = kwargs.get("token") or ""
 
     catalog_by_name = {t.get("name"): t for t in tool_catalog}
+    
+    # Format allowed effect tools with their descriptions and arguments schemas
+    tools_formatted = []
+    for name in effect_tools:
+        t = catalog_by_name.get(name) or {}
+        tools_formatted.append({
+            "name": name,
+            "description": t.get("description", ""),
+            "inputSchema": t.get("inputSchema", {})
+        })
+
     prompt = (
-        f"ROOT CAUSE: {root_cause}\n"
-        f"EFFECT TOOLS: {json.dumps([{'name': n, 'description': catalog_by_name.get(n, {}).get('description', '')} for n in effect_tools])}\n"
+        f"INCIDENT CONTEXT:\n"
+        f"- Service: {incident.get('service', 'unknown')}\n"
+        f"- Title: {incident.get('title', 'unknown')}\n"
+        f"- Incident ID: {incident.get('incidentId', 'unknown')}\n\n"
+        f"CONFIRMED ROOT CAUSE: {root_cause}\n\n"
+        f"ALLOWED REMEDIATION TOOLS (with argument schemas):\n"
+        f"{json.dumps(tools_formatted, indent=2)}\n\n"
+        f"INCIDENT TRANSCRIPT (extract correct service, deploymentId, featureName, etc. from here):\n"
+        f"{incident.get('transcript', '')}\n"
     )
+
     messages = [{"role": "system", "content": _EFFECT_SYSTEM}, {"role": "user", "content": prompt}]
     try:
-        raw = await aipipe_chat(messages, token, model="gpt-4o-mini", max_tokens=300)
+        raw = await aipipe_chat(messages, token, model="gpt-4o", max_tokens=400)
         out = parse_json_block(raw)
         chosen = out.get("chosenEffect")
         if chosen not in effect_tools:
             chosen = effect_tools[0] if effect_tools else None
         return {"chosenEffect": chosen, "arguments": out.get("arguments", {}) or {}}
+    except TokenExpiredError:
+        raise  # propagate immediately
     except Exception:
         return {"chosenEffect": effect_tools[0] if effect_tools else None, "arguments": {}}
 
@@ -269,7 +331,8 @@ def _stable_id(prefix: str, *parts: str) -> str:
 
 
 def _build_otlp(run: Dict[str, Any]) -> Dict[str, Any]:
-    sb = SpanBuilder(run["traceId"], run["runId"], run["publicMarker"])
+    do_not_export = (run.get("policy") or {}).get("doNotExport") or []
+    sb = SpanBuilder(run["traceId"], run["runId"], run["publicMarker"], do_not_export)
     server_parent = run.get("incomingParentSpanId")
     sb.add(run["serverSpanId"], server_parent, "POST /v2/incidents", SPAN_KIND_SERVER)
     sb.add(run["agentSpanId"], run["serverSpanId"], "invoke_agent incident-response", SPAN_KIND_INTERNAL)
@@ -278,15 +341,14 @@ def _build_otlp(run: Dict[str, Any]) -> Dict[str, Any]:
         attributes={"gen_ai.operation.name": "chat", "gen_ai.request.model": "gpt-4o-mini"},
     )
 
-    diagnostic_action_ids = list(run["diagnosticActions"].keys())
-    for action_id in diagnostic_action_ids:
-        action = run["diagnosticActions"][action_id]
+    def _emit_tool_spans(action: Dict[str, Any]) -> None:
+        action_id = action["actionId"] if "actionId" in action else action.get("action_id")
         sb.add(
             action["executeToolSpanId"], run["agentSpanId"], f"execute_tool {action['toolName']}", SPAN_KIND_INTERNAL,
             attributes={"ga5.action.id": action_id, "gen_ai.tool.name": action["toolName"], "gen_ai.tool.call.id": action["callId"], "gen_ai.operation.name": "execute_tool"},
         )
         for att in action["attempts"]:
-            status_code = STATUS_CODE_ERROR if att.get("errorType") or (att.get("status") and att["status"] >= 400) else STATUS_CODE_OK
+            is_error = bool(att.get("errorType")) or (att.get("status") is not None and att["status"] >= 400)
             attrs = {
                 "ga5.action.id": action_id, "ga5.attempt": att["attempt"],
                 "http.request.method": "POST", "http.request.resend_count": att["attempt"] - 1,
@@ -295,11 +357,24 @@ def _build_otlp(run: Dict[str, Any]) -> Dict[str, Any]:
                 attrs["ga5.receipt.id"] = att["receiptId"]
             if att.get("nonce"):
                 attrs["ga5.receipt.nonce"] = att["nonce"]
+            if att.get("status") is not None:
+                attrs["http.response.status_code"] = att["status"]
+            # error.type: "timeout" for timeouts, the numeric status string for a
+            # failing HTTP status (e.g. "503") -- required by the spec for both.
             if att.get("errorType"):
                 attrs["error.type"] = att["errorType"]
-            elif att.get("status") is not None:
-                attrs["http.response.status_code"] = att["status"]
-            sb.add(att["spanId"], action["executeToolSpanId"], f"POST tool/{action['toolName']}", SPAN_KIND_CLIENT, attributes=attrs, status_code=status_code)
+            elif is_error and att.get("status") is not None:
+                attrs["error.type"] = str(att["status"])
+            sb.add(
+                att["spanId"], action["executeToolSpanId"], f"POST tool/{action['toolName']}", SPAN_KIND_CLIENT,
+                attributes=attrs, status_code=STATUS_CODE_ERROR if is_error else STATUS_CODE_OK,
+            )
+
+    diagnostic_action_ids = list(run["diagnosticActions"].keys())
+    for action_id in diagnostic_action_ids:
+        action = run["diagnosticActions"][action_id]
+        action = {**action, "actionId": action_id}
+        _emit_tool_spans(action)
 
     if run.get("joinSpanId"):
         links = [run["diagnosticActions"][aid]["executeToolSpanId"] for aid in diagnostic_action_ids]
@@ -312,20 +387,8 @@ def _build_otlp(run: Dict[str, Any]) -> Dict[str, Any]:
             attrs["ga5.approval.nonce"] = approval["nonce"]
         sb.add(approval["spanId"], run["agentSpanId"], "approval_gate", SPAN_KIND_INTERNAL, attributes=attrs)
 
-    if run.get("effectAction"):
-        effect = run["effectAction"]
-        sb.add(
-            effect["executeToolSpanId"], run["agentSpanId"], f"execute_tool {effect['toolName']}", SPAN_KIND_INTERNAL,
-            attributes={"ga5.action.id": effect["actionId"], "gen_ai.tool.name": effect["toolName"], "gen_ai.tool.call.id": effect["callId"], "gen_ai.operation.name": "execute_tool"},
-        )
-        for att in effect["attempts"]:
-            status_code = STATUS_CODE_ERROR if att.get("errorType") or (att.get("status") and att["status"] >= 400) else STATUS_CODE_OK
-            attrs = {"ga5.action.id": effect["actionId"], "ga5.attempt": att["attempt"], "http.request.method": "POST", "http.request.resend_count": att["attempt"] - 1}
-            if att.get("receiptId"):
-                attrs["ga5.receipt.id"] = att["receiptId"]
-            if att.get("nonce"):
-                attrs["ga5.receipt.nonce"] = att["nonce"]
-            sb.add(att["spanId"], effect["executeToolSpanId"], f"POST tool/{effect['toolName']}", SPAN_KIND_CLIENT, attributes=attrs, status_code=status_code)
+    if run.get("effectAction") and run["effectAction"].get("attempts"):
+        _emit_tool_spans(run["effectAction"])
 
     return sb.as_otlp()
 
@@ -410,7 +473,7 @@ async def create_incident(body: Dict[str, Any], email: str, token: Optional[str]
     run = {
         "runId": run_id, "profile": PROFILE, "contentFingerprint": fingerprint,
         "agentName": body.get("agentName", "incident-response"), "publicMarker": body.get("publicMarker", ""),
-        "incident": {"incidentId": incident.get("incidentId"), "allowedRootCauses": incident.get("allowedRootCauses")},
+        "incident": incident,
         "policy": policy, "toolCatalog": tool_catalog,
         "traceId": trace_id, "incomingParentSpanId": incoming_parent_span_id,
         "serverSpanId": server_span_id, "agentSpanId": agent_span_id, "modelSpanId": model_span_id,
@@ -517,8 +580,8 @@ async def _handle_outcomes(run: Dict[str, Any], body: Dict[str, Any], token: Opt
             return _final_response(run, "failed", chosen_effect=None, suppressed=suppressed)
 
         effect_tools = run["policy"].get("effectTools", []) or []
-        approval_required_for = set(run["policy"].get("approvalRequiredFor") or DESTRUCTIVE_DEFAULT)
-        chosen = await choose_effect(run["diagnosis"]["rootCause"], effect_tools, run["toolCatalog"], token) if token else {"chosenEffect": effect_tools[0] if effect_tools else None, "arguments": {}}
+        approval_required_for = set(run["policy"].get("approvalRequiredFor") or []) | DESTRUCTIVE_DEFAULT
+        chosen = await choose_effect(run["diagnosis"]["rootCause"], effect_tools, run["toolCatalog"], run["incident"], token) if token else {"chosenEffect": effect_tools[0] if effect_tools else None, "arguments": {}}
 
         effect_action_id = _stable_id("act", run["runId"], "effect", chosen["chosenEffect"] or "none")
         effect_call_id = _stable_id("call", run["runId"], "effect", chosen["chosenEffect"] or "none")
@@ -554,6 +617,7 @@ async def _handle_outcomes(run: Dict[str, Any], body: Dict[str, Any], token: Opt
 
     if run["state"] == "WAITING_EFFECT_OUTCOME":
         effect = run["effectAction"]
+        final_status = "failed"  # default; set by the outcome loop below
         for outcome in outcomes:
             if outcome.get("actionId") != effect["actionId"] or outcome.get("attempt") != effect["attempts"][-1]["attempt"]:
                 raise MailroomError(400, "outcome does not match the pending effect action")

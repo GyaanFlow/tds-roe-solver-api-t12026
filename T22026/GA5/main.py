@@ -26,7 +26,7 @@ from T22026.GA5.solvers import (
     redteam_guardrail_decision,
     solve_proration,
 )
-from T22026.GA4.solvers import resolve_aipipe_token
+from T22026.GA4.solvers import TokenExpiredError, resolve_aipipe_token
 from T22026.GA5 import a2a_agent, incident_agent, mailroom
 
 logger = logging.getLogger("ga5_router")
@@ -66,6 +66,21 @@ async def _run_solver(handler: Callable[[], Awaitable[T]], label: str) -> T | JS
         elapsed = time.time() - start
         logger.info("GA5 %s by %s completed in %.2fs", label, email, elapsed)
         return result
+    except TokenExpiredError as exc:
+        elapsed = time.time() - start
+        logger.warning("GA5 %s token expired for %s after %.2fs", label, email, elapsed)
+        return JSONResponse(
+            status_code=401,
+            content={
+                "error": str(exc),
+                "hint": (
+                    "⚠️ Your AIPipe token is expired or invalid. "
+                    "Get a fresh token from https://aipipe.org and embed it in the URL: "
+                    "/ga5/<email>/<NEW_TOKEN>/... "
+                    "LLMs can also hallucinate — if you keep getting wrong answers try calling 2-3 times."
+                ),
+            },
+        )
     except HTTPException as exc:
         elapsed = time.time() - start
         logger.warning("GA5 %s HTTP error for %s after %.2fs: %s", label, email, elapsed, exc.detail)
@@ -175,7 +190,8 @@ async def guardrail_redteam_endpoint(request: Request):
             raise ValueError("'tool' must be 'read_file' or 'fetch_url'")
         arguments = body.get("arguments")
         if not isinstance(arguments, dict):
-            raise ValueError("'arguments' must be an object")
+            # Gracefully handle missing/null arguments instead of crashing
+            arguments = {}
         email = current_email.get()
         return await redteam_guardrail_decision(body, email)
     return await _run_solver(_handle, "Q8")
@@ -226,24 +242,18 @@ async def mailroom_endpoint(request: Request):
 # hf_space/app.py (not here) -- see T22026/GA5/a2a_agent.register_base_url.
 # ---------------------------------------------------------------------------
 def _a2a_principal(request: Request) -> str:
-    """Tenant isolation key: email + the tenant token embedded in the URL. The
-    Bearer header is validated against this same token below."""
-    email = normalize_email(current_email.get())
-    token = current_token.get() or ""
-    return f"{email}:{token}"
+    """Tenant isolation key: exact Bearer token from the Authorization header.
+    Every Bearer token represents a completely separate principal."""
+    auth = request.headers.get("Authorization") or request.headers.get("authorization") or ""
+    if auth.lower().startswith("bearer "):
+        return auth[7:].strip()
+    return ""
 
 
 def _check_a2a_auth(request: Request) -> None:
     version = request.headers.get("A2A-Version") or request.headers.get("a2a-version")
     if version and version != "1.0":
         raise HTTPException(status_code=400, detail="Unsupported A2A-Version")
-    # This hub's real tenant/billing credential is the AIPipe token embedded in
-    # the URL path (resolved separately for the LLM call) -- the grader has no
-    # way to learn that exact value in advance, so we do NOT require the
-    # Authorization header to match it verbatim (doing so previously caused
-    # spurious 403s on genuinely valid calls). We still enforce the spec's
-    # "missing auth must be rejected" requirement: any well-formed, non-empty
-    # Bearer credential is accepted.
     auth = request.headers.get("Authorization") or request.headers.get("authorization") or ""
     if not auth.lower().startswith("bearer ") or not auth[7:].strip():
         raise HTTPException(status_code=401, detail="Missing or malformed Bearer token")

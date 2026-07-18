@@ -27,6 +27,12 @@ AIPIPE_BASE = os.getenv("AIPIPE_BASE_URL", "https://aipipe.org/openai/v1")
 _LLM_CACHE: Dict[str, str] = {}
 
 
+class TokenExpiredError(RuntimeError):
+    """Raised when AIPipe responds with 401 or 403, indicating the token is
+    expired or invalid. Callers should surface this directly to the user with
+    a message to embed a fresh token in the URL."""
+
+
 def resolve_aipipe_token(request_token: Optional[str] = None, tenant_token: Optional[str] = None) -> Optional[str]:
     """Precedence: explicit request token > stored tenant token > env fallback."""
     return (
@@ -74,6 +80,13 @@ async def aipipe_chat(
                 last_err = f"network error: {exc}"
                 await asyncio.sleep(1.0 * (attempt + 1))
                 continue
+            # 401/403 → token is expired or invalid; retrying won't help.
+            if r.status_code in (401, 403):
+                raise TokenExpiredError(
+                    "AIPipe token is expired or invalid (HTTP " + str(r.status_code) + "). "
+                    "Embed a fresh token in the URL path: /ga5/<email>/<NEW_TOKEN>/... "
+                    "You can get a new token from https://aipipe.org"
+                )
             if r.status_code in (429, 500, 502, 503, 504):
                 last_err = f"HTTP {r.status_code}: {r.text[:160]}"
                 await asyncio.sleep(1.2 * (attempt + 1))

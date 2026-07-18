@@ -117,8 +117,12 @@ def a2a_agent_card():
     origin), even though this hub serves many students from one origin -- see
     T22026/GA5/a2a_agent.py for how supportedInterfaces accumulates per-student
     base URLs registered via POST /ga5/onboard."""
+    from fastapi.responses import JSONResponse
     from T22026.GA5.a2a_agent import agent_card_json
-    return agent_card_json()
+    return JSONResponse(
+        content=agent_card_json(),
+        headers={"Content-Type": "application/a2a+json"}
+    )
 
 
 @app.get("/", response_class=HTMLResponse)
