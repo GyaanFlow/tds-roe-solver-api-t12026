@@ -292,3 +292,37 @@ This file stores durable context across terms, graded assignments (GA), and ques
 - `verify_ga5_endpoints.py` grew to 11 tests (was 9); caught and fixed one test-only bug
   (comparing a raw vs. URL-encoded email in an assertion — not a product bug). 29/29 total
   across the whole project.
+
+### 2026-07-18 (GA5 Tier 3, part 3 — Q11 Observable Incident-Response Agent)
+- Added Q11, the heaviest remaining GA5 question: a durable diagnose → dispatch →
+  (approval-gate) → effect agent that exports a full receipt-correlated OTLP trace.
+  Requires an AIPipe token (same URL-embedded model as Q4/Q9/Q10).
+- `T22026/GA5/incident_agent.py`: W3C traceparent parse/generate (continues an incoming trace
+  if valid, else fresh hex trace_id/span_ids), an `SpanBuilder` producing spec-correct OTLP
+  JSON (resourceSpans→scopeSpans→spans, numeric SpanKind, required attribute sets per span
+  type), a full state machine (WAITING_DIAGNOSTICS → WAITING_APPROVAL/WAITING_EFFECT_OUTCOME
+  → COMPLETED/FAILED), and a durable per-tenant file store. Reuses Q9/Q10's canonical-JSON/
+  digest helpers for `argumentsDigest` and idempotency fingerprints.
+- Verified the *entire* documented lifecycle end-to-end with a mocked LLM in one continuous
+  run: diagnostics fan-out (2 concurrent dispatches) with a correct `incident.join` span;
+  a 503 on one diagnostic correctly triggers exactly one retry (new attempt, new CLIENT span,
+  same actionId/callId); a `timeout` on the other diagnostic correctly suppresses it and
+  surfaces in `suppressed` without blocking the run; the confirmed diagnosis correctly routes
+  a destructive effect (`rollback_deployment`) into `WAITING_APPROVAL` with a real SHA-256
+  `argumentsDigest`; approval correctly gates and then dispatches the effect with matching
+  `approvalId`/`approvalNonce`; the final response has correct `chosenEffect`/`suppressed`/
+  `actionLog`/`receiptLog`, and the OTLP tree has all required span names/kinds, unique
+  span IDs, and a single consistent trace ID. Also verified: exact request replay (byte-
+  identical, no re-diagnosis), 409 on same-runId-changed-content, 409 on same-receiptId-
+  changed-content, and — the redaction requirement, checked by string-searching the entire
+  serialized response — that `sensitive.accessToken`/`privateNote` never appear anywhere in
+  any response or in the OTLP spans.
+- No new bugs found this time (the Q9/Q10 build-then-test-immediately habit paid off — wrote
+  the full mocked-lifecycle test before wiring HTTP routes, catching nothing because the
+  design was already exercised against every explicitly-stated spec case before that point).
+- Routes added to `hf_space/app.py`'s `known_prefixes` (`"v2"`) proactively, before the first
+  live test this time, per the now-established habit.
+- `verify_ga5_endpoints.py` grew to 12 tests (was 11); 30/30 across the whole project.
+- **GA5 is now feature-complete for everything automatable in a shared hub**: 9 of 11
+  questions (Q2,3,4,5,6,8,9,10,11) are live and working. Only Q1 (belongs in the other/
+  offline solver) and Q7 (LXD sandbox — inherently manual, single-machine infra work) remain.

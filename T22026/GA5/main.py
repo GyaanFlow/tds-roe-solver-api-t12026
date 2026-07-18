@@ -27,7 +27,7 @@ from T22026.GA5.solvers import (
     solve_proration,
 )
 from T22026.GA4.solvers import resolve_aipipe_token
-from T22026.GA5 import a2a_agent, mailroom
+from T22026.GA5 import a2a_agent, incident_agent, mailroom
 
 logger = logging.getLogger("ga5_router")
 router = APIRouter()
@@ -294,6 +294,48 @@ async def a2a_cancel_task(task_id: str, request: Request):
         except a2a_agent.MailroomError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.message)
     return await _run_solver(_handle, "Q10/cancel-task")
+
+
+# ---------------------------------------------------------------------------
+# Q11: Build an Observable Incident-Response Agent (durable, receipt-correlated
+# OTLP-emitting agent). Requires an AIPipe token (embed it in the URL).
+# ---------------------------------------------------------------------------
+@router.post("/v2/incidents")
+async def incidents_create_endpoint(request: Request):
+    async def _handle():
+        body = await _read_json_body(request)
+        email = current_email.get()
+        token = _tenant_token()
+        incoming_traceparent = request.headers.get("traceparent")
+        try:
+            return await incident_agent.create_incident(body, email, token, incoming_traceparent)
+        except incident_agent.MailroomError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
+    return await _run_solver(_handle, "Q11/create")
+
+
+@router.post("/v2/incidents/{run_id}/receipts")
+async def incidents_receipts_endpoint(run_id: str, request: Request):
+    async def _handle():
+        body = await _read_json_body(request)
+        email = current_email.get()
+        token = _tenant_token()
+        try:
+            return await incident_agent.submit_receipts(run_id, body, email, token)
+        except incident_agent.MailroomError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
+    return await _run_solver(_handle, "Q11/receipts")
+
+
+@router.get("/v2/incidents/{run_id}")
+async def incidents_get_endpoint(run_id: str, request: Request):
+    async def _handle():
+        email = current_email.get()
+        try:
+            return incident_agent.get_incident(run_id, email)
+        except incident_agent.MailroomError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
+    return await _run_solver(_handle, "Q11/get")
 
 
 # ---------------------------------------------------------------------------

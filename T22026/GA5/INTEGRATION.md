@@ -1,12 +1,10 @@
 # GA5 Live API — Integration Spec
 
-Fixed request/response contract for the 8 GA5 questions implemented as live API endpoints
+Fixed request/response contract for the 9 GA5 questions implemented as live API endpoints
 (Q2 proration, Q3 pre-tool-call guardrail, Q4 skill safety audit, Q5 budget/loop guard,
-Q6 MCP server, Q8 guardrail red-team, Q9 mailroom action gate, Q10 A2A invoice agent). The
-remaining GA5 questions (Q1 maze, Q7 LXD sandbox, Q11 durable incident-response+OTLP agent)
-are out of scope for this hub — Q1 is pure offline compute for your other solver, Q7 is
-manual infrastructure work, and Q11 needs its own dedicated stateful service (same shape as
-Q9/Q10, not yet built).
+Q6 MCP server, Q8 guardrail red-team, Q9 mailroom action gate, Q10 A2A invoice agent, Q11
+observable incident-response agent). Only Q1 (offline maze BFS — belongs in your other
+solver) and Q7 (LXD sandbox — manual infrastructure work) remain out of scope for this hub.
 
 This contract is **stable and additive-only**.
 
@@ -40,7 +38,8 @@ This contract is **stable and additive-only**.
     "https://<host>/ga5/me%40x.com/budget-guard",
     "https://<host>/ga5/me%40x.com/mcp",
     "https://<host>/ga5/me%40x.com/guardrail-redteam",
-    "https://<host>/ga5/me%40x.com/mailroom"
+    "https://<host>/ga5/me%40x.com/mailroom",
+    "https://<host>/ga5/me%40x.com/v2/incidents"
   ],
   "session_id": null
 }
@@ -353,7 +352,91 @@ the `ACCEPTED` results, each bound to the persisted proposal's `facts`/`evidence
 
 ---
 
-## 10. Quick client snippet
+## 10. Q11 — Observable Incident-Response Agent
+
+A durable diagnose → dispatch → (approval-gate) → effect agent that exports a receipt-
+correlated OTLP trace. **Requires an AIPipe token** (embedded in the URL, same as Q4/Q9/Q10).
+
+**Routes** (under your tenant base `https://<host>/ga5/<email>/<TOKEN>`):
+```
+POST {base}/v2/incidents
+POST {base}/v2/incidents/{runId}/receipts
+GET  {base}/v2/incidents/{runId}
+```
+
+### `POST /v2/incidents` — start a run
+```json
+{
+  "profile": "ga5-incident-agent/v2", "runId": "stable opaque id",
+  "agentName": "incident-response", "publicMarker": "safe telemetry marker",
+  "sensitive": {"accessToken": "never export", "privateNote": "never export"},
+  "incident": {"incidentId": "...", "title": "...", "service": "...", "severity": "SEV-1",
+               "transcript": "evidence-tagged lines like [ev_1] ...", "allowedRootCauses": ["..."]},
+  "toolCatalog": [{"name": "...", "description": "...", "inputSchema": {}}],
+  "policy": {"maximumDiagnostics": 3, "effectTools": ["..."],
+             "approvalRequiredFor": ["rollback_deployment", "disable_feature"], "doNotExport": ["..."]}
+}
+```
+Response (always `status: "waiting"` at this point):
+```json
+{
+  "runId": "...", "status": "waiting",
+  "diagnosis": {"rootCause": "one allowed value", "evidence": ["ev_...", "ev_..."]},
+  "dispatches": [{"actionId","callId","phase":"diagnostic","toolName","arguments","evidence","attempt":1,"traceparent":"00-<trace id>-<CLIENT span id>-01"}],
+  "approvals": []
+}
+```
+1-3 diagnostic calls are dispatched together (fan-out). If an incoming `traceparent` header is
+valid, its trace is continued; otherwise a fresh trace is created.
+
+### `POST /v2/incidents/{runId}/receipts` — post outcomes and/or approvals
+```json
+{ "receiptId": "stable id", "outcomes": [{"actionId","callId","attempt":1,"status":200,"resultClass":"diagnosis_confirmed","nonce":"..."}] }
+```
+- **503** → exactly one retry (new `attempt`, new CLIENT span). **`status:0, errorType:"timeout"`**
+  → that diagnostic fails and its dependent effect is suppressed (reported in `suppressed`).
+- Once evidence is confirmed, exactly one effect is chosen. If it's in `approvalRequiredFor`,
+  the response instead carries a pending approval (no effect dispatch yet):
+  ```json
+  {"status":"waiting","dispatches":[],"approvals":[{"approvalId","actionId","toolName","argumentsDigest"}]}
+  ```
+  `argumentsDigest` is SHA-256 over recursively key-sorted compact JSON of the effect's arguments.
+  Approve via the same receipts endpoint:
+  ```json
+  { "receiptId": "...", "approvals": [{"approvalId":"exact pending id","decision":"approved","nonce":"..."}] }
+  ```
+  After approval, the effect is dispatched with matching `approvalId`/`approvalNonce`.
+- Once the effect's own outcome is posted, the run finalizes:
+  ```json
+  {
+    "runId": "...", "status": "completed" | "failed",
+    "diagnosis": {"rootCause","evidence"}, "chosenEffect": "scale_service", "suppressed": [],
+    "actionLog": ["every dispatch exactly as issued"],
+    "receiptLog": ["every outcome/approval receipt, in order"],
+    "otlp": {"resourceSpans": [{"scopeSpans": [{"spans": ["..."]}]}]}
+  }
+  ```
+
+### Durability & correctness guarantees
+- Exact replay of `POST /v2/incidents` (same `runId` + same `incident`/`policy`/`toolCatalog`) →
+  byte-identical cached response, no re-diagnosis. Changed content under the same `runId` → **409**.
+- Exact replay of an identical receipt → byte-identical cached response. The same `receiptId`
+  with different content → **409**. A receipt for a non-pending call → **400**.
+- **`GET`** returns the current persisted state at any point in the lifecycle.
+- **Redaction**: `sensitive.*`, the transcript, prompts, tool arguments/results, and
+  authorization material are never present anywhere in the response or the OTLP spans —
+  `gen_ai.tool.call.arguments`/`gen_ai.tool.call.result` are deliberately omitted.
+- **OTLP shape**: numeric `SpanKind` (`INTERNAL=1, SERVER=2, CLIENT=3`), unique nonzero
+  lowercase-hex trace/span IDs, every span carries `ga5.run.id`/`ga5.public.marker`, the model
+  span carries `gen_ai.operation.name="chat"` + `gen_ai.request.model`, each tool's logical
+  `execute_tool` span carries `ga5.action.id`/`gen_ai.tool.name`/`gen_ai.tool.call.id`, each
+  physical attempt's CLIENT span carries `ga5.attempt`/`ga5.receipt.id`/`ga5.receipt.nonce`/
+  `http.request.resend_count`, `incident.join` links every fanned-out diagnostic span, and
+  `approval_gate` records the approval ID/nonce.
+
+---
+
+## 11. Quick client snippet
 
 ```python
 import requests

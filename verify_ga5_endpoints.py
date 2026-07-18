@@ -3,9 +3,10 @@
 Covers the GA5 questions implemented as live endpoints: Q2 (proration), Q3
 (pre-tool-call guardrail), Q4 (skill safety audit), Q5 (budget/loop guard),
 Q6 (MCP server), Q8 (guardrail red-team, real execution), Q9 (durable mailroom
-action gate), Q10 (A2A invoice agent). All are deterministic and seeded
-per-student email except Q4, Q9, Q10, which call an LLM using a caller-supplied
-AIPipe token (Q9/Q10's triage is mocked here to keep the suite network-free).
+action gate), Q10 (A2A invoice agent), Q11 (observable incident-response
+agent). All are deterministic and seeded per-student email except Q4, Q9,
+Q10, Q11, which call an LLM using a caller-supplied AIPipe token (the LLM
+triage in Q9/Q10/Q11 is mocked here to keep the suite network-free).
 """
 
 from urllib.parse import quote
@@ -13,6 +14,7 @@ from urllib.parse import quote
 from fastapi.testclient import TestClient
 
 import T22026.GA5.a2a_agent as a2a_agent
+import T22026.GA5.incident_agent as incident_agent
 import T22026.GA5.mailroom as mailroom
 from hf_space.app import app
 
@@ -45,6 +47,21 @@ async def _fake_invoice_triage(package, token):
 a2a_agent.triage_package_llm = _fake_invoice_triage  # module-level patch: main.py calls a2a_agent.message_send -> ...triage_package_llm
 
 
+async def _fake_diagnose_incident(incident, tool_catalog, max_diagnostics, token):
+    return {
+        "rootCause": incident["allowedRootCauses"][0], "evidence": ["ev_1", "ev_2"],
+        "diagnosticCalls": [{"toolName": "query_metrics", "arguments": {"service": "api"}}],
+    }
+
+
+async def _fake_choose_effect(root_cause, effect_tools, tool_catalog, token):
+    return {"chosenEffect": effect_tools[0] if effect_tools else None, "arguments": {"service": "api"}}
+
+
+incident_agent.diagnose_incident = _fake_diagnose_incident
+incident_agent.choose_effect = _fake_choose_effect
+
+
 def test_health():
     r = client.get(f"{BASE}/health")
     assert r.status_code == 200
@@ -58,7 +75,7 @@ def test_onboard_and_status():
 
     r = client.get(f"{BASE}/status")
     assert r.status_code == 200
-    assert len(r.json()["ready_routes"]) == 7
+    assert len(r.json()["ready_routes"]) == 8
 
 
 def test_q2_proration():
@@ -398,6 +415,97 @@ def test_q10_a2a_message_lifecycle_and_tenant_isolation():
     # cancel on an already-terminal task is a no-op (never both COMPLETED and CANCELED)
     cancel = client.post(base + f"/tasks/{task['id']}:cancel", headers=headers)
     assert cancel.json()["state"] == "TASK_STATE_COMPLETED"
+
+
+def _incident_body(run_id: str) -> dict:
+    return {
+        "profile": incident_agent.PROFILE, "runId": run_id, "agentName": "incident-response", "publicMarker": "m1",
+        "sensitive": {"accessToken": "TOPSECRET_TOKEN", "privateNote": "TOPSECRET_NOTE"},
+        "incident": {
+            "incidentId": "INC1", "title": "API down", "service": "api", "severity": "SEV-1",
+            "transcript": "[ev_1] latency spike at 10:00\n[ev_2] deploy at 09:58\n[ev_3] unrelated noise",
+            "allowedRootCauses": ["bad_deploy", "db_overload"],
+        },
+        "toolCatalog": [
+            {"name": "query_metrics", "description": "d"}, {"name": "check_logs", "description": "d"},
+            {"name": "rollback_deployment", "description": "d"}, {"name": "scale_service", "description": "d"},
+        ],
+        "policy": {
+            "maximumDiagnostics": 2, "effectTools": ["rollback_deployment"],
+            "approvalRequiredFor": ["rollback_deployment", "disable_feature"], "doNotExport": ["accessToken", "privateNote"],
+        },
+    }
+
+
+def test_q11_incident_agent_full_lifecycle_with_approval_and_redaction():
+    email, token = "incident-verify@x.com", "incidenttok"
+    incident_agent.IncidentStore(email).path.unlink(missing_ok=True)
+    base = f"/ga5/{email}/{token}"
+
+    # no token -> clean 400
+    r0 = client.post(f"/ga5/{email}/v2/incidents", json=_incident_body("NOTOKEN"))
+    assert r0.status_code == 400
+
+    body = _incident_body("VRUN1")
+    r1 = client.post(base + "/v2/incidents", json=body)
+    assert r1.status_code == 200, r1.text
+    created = r1.json()
+    assert created["status"] == "waiting"
+    assert len(created["dispatches"]) == 1
+    d = created["dispatches"][0]
+    assert d["traceparent"].startswith("00-")
+
+    # exact replay -> byte-identical
+    assert client.post(base + "/v2/incidents", json=body).json() == created
+
+    # same runId, different content -> 409
+    conflict_body = {**body, "incident": {**body["incident"], "title": "changed"}}
+    assert client.post(base + "/v2/incidents", json=conflict_body).status_code == 409
+
+    # diagnostic outcome confirms evidence -> effect requires approval (rollback_deployment)
+    r2 = client.post(base + f"/v2/incidents/VRUN1/receipts", json={
+        "receiptId": "R1", "outcomes": [{"actionId": d["actionId"], "callId": d["callId"], "attempt": 1, "status": 200, "resultClass": "diagnosis_confirmed", "nonce": "n1"}],
+    })
+    assert r2.status_code == 200
+    assert r2.json()["status"] == "waiting"
+    assert len(r2.json()["approvals"]) == 1
+    approval = r2.json()["approvals"][0]
+    assert approval["toolName"] == "rollback_deployment"
+    assert len(approval["argumentsDigest"]) == 64  # sha256 hex
+
+    # same receiptId, different content -> 409
+    tampered_receipt = {"receiptId": "R1", "outcomes": [{"actionId": d["actionId"], "callId": d["callId"], "attempt": 1, "status": 200, "resultClass": "diagnosis_confirmed", "nonce": "DIFFERENT"}]}
+    assert client.post(base + f"/v2/incidents/VRUN1/receipts", json=tampered_receipt).status_code == 409
+
+    # approve -> effect dispatched with matching approvalId/approvalNonce
+    r3 = client.post(base + f"/v2/incidents/VRUN1/receipts", json={
+        "receiptId": "R2", "approvals": [{"approvalId": approval["approvalId"], "decision": "approved", "nonce": "approval-nonce"}],
+    })
+    assert r3.status_code == 200
+    effect_dispatch = r3.json()["dispatches"][0]
+    assert effect_dispatch["toolName"] == "rollback_deployment"
+    assert effect_dispatch["approvalId"] == approval["approvalId"]
+
+    # effect outcome -> completed, with full actionLog/receiptLog/otlp and correct redaction
+    r4 = client.post(base + f"/v2/incidents/VRUN1/receipts", json={
+        "receiptId": "R3", "outcomes": [{"actionId": effect_dispatch["actionId"], "callId": effect_dispatch["callId"], "attempt": 1, "status": 200, "resultClass": "applied", "nonce": "n2"}],
+    })
+    assert r4.status_code == 200
+    final = r4.json()
+    assert final["status"] == "completed"
+    assert final["chosenEffect"] == "rollback_deployment"
+    assert "TOPSECRET_TOKEN" not in r4.text and "TOPSECRET_NOTE" not in r4.text
+
+    spans = final["otlp"]["resourceSpans"][0]["scopeSpans"][0]["spans"]
+    names = {s["name"] for s in spans}
+    assert "POST /v2/incidents" in names and "invoke_agent incident-response" in names
+    assert "chat incident-plan" in names and "approval_gate" in names
+    span_ids = [s["spanId"] for s in spans]
+    assert len(span_ids) == len(set(span_ids))  # all unique
+    assert len({s["traceId"] for s in spans}) == 1  # one consistent trace
+
+    # GET returns the same persisted final state
+    assert client.get(base + "/v2/incidents/VRUN1").json() == final
 
 
 if __name__ == "__main__":

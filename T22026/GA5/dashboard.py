@@ -65,7 +65,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <body>
   <div class="hero">
     <h1>GA5 — Agent Safety/Infra API Hub</h1>
-    <p>8 GA5 questions graded by calling a live API URL: proration billing, a pre-tool-call guardrail, a skill-safety scanner, a run-budget/loop guard, a real MCP server, a guardrail that actually executes red-teamed tool calls, a durable mailroom action-gate agent, and a real A2A protocol invoice agent. Q4, Q9, Q10 use your own AIPipe token (embedded in the URL) — the owner never pays.</p>
+    <p>9 GA5 questions graded by calling a live API URL: proration billing, a pre-tool-call guardrail, a skill-safety scanner, a run-budget/loop guard, a real MCP server, a guardrail that actually executes red-teamed tool calls, a durable mailroom action-gate agent, a real A2A protocol invoice agent, and an observable incident-response agent with OTLP tracing. Q4, Q9, Q10, Q11 use your own AIPipe token (embedded in the URL) — the owner never pays.</p>
   </div>
 
   <div class="wrap">
@@ -77,7 +77,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         <input type="password" id="aipipe-token" placeholder="aipipe.org API key (optional — improves Q4 accuracy)" autocomplete="off" />
         <button class="btn" onclick="generateUrls()">Generate URLs</button>
       </div>
-      <p class="hint">Q2, Q3, Q5, Q6, Q8 need no token — they're pure deterministic policy engines, per-student seeded from your email. Q4 works without a token (heuristic scan) but is more accurate with one embedded in the URL. Q9 and Q10 require a token — both triage real content with an LLM.</p>
+      <p class="hint">Q2, Q3, Q5, Q6, Q8 need no token — they're pure deterministic policy engines, per-student seeded from your email. Q4 works without a token (heuristic scan) but is more accurate with one embedded in the URL. Q9, Q10, Q11 require a token — each triages real content with an LLM.</p>
     </div>
 
     <div class="grid">
@@ -177,6 +177,18 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         <pre class="result" id="res-q10"></pre>
         <p class="hint" style="margin:0;">Click <strong>Generate URLs</strong> above first — it registers your base URL in the shared Agent Card at <code>/.well-known/agent-card.json</code> (required before grading).</p>
       </div>
+
+      <!-- Q11 -->
+      <div class="q-card">
+        <div class="q-head"><span class="q-badge">Q11</span><span class="q-title">Observable Incident-Response Agent</span><span class="q-type type-llm">token required</span></div>
+        <p class="q-desc">Durable diagnose → dispatch → approval-gate → effect agent, exporting a receipt-correlated OTLP trace with strict redaction.</p>
+        <div class="mono" id="url-q11" data-copy="">Enter email + token above…</div>
+        <div class="row">
+          <button class="btn-sec" onclick="copyUrl('url-q11')">Copy submit URL</button>
+          <button class="btn-test" onclick="testQ11(this)">Run test</button>
+        </div>
+        <pre class="result" id="res-q11"></pre>
+      </div>
     </div>
 
     <p class="hint" style="margin-top:1.4rem;">
@@ -213,6 +225,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       setUrl('url-q8', `${ORIGIN}/ga5/${enc}/guardrail-redteam`);
       setUrl('url-q9', `${ORIGIN}/ga5/${enc}${tokSeg}/mailroom`);
       setUrl('url-q10', `${ORIGIN}/ga5/${enc}${tokSeg}/a2a/`);
+      setUrl('url-q11', `${ORIGIN}/ga5/${enc}${tokSeg}`);
     }
     function setUrl(id, url) {
       const el = document.getElementById(id);
@@ -354,6 +367,34 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       }, headers);
       document.getElementById('res-q10').textContent =
         'agent-card registered: ' + registered + '\n\nmessage:send result:\n' + JSON.stringify(sendResult, null, 2);
+    }
+
+    async function testQ11(btn) {
+      if (!tokenVal()) { toast('Q11 needs an AIPipe token to diagnose incidents.', true); return; }
+      const path = callBase();
+      const runId = 'dashboard-test-' + Date.now();
+      const created = await runTest(btn, 'res-q11', path + '/v2/incidents', {
+        profile: 'ga5-incident-agent/v2', runId, agentName: 'incident-response', publicMarker: 'dashboard-demo',
+        sensitive: { accessToken: 'demo-not-exported' },
+        incident: {
+          incidentId: 'DEMO_INC', title: 'API latency spike', service: 'api', severity: 'SEV-2',
+          transcript: '[ev_1] p99 latency rose 4x at 10:02\n[ev_2] deploy of api v2.3 completed at 10:00\n[ev_3] unrelated: office wifi flaky',
+          allowedRootCauses: ['bad_deploy', 'db_overload']
+        },
+        toolCatalog: [
+          { name: 'query_metrics', description: 'Query recent latency/error metrics for a service.' },
+          { name: 'scale_service', description: 'Scale a service to more replicas.' }
+        ],
+        policy: { maximumDiagnostics: 1, effectTools: ['scale_service'], approvalRequiredFor: ['rollback_deployment', 'disable_feature'], doNotExport: ['accessToken'] }
+      });
+      if (!created || !created.dispatches || !created.dispatches.length) { return; }
+      const d = created.dispatches[0];
+      const afterDiag = await runTest(btn, 'res-q11', path + `/v2/incidents/${runId}/receipts`, {
+        receiptId: 'demo-receipt-1',
+        outcomes: [{ actionId: d.actionId, callId: d.callId, attempt: 1, status: 200, resultClass: 'diagnosis_confirmed', nonce: 'demo-nonce-1' }]
+      });
+      document.getElementById('res-q11').textContent =
+        'create:\n' + JSON.stringify(created, null, 2) + '\n\nafter diagnostic outcome:\n' + JSON.stringify(afterDiag, null, 2);
     }
 
     function toast(msg, isErr = false) {
