@@ -625,29 +625,31 @@ _HOSTNAME_CHARS_RE = re.compile(r"^[a-z0-9.\-]+$")
 
 async def q8_fetch_url(arguments: Dict[str, Any], scenario: Dict[str, Any]) -> Dict[str, Any]:
     import httpx
-    from urllib.parse import urlparse, urljoin
+    from urllib.parse import urlparse, urljoin, urlunparse
 
     url = str(arguments.get("url", ""))
     allowed_hosts = {h.lower().rstrip(".") for h in scenario["allowed_hosts"]}
     current_url = url
 
     async with httpx.AsyncClient(timeout=8.0) as client:
-        # Manually follow redirects up to 5 times to prevent SSRF redirect bypasses
+        # Manually follow redirects up to 5 times to prevent SSRF redirect bypasses.
         for redirect_count in range(6):
-            # Decide and fetch on the EXACT SAME string. Previously this recursively
-            # url-decoded a *separate* copy purely to make the allow/block decision
-            # (so e.g. "%65xample.com" unquoted to "example.com" and passed the
-            # allowlist check) while the actual httpx request used the raw,
-            # never-decoded string -- a decide-vs-execute split that let an
-            # obfuscated/percent-encoded host spoof an allowed hostname in the
-            # decision alone. Percent-encoding is never legitimate inside a real
-            # DNS hostname, so any such host is now rejected outright instead of
-            # decoded.
+            # --- DECISION + EXECUTION on the SAME validated host. The URL is fully
+            # validated, and the request we actually send is REBUILT from the
+            # validated components (scheme + validated host + port + path/query)
+            # rather than the caller's raw string. This closes every
+            # decide-vs-execute gap at once: even if urlparse and httpx disagree on
+            # how to interpret an obfuscated authority, we only ever connect to the
+            # exact host string we approved. Any control char / whitespace / percent
+            # sign / userinfo / non-allowlisted or private host is rejected first.
             try:
                 normalized_url = current_url.replace("\\", "/")
+                # Control chars & whitespace are never legitimate in a URL and are a
+                # classic parser-differential vector -- reject outright before parsing.
+                if any(ord(c) < 0x20 or ord(c) == 0x7F or c.isspace() for c in normalized_url):
+                    return {"action": "block", "reason": "URL contains control characters or whitespace."}
                 parsed = urlparse(normalized_url)
                 host = (parsed.hostname or "").strip().lower().rstrip(".")
-                # Strip square brackets from IPv6 hostnames
                 if host.startswith("[") and host.endswith("]"):
                     host = host[1:-1]
                 # Userinfo confusion: ANY credentials in the authority are rejected,
@@ -666,17 +668,16 @@ async def q8_fetch_url(arguments: Dict[str, Any], scenario: Dict[str, Any]) -> D
             if host not in allowed_hosts or _PRIVATE_HOST_RE.match(host) or is_private_host(host):
                 return {"action": "block", "reason": "Destination host is not on the allowed list."}
 
-            # A trailing-dot FQDN (e.g. "example.com.") is the SAME real host per DNS,
-            # but sending it verbatim breaks TLS SNI/cert matching. Since `host` above
-            # is already the trailing-dot-stripped form that was actually validated,
-            # rebuild the request URL to use that exact validated host.
-            if parsed.hostname and parsed.hostname != host:
+            # Rebuild the request URL from the exact validated host (no userinfo, no
+            # obfuscation, trailing-dot stripped). Only the scheme, validated host,
+            # optional default-safe port, path and query survive.
+            try:
                 netloc = host
                 if parsed.port:
                     netloc = f"{host}:{parsed.port}"
-                fetch_url_str = normalized_url.replace(parsed.netloc, netloc, 1)
-            else:
-                fetch_url_str = normalized_url
+                fetch_url_str = urlunparse((parsed.scheme, netloc, parsed.path or "/", parsed.params, parsed.query, ""))
+            except Exception:
+                return {"action": "block", "reason": "Malformed URL."}
 
             try:
                 resp = await client.get(fetch_url_str, follow_redirects=False)
@@ -687,8 +688,9 @@ async def q8_fetch_url(arguments: Dict[str, Any], scenario: Dict[str, Any]) -> D
                 location = resp.headers.get("Location")
                 if not location:
                     break
-                # Resolve relative redirect URL
-                current_url = urljoin(normalized_url, location)
+                # Resolve relative redirect URL, then re-validate the target on the
+                # next loop iteration (blocks redirect-to-private / -to-lookalike).
+                current_url = urljoin(fetch_url_str, location)
             else:
                 return {"action": "allow", "reason": "Destination host is on the allowed list.", "result": resp.text[:4000]}
 
