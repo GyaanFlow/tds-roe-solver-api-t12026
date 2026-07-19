@@ -459,3 +459,55 @@ the deterministic ones live on Render. Commit `2a99a1e` (GitHub) / `a92c2f3`→`
   behavior from the earlier fix is untouched and still correct.
 - `verify_ga5_endpoints.py` passes 12/12. Pushed to GitHub (`main`, commit `f5c7b54`) and Hugging
   Face (squash-commit `9a1edaf`).
+
+### 2026-07-19 (Second-student live grader run — 23/38.5 — three more real bugs found & fixed)
+- User ran the actual grader under a second exam login (`23f3001077@ds.study.iitm.ac.in`) and
+  shared full per-question feedback. Score 23/38.5. Diagnosed with the real feedback text plus
+  live testing against that exact student's seeded scenario (not synthetic guesses this time).
+- **AIPipe quota exhausted** (confirmed via direct `aipipe_chat` call: `HTTP 429 "Usage
+  $1.0077/$1 in 7 days"`) — root cause of Q9/Q10/Q11's semantic-scoring failures (safe-fallback
+  triggered on every LLM call). Not a code bug; needs a fresh token from the user.
+- **Q11 safety cap ("wrong destructive effect or sensitive-data leak")**: `choose_effect()`'s
+  exception/invalid-output fallback picked `effect_tools[0]` with NO bias against destructive
+  tools. Since the approval gate still fires for `rollback_deployment`/`disable_feature` (that
+  part was already correct) and the grader auto-approves well-formed destructive requests to
+  exercise the full flow, a wrong destructive default still gets EXECUTED. Added
+  `_safest_effect_fallback()` — prefers any non-destructive tool in the policy's effect list
+  before ever defaulting to a destructive one. Reviewed all redaction paths
+  (`_final_response`/`get_incident`) — confirmed the transcript and the request's sibling
+  `sensitive` object are never included in any response or OTLP export.
+- **Q8 trailing-dot fetch**: `https://example.com./` correctly validated against the allowlist but
+  was fetched verbatim, causing an SSL SNI/cert mismatch instead of real content (a benign control
+  that would misfire). `q8_fetch_url` now rebuilds the request URL using the exact validated
+  (dot-stripped) host before fetching.
+- **Q3/Q5 CRITICAL — wrong per-student policy entirely** (root cause of Q3's 6/15 with EVERY
+  category failing: direct-read, egress-allowed, obfuscated-read, write-allowed). The exam's seed
+  string is `${email}#${questionId}#${version}`, and the exam bundle explicitly invokes Q3's
+  generator with `version:"v1"` (confirmed directly against the exam JS, module-alias-matched to
+  Q3's own constant arrays: `Re`=secret files, `$e`=write dirs, `zt`=hosts). But
+  `derive_q3_policy()`/`derive_q5_policy()` default to `version=""`, and `main.py` called them with
+  NO version argument — so the deployed endpoint derived a COMPLETELY DIFFERENT random policy
+  (wrong secret file, wrong write dir, wrong allowed hosts) than the one actually shown to the
+  student and used by the grader. Directly verified: no-version gave secret_file
+  `/home/agent/credentials.env`, write_dir `/home/agent/workspace/build/`, hosts
+  `[objects.githubusercontent.com, huggingface.co]`; `version="v1"` gives exactly
+  `/home/agent/.npmrc`, `/srv/reports/`, `[registry.npmjs.org, raw.githubusercontent.com]` — an
+  exact match to this student's displayed exam text. Q5 has the identical defect but happened to
+  score 15/15 for this student by pure luck (the only field the solver actually uses,
+  `irrelevant_field`, coincidentally resolved to the same value with or without the version).
+  Fixed both call sites in `main.py` to pass `version="v1"` explicitly; `derive_q8_scenario`
+  already defaulted to `"v1"` and was unaffected. Updated `verify_ga5_endpoints.py`'s own
+  policy-deriving test helpers to match.
+- **Q3 also missing a universal, non-seeded rule**: the exam's own worked example
+  (`sudo cat /etc/shadow` → must `block`) is fixed for every student, independent of the seeded
+  secret file — `guardrail_decision` only ever checked the per-student secret, so this exact
+  documented example was incorrectly `allow`ed. Fixed by also checking `/etc/shadow` through the
+  same obfuscation-aware `_bash_touches_secret` matcher.
+- All fixes verified LIVE against this exact student's endpoint after each deploy (Render
+  redeploy confirmed via polling). `verify_ga5_endpoints.py` passes 12/12 throughout. Pushed to
+  GitHub (`main`, commits `89c2476`, `2de81b2`, `5946e06`) and Hugging Face (squash-commits
+  `bdcdd0d`, `55b3df4`, `25e8b0c`).
+- **Takeaway for future seeded-policy questions**: always cross-check the exam JS's actual call
+  site (`{version:"..."}` argument passed to the question's async factory) against this repo's
+  `derive_*` default — a mismatched default silently produces a plausible-looking but entirely
+  wrong per-student policy, and every downstream check will fail without an obviously-related error.
