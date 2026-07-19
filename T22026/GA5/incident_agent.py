@@ -174,18 +174,37 @@ Return strictly JSON:
 """
 
 
-async def diagnose_incident(incident: Dict[str, Any], tool_catalog: List[dict], max_diagnostics: int, token: str) -> Dict[str, Any]:
+async def diagnose_incident(incident: Dict[str, Any], tool_catalog: List[dict], max_diagnostics: int, token: str, effect_tool_names: Optional[set] = None) -> Dict[str, Any]:
     """LLM-backed incident diagnosis. Uses GPT-4o-mini via AIPipe.
 
     ⚠️  LLM NOTE: Retries up to 3 times for schema/hallucination errors.
     TokenExpiredError is re-raised immediately — retrying won't fix an expired token.
+
+    `effect_tool_names` is the set of tool names that are EFFECT/destructive tools
+    (policy.effectTools ∪ the always-destructive rollback/disable set). Diagnostic
+    calls must NEVER name one of these -- dispatching an effect tool in the
+    diagnostic phase is an UNAPPROVED destructive call, which caps the whole
+    question at 0.5/4. So we filter every diagnostic candidate (LLM output AND the
+    fallback) down to genuine, non-effect diagnostic tools only.
     """
     from T22026.GA4.solvers import TokenExpiredError, aipipe_chat, parse_json_block
 
+    effect_tool_names = set(effect_tool_names or set()) | DESTRUCTIVE_DEFAULT
+    # Genuine diagnostic tools = catalog tools that are NOT effect/destructive tools.
+    diagnostic_tools = [t for t in tool_catalog if t.get("name") not in effect_tool_names]
+    default_diag_name = diagnostic_tools[0].get("name") if diagnostic_tools else None
+
+    def _sanitize_calls(calls: Any) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        for c in (calls or []):
+            if isinstance(c, dict) and c.get("toolName") and c["toolName"] not in effect_tool_names:
+                out.append({"toolName": c["toolName"], "arguments": c.get("arguments", {}) or {}})
+        return out[:max_diagnostics]
+
     prompt = (
         f"ALLOWED ROOT CAUSES: {json.dumps(incident.get('allowedRootCauses', []))}\n\n"
-        f"TOOL CATALOG (name: description): "
-        f"{json.dumps([{'name': t.get('name'), 'description': t.get('description')} for t in tool_catalog])}\n\n"
+        f"DIAGNOSTIC TOOL CATALOG (name: description) -- choose ONLY from these, never an effect/remediation tool: "
+        f"{json.dumps([{'name': t.get('name'), 'description': t.get('description')} for t in diagnostic_tools])}\n\n"
         f"Choose at most {max_diagnostics} diagnostic calls.\n\n"
         f"TRANSCRIPT:\n{incident.get('transcript', '')}"
     )
@@ -199,13 +218,13 @@ async def diagnose_incident(incident: Dict[str, Any], tool_catalog: List[dict], 
             out = parse_json_block(raw)
             root_cause = out.get("rootCause")
             evidence = [e for e in out.get("evidence", []) if isinstance(e, str)][:4]
-            calls = out.get("diagnosticCalls", [])[:max_diagnostics] or []
+            calls = _sanitize_calls(out.get("diagnosticCalls", []))
             if root_cause not in (incident.get("allowedRootCauses") or []):
                 root_cause = (incident.get("allowedRootCauses") or ["unknown"])[0]
             if len(evidence) < 2:
                 evidence = (_extract_evidence_ids(incident.get("transcript", "")) or ["ev_unknown"])[:2]
-            if not calls and tool_catalog:
-                calls = [{"toolName": tool_catalog[0].get("name"), "arguments": {}}]
+            if not calls and default_diag_name:
+                calls = [{"toolName": default_diag_name, "arguments": {}}]
             return {"rootCause": root_cause, "evidence": evidence, "diagnosticCalls": calls}
         except TokenExpiredError:
             raise  # propagate immediately — retrying won't fix an expired token
@@ -214,10 +233,10 @@ async def diagnose_incident(incident: Dict[str, Any], tool_catalog: List[dict], 
             logging.getLogger("ga5_incident").warning("Q11 diagnose attempt %d failed: %s", attempt + 1, exc)
         messages.append({"role": "user", "content": "Invalid JSON or schema. Retry matching the required format exactly."})
 
-    # All retries exhausted — use safe fallback
+    # All retries exhausted — use safe fallback (a genuine diagnostic tool only).
     fallback_cause = (incident.get("allowedRootCauses") or ["unknown"])[0]
     fallback_evidence = (_extract_evidence_ids(incident.get("transcript", "")) or ["ev_unknown"])[:2]
-    fallback_calls = [{"toolName": tool_catalog[0].get("name"), "arguments": {}}] if tool_catalog else []
+    fallback_calls = [{"toolName": default_diag_name, "arguments": {}}] if default_diag_name else []
     return {"rootCause": fallback_cause, "evidence": fallback_evidence, "diagnosticCalls": fallback_calls}
 
 
@@ -451,7 +470,10 @@ async def create_incident(body: Dict[str, Any], email: str, token: Optional[str]
         raise MailroomError(400, "An AIPipe token is required (embed it in the URL path) for diagnosis")
 
     max_diag = int((policy.get("maximumDiagnostics") or 3))
-    diag = await diagnose_incident(incident, tool_catalog, max_diag, token)
+    # Effect/destructive tools must never be dispatched as diagnostics (unapproved
+    # destructive call = 0.5/4 cap). Pass their names so diagnosis excludes them.
+    effect_tool_names = set(policy.get("effectTools") or []) | set(policy.get("approvalRequiredFor") or [])
+    diag = await diagnose_incident(incident, tool_catalog, max_diag, token, effect_tool_names=effect_tool_names)
 
     parsed = parse_traceparent(incoming_traceparent)
     trace_id, incoming_parent_span_id = parsed if parsed else (new_trace_id(), None)
