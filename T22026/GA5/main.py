@@ -124,7 +124,7 @@ async def guardrail_endpoint(request: Request):
         if tool not in ("bash", "write_file", "http_request"):
             raise ValueError("'tool' must be one of 'bash', 'write_file', 'http_request'")
         email = current_email.get()
-        policy = derive_q3_policy(email)
+        policy = derive_q3_policy(email, version="v1")
         return guardrail_decision(body, policy=policy)
     return await _run_solver(_handle, "Q3")
 
@@ -171,7 +171,7 @@ async def budget_guard_endpoint(request: Request):
             if not isinstance(s, dict) or "tool" not in s:
                 raise ValueError("each item in 'steps' must be an object with a 'tool'")
         email = current_email.get()
-        policy = derive_q5_policy(email)
+        policy = derive_q5_policy(email, version="v1")
         return budget_loop_decision(body, policy=policy)
     return await _run_solver(_handle, "Q5")
 

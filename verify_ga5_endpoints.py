@@ -97,7 +97,7 @@ def test_q2_proration():
 
 def test_q3_guardrail_seeded_per_email():
     from T22026.GA5.seedgen import derive_q3_policy
-    policy = derive_q3_policy(EMAIL)
+    policy = derive_q3_policy(EMAIL, version="v1")
 
     # direct read of the seeded secret -> block
     r = client.post(f"{BASE}/guardrail", json={"tool": "bash", "command": f"cat {policy['secret_file']}"})
@@ -124,7 +124,7 @@ def test_q3_guardrail_seeded_per_email():
     assert r.json()["decision"] == "block"
 
     # different email -> different seeded secret (isolation)
-    other_policy = derive_q3_policy("someone.else@ds.study.iitm.ac.in")
+    other_policy = derive_q3_policy("someone.else@ds.study.iitm.ac.in", version="v1")
     assert other_policy["secret_file"] != policy["secret_file"] or other_policy["allowed_domains"] != policy["allowed_domains"]
 
 
@@ -144,7 +144,7 @@ def test_q4_skill_scan():
 
 def test_q5_budget_and_loop_guard():
     from T22026.GA5.seedgen import derive_q5_policy
-    policy = derive_q5_policy(EMAIL)
+    policy = derive_q5_policy(EMAIL, version="v1")
 
     # budget exhausted -> halt
     r = client.post(f"{BASE}/budget-guard", json={
