@@ -234,10 +234,12 @@ async def diagnose_incident(incident: Dict[str, Any], tool_catalog: List[dict], 
         messages.append({"role": "user", "content": "Invalid JSON or schema. Retry matching the required format exactly."})
 
     # All retries exhausted — use safe fallback (a genuine diagnostic tool only).
+    # Tagged `_fallback` so create_incident can re-diagnose later instead of
+    # persisting this degraded guess as the run's permanent answer.
     fallback_cause = (incident.get("allowedRootCauses") or ["unknown"])[0]
     fallback_evidence = (_extract_evidence_ids(incident.get("transcript", "")) or ["ev_unknown"])[:2]
     fallback_calls = [{"toolName": default_diag_name, "arguments": {}}] if default_diag_name else []
-    return {"rootCause": fallback_cause, "evidence": fallback_evidence, "diagnosticCalls": fallback_calls}
+    return {"rootCause": fallback_cause, "evidence": fallback_evidence, "diagnosticCalls": fallback_calls, "_fallback": True}
 
 
 _EFFECT_SYSTEM = """You are an incident-response agent choosing exactly one remediation effect
@@ -345,14 +347,25 @@ class IncidentStore:
         tmp.write_text(json.dumps(data), encoding="utf-8")
         tmp.replace(self.path)
 
+    # Bump to invalidate every previously-persisted run. v2 discards runs whose
+    # diagnosis was produced by the heuristic FALLBACK while the AIPipe token was
+    # quota-exhausted: create_incident replays existing["lastResponse"] for a
+    # repeated runId, so those degraded diagnoses (first allowedRootCause, first
+    # two evidence IDs) would otherwise replay forever on the six stable
+    # incidents and permanently fail diagnosis/evidence and action choice.
+    STORE_NAMESPACE = "v2"
+
+    def _run_key(self, run_id: str) -> str:
+        return f"{self.STORE_NAMESPACE}::{run_id}"
+
     def get(self, run_id: str) -> Optional[Dict[str, Any]]:
         with self._lock:
-            return self._load()["runs"].get(run_id)
+            return self._load()["runs"].get(self._run_key(run_id))
 
     def put(self, run_id: str, run: Dict[str, Any]) -> None:
         with self._lock:
             data = self._load()
-            data["runs"][run_id] = run
+            data["runs"][self._run_key(run_id)] = run
             self._save(data)
 
 
@@ -463,8 +476,23 @@ async def create_incident(body: Dict[str, Any], email: str, token: Optional[str]
     existing = store.get(run_id)
     if existing is not None:
         if existing["contentFingerprint"] == fingerprint:
-            return existing["lastResponse"]
-        raise MailroomError(409, f"runId '{run_id}' already used with different content")
+            # Durable replay -- EXCEPT when the stored diagnosis was a degraded
+            # heuristic fallback (LLM quota/timeout) and the run never made any
+            # progress (still awaiting its first diagnostic outcome, no receipts
+            # exchanged). Replaying that forever is what froze the six stable
+            # incidents on a wrong root cause. Nothing was executed, so
+            # re-diagnosing costs no correctness -- it only upgrades a guess to a
+            # real answer once the model is reachable again.
+            can_rediagnose = (
+                existing.get("diagnosisFallback")
+                and existing.get("state") == "WAITING_DIAGNOSTICS"
+                and not existing.get("receiptLog")
+                and token
+            )
+            if not can_rediagnose:
+                return existing["lastResponse"]
+        else:
+            raise MailroomError(409, f"runId '{run_id}' already used with different content")
 
     if not token:
         raise MailroomError(400, "An AIPipe token is required (embed it in the URL path) for diagnosis")
@@ -508,6 +536,9 @@ async def create_incident(body: Dict[str, Any], email: str, token: Optional[str]
 
     run = {
         "runId": run_id, "profile": PROFILE, "contentFingerprint": fingerprint,
+        # Records that this run's diagnosis came from the heuristic fallback, so a
+        # later create_incident can upgrade it once the model is reachable again.
+        "diagnosisFallback": bool(diag.get("_fallback")),
         "agentName": body.get("agentName", "incident-response"), "publicMarker": body.get("publicMarker", ""),
         "incident": incident,
         "policy": policy, "toolCatalog": tool_catalog,
