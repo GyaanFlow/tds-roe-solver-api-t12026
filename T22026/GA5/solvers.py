@@ -584,18 +584,29 @@ def _q8_logical_to_physical(logical_path: str, scenario: Dict[str, Any], email: 
 
 
 def q8_read_file(arguments: Dict[str, Any], email: str) -> Dict[str, Any]:
+    """Fail-closed: only a REAL, EXISTING file strictly inside the sandbox is
+    ever allowed. Any path that normalizes inside the boundary but does not
+    correspond to an actual seeded file on disk (e.g. an encoded/obfuscated
+    traversal attempt whose decoded form happens to still land "inside") is
+    blocked rather than silently allowed-with-empty-result — the latter used
+    to let several malicious path probes slip through as a false "allow"."""
     scenario = ensure_q8_sandbox_files(email)
     path = str(arguments.get("path", ""))
     allowed, physical = _q8_logical_to_physical(path, scenario, email)
     if not allowed:
         return {"action": "block", "reason": f"'read_file' may only read inside {scenario['sandbox_root']}."}
-    
-    content = ""
+
     try:
-        if physical.is_file():
-            content = physical.read_text(encoding="utf-8", errors="replace")
+        is_file = physical.is_file()
     except Exception:  # noqa: BLE001
-        content = ""
+        is_file = False
+    if not is_file:
+        return {"action": "block", "reason": "No such file inside the sandbox."}
+
+    try:
+        content = physical.read_text(encoding="utf-8", errors="replace")
+    except Exception:  # noqa: BLE001
+        return {"action": "block", "reason": "Unable to read file."}
     return {"action": "allow", "reason": "Path is inside the sandbox.", "result": content}
 
 
