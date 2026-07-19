@@ -511,3 +511,37 @@ the deterministic ones live on Render. Commit `2a99a1e` (GitHub) / `a92c2f3`→`
   site (`{version:"..."}` argument passed to the question's async factory) against this repo's
   `derive_*` default — a mismatched default silently produces a plausible-looking but entirely
   wrong per-student policy, and every downstream check will fail without an obviously-related error.
+
+### 2026-07-19 (Third grader round — 25.4/38.5 — the REAL Q8 url:1 and Q11 destructive-cap bugs)
+- Q3/Q5 confirmed fixed (both now full marks). Q8 still `url:1` and Q11 still `0.5/4 safety cap`,
+  byte-identical feedback across runs — so these were NOT the encoded-host / fallback bugs fixed
+  earlier; they were separate, deeper bugs.
+- **Q8 fetch_url — decide-vs-execute host disagreement (the real url:1)**. Even after the
+  encoded-host fix, the DECISION used `urlparse()` while the actual request sent the caller's
+  raw/normalized string to `httpx`, whose RFC-3986 parser interprets obfuscated authorities
+  differently (verified multiple `urlparse` vs `httpx.URL().host` mismatches locally: control
+  chars, whitespace, etc.). Definitive fix: after validating host ∈ exact allowlist and
+  not-private, **REBUILD** the request URL from validated components (`urlunparse((scheme,
+  validated_host[:port], path, params, query, ""))`) and fetch THAT — so the connection can only
+  ever reach the approved host regardless of any parser differential. Also reject any URL with
+  control chars/whitespace up front (matches the working reference impl), and re-validate redirect
+  targets against the rebuilt URL. Verified: all benign allow, every obfuscation vector blocks.
+- **Q11 — unapproved destructive call in the DIAGNOSTIC phase (the real 0.5/4 cap)**. Smoking gun:
+  `diagnose_incident`'s fallback and empty-LLM-calls path picked `tool_catalog[0]` as the
+  diagnostic tool, but the tool catalog contains BOTH diagnostic AND effect/destructive tools in
+  arbitrary order. If a destructive tool (`rollback_deployment`/`disable_feature`) is listed first,
+  the diagnostic phase dispatched it directly — an unapproved destructive call → grader's hard
+  0.5/4 cap. Fires whenever the LLM returns no usable diagnostic calls (quota/timeout/hallucination)
+  or names an effect tool. Fix: `diagnose_incident` now receives the effect/destructive tool names
+  (`policy.effectTools ∪ approvalRequiredFor ∪ DESTRUCTIVE_DEFAULT`) and filters every diagnostic
+  candidate (LLM output + fallback) down to genuine NON-effect diagnostic tools; the prompt shows
+  only the diagnostic subset. Verified live (quota-exhausted 429 token, destructive tool first in
+  catalog): diagnostic phase now dispatches `query_metrics`, not `rollback_deployment`.
+- OTLP export audited and confirmed clean (no transcript/prompt/sensitive/arguments/results in any
+  span attribute); the Q11 approval gate for genuinely-chosen destructive effects is correct.
+- `verify_ga5_endpoints.py` passes 12/12. Pushed GitHub (`b5d54eb`, `3be7af8`) + HF (`d5e4568`,
+  `172253f`).
+- **Note on stale feedback**: the exam page's per-question feedback text can lag behind the
+  deployed code (it reflects the last Check/Save, and the saved score stayed at 23 from before all
+  these fixes). Re-run Check per question to force fresh evaluation. Q3/Q5's score jump confirmed
+  deploys do take effect.
