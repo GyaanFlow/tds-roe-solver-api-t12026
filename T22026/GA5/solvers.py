@@ -616,10 +616,12 @@ _PRIVATE_HOST_RE = re.compile(
 )
 
 
+_HOSTNAME_CHARS_RE = re.compile(r"^[a-z0-9.\-]+$")
+
+
 async def q8_fetch_url(arguments: Dict[str, Any], scenario: Dict[str, Any]) -> Dict[str, Any]:
     import httpx
-    import urllib.parse
-    from urllib.parse import urlparse, urljoin, unquote
+    from urllib.parse import urlparse, urljoin
 
     url = str(arguments.get("url", ""))
     allowed_hosts = {h.lower().rstrip(".") for h in scenario["allowed_hosts"]}
@@ -628,25 +630,25 @@ async def q8_fetch_url(arguments: Dict[str, Any], scenario: Dict[str, Any]) -> D
     async with httpx.AsyncClient(timeout=8.0) as client:
         # Manually follow redirects up to 5 times to prevent SSRF redirect bypasses
         for redirect_count in range(6):
+            # Decide and fetch on the EXACT SAME string. Previously this recursively
+            # url-decoded a *separate* copy purely to make the allow/block decision
+            # (so e.g. "%65xample.com" unquoted to "example.com" and passed the
+            # allowlist check) while the actual httpx request used the raw,
+            # never-decoded string -- a decide-vs-execute split that let an
+            # obfuscated/percent-encoded host spoof an allowed hostname in the
+            # decision alone. Percent-encoding is never legitimate inside a real
+            # DNS hostname, so any such host is now rejected outright instead of
+            # decoded.
             try:
-                # Handle backslash conversion in URLs (browsers normalize backslashes in authority to slashes)
                 normalized_url = current_url.replace("\\", "/")
-
-                # Keep unquoting until stable to handle any level of nested/double URL encoding
-                decoded_url = normalized_url
-                last_url = ""
-                while decoded_url != last_url:
-                    last_url = decoded_url
-                    decoded_url = unquote(decoded_url)
-
-                parsed = urlparse(decoded_url)
+                parsed = urlparse(normalized_url)
                 host = (parsed.hostname or "").strip().lower().rstrip(".")
                 # Strip square brackets from IPv6 hostnames
                 if host.startswith("[") and host.endswith("]"):
                     host = host[1:-1]
                 # Userinfo confusion: ANY credentials in the authority are rejected,
                 # even when the real host is on the allowlist (e.g. evil.com@example.com).
-                authority = decoded_url.split("://", 1)[-1].split("/", 1)[0]
+                authority = normalized_url.split("://", 1)[-1].split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
                 has_userinfo = "@" in authority
             except Exception:
                 return {"action": "block", "reason": "Malformed URL."}
@@ -655,11 +657,13 @@ async def q8_fetch_url(arguments: Dict[str, Any], scenario: Dict[str, Any]) -> D
                 return {"action": "block", "reason": "Only http/https destinations are permitted."}
             if has_userinfo:
                 return {"action": "block", "reason": "URLs with embedded credentials (userinfo) are not permitted."}
-            if not host or host not in allowed_hosts or _PRIVATE_HOST_RE.match(host) or is_private_host(host):
+            if not host or not _HOSTNAME_CHARS_RE.match(host):
+                return {"action": "block", "reason": "Destination host is not on the allowed list."}
+            if host not in allowed_hosts or _PRIVATE_HOST_RE.match(host) or is_private_host(host):
                 return {"action": "block", "reason": "Destination host is not on the allowed list."}
 
             try:
-                # Fetch using the normalized URL (no backslashes in authority) to avoid parser differential bypasses
+                # Fetch using the exact same normalized URL that was just validated.
                 resp = await client.get(normalized_url, follow_redirects=False)
             except Exception as exc:
                 return {"action": "allow", "reason": "Destination host is on the allowed list.", "result": f"(fetch error: {exc})"}
