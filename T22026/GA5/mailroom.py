@@ -307,9 +307,9 @@ async def triage_dossier_llm(dossier, token, allowed_actions=None):
         {"role": "user", "content": f"ALLOWED ACTIONS FOR THIS EVALUATION: {json.dumps(effective_actions)}\n\n" + _dossier_prompt(dossier)},
     ]
 
-    for attempt in range(3):
+    for attempt in range(2):
         try:
-            raw = await aipipe_chat(messages, token, model="gpt-4o-mini", max_tokens=500)
+            raw = await aipipe_chat(messages, token, model="gpt-4o-mini", max_tokens=500, timeout=10.0, retries=1)
             out = parse_json_block(raw)
             action = out.get("action")
             if action in effective_actions:
