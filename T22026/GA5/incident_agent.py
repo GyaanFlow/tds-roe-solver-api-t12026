@@ -228,6 +228,18 @@ effect tool list and give narrow, specific arguments. Return strictly JSON:
 """
 
 
+def _safest_effect_fallback(effect_tools: List[str]) -> Optional[str]:
+    """When the LLM call fails, never blindly default to a destructive tool
+    just because it happens to be first in the list -- a wrong destructive
+    effect (rollback/disable) that the grader approves and executes is far
+    worse than a wrong SAFE effect. Prefer a non-destructive tool if the
+    policy's effect list offers one at all."""
+    for name in effect_tools:
+        if name not in DESTRUCTIVE_DEFAULT:
+            return name
+    return effect_tools[0] if effect_tools else None
+
+
 async def choose_effect(root_cause: str, effect_tools: List[str], tool_catalog: List[dict], *args, **kwargs) -> Dict[str, Any]:
     """LLM-backed effect selection. Uses GPT-4o-mini via AIPipe.
 
@@ -277,12 +289,12 @@ async def choose_effect(root_cause: str, effect_tools: List[str], tool_catalog: 
         out = parse_json_block(raw)
         chosen = out.get("chosenEffect")
         if chosen not in effect_tools:
-            chosen = effect_tools[0] if effect_tools else None
+            chosen = _safest_effect_fallback(effect_tools)
         return {"chosenEffect": chosen, "arguments": out.get("arguments", {}) or {}}
     except TokenExpiredError:
         raise  # propagate immediately
     except Exception:
-        return {"chosenEffect": effect_tools[0] if effect_tools else None, "arguments": {}}
+        return {"chosenEffect": _safest_effect_fallback(effect_tools), "arguments": {}}
 
 
 # ---------------------------------------------------------------------------

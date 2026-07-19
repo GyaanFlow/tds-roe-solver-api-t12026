@@ -662,9 +662,20 @@ async def q8_fetch_url(arguments: Dict[str, Any], scenario: Dict[str, Any]) -> D
             if host not in allowed_hosts or _PRIVATE_HOST_RE.match(host) or is_private_host(host):
                 return {"action": "block", "reason": "Destination host is not on the allowed list."}
 
+            # A trailing-dot FQDN (e.g. "example.com.") is the SAME real host per DNS,
+            # but sending it verbatim breaks TLS SNI/cert matching. Since `host` above
+            # is already the trailing-dot-stripped form that was actually validated,
+            # rebuild the request URL to use that exact validated host.
+            if parsed.hostname and parsed.hostname != host:
+                netloc = host
+                if parsed.port:
+                    netloc = f"{host}:{parsed.port}"
+                fetch_url_str = normalized_url.replace(parsed.netloc, netloc, 1)
+            else:
+                fetch_url_str = normalized_url
+
             try:
-                # Fetch using the exact same normalized URL that was just validated.
-                resp = await client.get(normalized_url, follow_redirects=False)
+                resp = await client.get(fetch_url_str, follow_redirects=False)
             except Exception as exc:
                 return {"action": "allow", "reason": "Destination host is on the allowed list.", "result": f"(fetch error: {exc})"}
 
