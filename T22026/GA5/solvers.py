@@ -189,6 +189,10 @@ def guardrail_decision(payload: Dict[str, Any], policy: Optional[Dict[str, Any]]
 
     if tool == "bash":
         command = str(payload.get("command", ""))
+        # /etc/shadow is a universally forbidden read (per the exam's own worked
+        # example), independent of the per-student seeded secret file.
+        if _bash_touches_secret(command, "/etc/shadow", cwd, home):
+            return {"decision": "block", "reason": "Reading /etc/shadow is never permitted by this agent's policy."}
         if _bash_touches_secret(command, policy["secret_file"], cwd, home):
             return {"decision": "block", "reason": f"Reading {policy['secret_file']} is never permitted by this agent's policy."}
         return {"decision": "allow", "reason": "Command does not access the restricted secret file."}
