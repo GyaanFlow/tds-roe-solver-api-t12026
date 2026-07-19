@@ -322,7 +322,16 @@ async def triage_dossier_llm(dossier, token, allowed_actions=None):
         messages.append({"role": "user", "content": "Return valid JSON with an action field that is one of the allowed actions."})
 
     logger.warning("Q9 triage exhausted retries for %s -- safe fallback", dossier.get("dossierId"))
-    return safe_fallback_proposal(dossier, call_id)
+    # Mark this as a FALLBACK so propose() never persists it into the durable
+    # stable-core cache. Caching a fallback is catastrophic: the stable 64
+    # dossiers would replay that degraded decision on every later Check without
+    # ever re-consulting the model (this is exactly what happened while the
+    # AIPipe token was quota-exhausted -- the whole stable core froze as
+    # request_confirmation and the score stuck at ~9/70 even after the token
+    # was replaced). Only genuine model decisions are durable.
+    fb = safe_fallback_proposal(dossier, call_id)
+    fb["_fallback"] = True
+    return fb
 
 
 # ---------------------------------------------------------------------------
@@ -355,15 +364,23 @@ class MailroomStore:
         tmp.write_text(json.dumps(data), encoding="utf-8")
         tmp.replace(self.path)
 
+    # Bump CACHE_NAMESPACE to invalidate every previously-cached proposal. v2
+    # discards the entries poisoned while the AIPipe token was quota-exhausted,
+    # when the whole stable core was frozen as request_confirmation fallbacks.
+    CACHE_NAMESPACE = "v2"
+
+    def _cache_key(self, dossier_id: str, fingerprint: str) -> str:
+        return f"{self.CACHE_NAMESPACE}::{dossier_id}::{fingerprint}"
+
     def get_cached_proposal(self, dossier_id: str, fingerprint: str) -> Optional[Dict[str, Any]]:
         with self._lock:
             data = self._load()
-            return data["dossier_cache"].get(f"{dossier_id}::{fingerprint}")
+            return data["dossier_cache"].get(self._cache_key(dossier_id, fingerprint))
 
     def put_cached_proposal(self, dossier_id: str, fingerprint: str, proposal: Dict[str, Any]) -> None:
         with self._lock:
             data = self._load()
-            data["dossier_cache"][f"{dossier_id}::{fingerprint}"] = proposal
+            data["dossier_cache"][self._cache_key(dossier_id, fingerprint)] = proposal
             self._save(data)
 
     def get_evaluation(self, evaluation_id: str) -> Optional[Dict[str, Any]]:
@@ -446,10 +463,17 @@ async def propose(body: Dict[str, Any], email: str, token: Optional[str]) -> Dic
     if pending_indices:
         results = await asyncio.gather(*[_triage_one(dossiers[i]) for i in pending_indices])
         for i, proposal in zip(pending_indices, results):
+            is_fallback = bool(proposal.pop("_fallback", False))
             cached_or_none[i] = proposal
-            store.put_cached_proposal(dossiers[i]["dossierId"], fingerprints[i], proposal)
+            # NEVER persist a degraded fallback as the durable stable-core
+            # decision -- it would replay forever on later Checks without ever
+            # re-consulting the model. Only cache genuine model decisions.
+            if not is_fallback:
+                store.put_cached_proposal(dossiers[i]["dossierId"], fingerprints[i], proposal)
 
-    proposals: List[Dict[str, Any]] = cached_or_none
+    proposals: List[Dict[str, Any]] = [
+        {k: v for k, v in p.items() if k != "_fallback"} for p in cached_or_none
+    ]
 
     response = {
         "profile": PROFILE,

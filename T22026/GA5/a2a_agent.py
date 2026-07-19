@@ -226,7 +226,13 @@ async def triage_package_llm(package: Dict[str, Any], token: str) -> Dict[str, A
             import logging
             logging.getLogger("ga5_a2a").warning("Q10 triage attempt %d failed for package %s: %s", attempt + 1, package.get("packageId"), exc)
         messages.append({"role": "user", "content": "Invalid or malformed JSON. Retry, matching the schema exactly."})
-    return _safe_fallback_proposal(package)
+    # Mark as FALLBACK so the caller never persists it into the durable
+    # stable-core cache -- a cached fallback replays forever on later Checks
+    # without re-consulting the model (this froze the whole stable core while
+    # the AIPipe token was quota-exhausted).
+    fb = _safe_fallback_proposal(package)
+    fb["_fallback"] = True
+    return fb
 
 
 # ---------------------------------------------------------------------------
@@ -282,14 +288,22 @@ class A2AStore:
         with self._lock:
             return list(self._load()["tasks"].values())
 
+    # Bump to invalidate every previously-cached proposal. v2 discards entries
+    # poisoned while the AIPipe token was quota-exhausted (whole stable core
+    # frozen as request_approval fallbacks).
+    CACHE_NAMESPACE = "v2"
+
+    def _pkg_cache_key(self, package_id: str, fingerprint: str) -> str:
+        return f"{self.CACHE_NAMESPACE}::{package_id}::{fingerprint}"
+
     def get_cached_package_proposal(self, package_id: str, fingerprint: str) -> Optional[Dict[str, Any]]:
         with self._lock:
-            return self._load()["package_cache"].get(f"{package_id}::{fingerprint}")
+            return self._load()["package_cache"].get(self._pkg_cache_key(package_id, fingerprint))
 
     def put_cached_package_proposal(self, package_id: str, fingerprint: str, proposal: Dict[str, Any]) -> None:
         with self._lock:
             data = self._load()
-            data["package_cache"][f"{package_id}::{fingerprint}"] = proposal
+            data["package_cache"][self._pkg_cache_key(package_id, fingerprint)] = proposal
             self._save(data)
 
 
@@ -372,11 +386,14 @@ async def _handle_initial_batch(message: Dict[str, Any], part: Dict[str, Any], p
         for i, triage in zip(pending_indices, results):
             package_id = packages[i]["packageId"]
             action_id = action_id_for(principal, package_id, fingerprints[i])
+            is_fallback = bool(triage.pop("_fallback", False))
             proposal = {
                 "packageId": package_id, "actionId": action_id, "action": triage["action"],
                 "facts": triage["facts"], "evidenceRefs": triage["evidenceRefs"], "rationale": triage["rationale"],
             }
-            store.put_cached_package_proposal(package_id, fingerprints[i], proposal)
+            # Never persist a degraded fallback as the durable stable-core decision.
+            if not is_fallback:
+                store.put_cached_package_proposal(package_id, fingerprints[i], proposal)
             cached_or_none[i] = proposal
 
     proposals = cached_or_none
