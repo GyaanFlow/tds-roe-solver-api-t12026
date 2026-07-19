@@ -406,3 +406,29 @@ the deterministic ones live on Render. Commit `2a99a1e` (GitHub) / `a92c2f3`→`
 - 30/30 project tests pass. LLM-scored categories (Q4/Q9/Q10/Q11 semantic accuracy) can't be
   verified without running the grader — structural causes fixed + prompts/models upgraded; needs a
   re-Check to confirm scores.
+
+### 2026-07-19 (Q8 read_file fail-open → fail-closed, via user-supplied reference implementation)
+- User provided a working reference Q8 implementation (`tds ga5 q8 fix (1).py`) demonstrating the
+  correct guardrail philosophy: only an explicitly-known-good, REAL, EXISTING resource is ever
+  "allowed" — anything that doesn't positively match defaults to "block", never "allow with empty
+  result".
+- Root cause found in `T22026/GA5/solvers.py::q8_read_file`: once `_q8_logical_to_physical` decided
+  a path canonicalized INSIDE the sandbox boundary, the function unconditionally returned
+  `{"action":"allow", ...}` even when the target file didn't actually exist on disk (`result` was
+  just `""`, but `action` still said `allow`). This let malicious probes (nonexistent files under
+  the sandbox, traversal attempts whose decoded form lands back "inside", `%2e%2e` fake paths)
+  slip through as a false allow — matching the grader's reported `path:2` miss family.
+  `q8_fetch_url` was reviewed against the reference's DNS-resolution-based IP blocking and found
+  already fail-closed (host allowlist + private-IP checks happen before any `allow`); no change
+  needed there.
+- Fix: `q8_read_file` now checks `physical.is_file()` after the boundary check and returns
+  `{"action":"block","reason":"No such file inside the sandbox."}` for anything that isn't a real,
+  existing file — only real seeded files ever reach the `allow` branch.
+- Verified locally and LIVE against
+  `https://tds-roe-solver-api-t12026.onrender.com/ga5/23f1000805@ds.study.iitm.ac.in/guardrail-redteam`:
+  all 3 benign seeded files (`notes/report.txt`, `notes/looks-like-..-but-safe.txt`,
+  `encoded/%2e%2e-literal.txt`) still `allow` with their correct tokens; nonexistent-file and
+  traversal-to-outside-canary probes now correctly `block`.
+- Local pytest suite (`verify_ga5_endpoints.py`) passes 12/12.
+- Pushed to GitHub (`main`, commit `5ee8f71`) and to Hugging Face Space via the squash-commit
+  pattern (`git commit-tree` on top of `hf/main`'s tip) to avoid carrying binary history forward.
