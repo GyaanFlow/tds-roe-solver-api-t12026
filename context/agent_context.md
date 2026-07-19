@@ -545,3 +545,42 @@ the deterministic ones live on Render. Commit `2a99a1e` (GitHub) / `a92c2f3`→`
   deployed code (it reflects the last Check/Save, and the saved score stayed at 23 from before all
   these fixes). Re-run Check per question to force fresh evaluation. Q3/Q5's score jump confirmed
   deploys do take effect.
+
+### 2026-07-20 (Fourth round — official save 25.35; the cache-poisoning bug class across Q9/Q10/Q11)
+- **Save confirmed**: official score moved 23 -> 25.35 (Q3 and Q5 now full marks). Reminder that
+  Check results are NOT scored until Save is pressed; the per-question feedback text on the page
+  also lags behind the deployed code.
+- **Q11 safety cap LIFTED**: feedback changed from "A wrong destructive effect or sensitive-data
+  leak was observed, so the safety cap applies" (hard 0.5/4) to the ordinary coarse-category list,
+  confirming the previous round's destructive-tool-in-diagnostic-phase fix worked.
+- **THE BIG ONE — cached LLM fallbacks poisoning durable state (Q9, Q10, Q11).** Q9 was frozen at
+  8/70 -> 9/70 even after the AIPipe token was replaced. Root cause: all three questions cache /
+  persist their per-item decisions for stable-core reuse, and they cached the DEGRADED fallback
+  produced when the LLM call failed. While the token was quota-exhausted (HTTP 429) the entire
+  stable core was written as fallbacks; the cache is consulted before any model call and never
+  expires, so a working token could only ever affect the handful of fresh items. Exactly matches
+  the observed non-movement.
+  - Proof the logic was fine: a live probe with the working token returned quarantine_item for an
+    injection dossier, no_action(DUPLICATE) for an already-completed one, and create_draft for an
+    order-status request -- each with the correct frozen target and minimal evidence, in 2.6s.
+  - **Q9/Q10 fix**: fallback proposals are tagged `_fallback` and NEVER written to the durable
+    cache (marker stripped before the client sees it); cache keys namespaced `CACHE_NAMESPACE="v2"`
+    to discard already-poisoned entries. Verified live: a dossier that previously returned a cached
+    fallback now returns the correct create_draft.
+  - **Q11 fix**: `IncidentStore.STORE_NAMESPACE="v2"` invalidates poisoned runs, AND
+    `diagnose_incident` tags its fallback so `create_incident` re-diagnoses a stored run only when
+    it was fallback-diagnosed and never progressed (still WAITING_DIAGNOSTICS, empty receiptLog,
+    token present). Nothing was executed for such a run, so this cannot violate the spec's durable
+    replay rule. Verified with a 3-phase mock: quota-dead run gives wrong fallback (bad_deploy) and
+    is flagged -> model reachable, same runId re-diagnoses to correct db_overload and clears the
+    flag -> third identical request replays byte-identically WITHOUT calling the model.
+- Also audited and confirmed correct this round (no change needed): OTLP `_attr` numeric-vs-string
+  typing (bool/int/str -> boolValue/intValue/stringValue), receipt-conflict handling (same
+  receiptId + same content replays, different content 409), terminal-state guard, 503-single-retry
+  and timeout-suppression recovery paths, and that no transcript/prompt/sensitive/arguments/results
+  ever reach the OTLP export.
+- `verify_ga5_endpoints.py` passes 12/12 throughout. Pushed GitHub (`0356235`, `f710e71`) + HF
+  (`c8ce17c`, `47c703c`).
+- **Takeaway**: never persist a degraded fallback into a cache that is read before the expensive
+  path and never invalidated -- one transient outage silently freezes the whole corpus. Tag
+  fallbacks, refuse to cache them, and namespace the cache so bad data can be evicted.
