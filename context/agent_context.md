@@ -432,3 +432,30 @@ the deterministic ones live on Render. Commit `2a99a1e` (GitHub) / `a92c2f3`→`
 - Local pytest suite (`verify_ga5_endpoints.py`) passes 12/12.
 - Pushed to GitHub (`main`, commit `5ee8f71`) and to Hugging Face Space via the squash-commit
   pattern (`git commit-tree` on top of `hf/main`'s tip) to avoid carrying binary history forward.
+
+### 2026-07-19 (Q8 fetch_url decide-vs-execute mismatch — second half of the same bug class)
+- Fresh grader feedback after the read_file fix: Q8 down to `MALICIOUS_PROBES_NOT_BLOCKED: 1
+  probe. Families: url:1` (was `path:2, url:1` before) — confirmed the read_file fix resolved the
+  `path` family; one `url` miss remained.
+- Root cause, found by constructing and running a battery of SSRF/obfuscation probes directly
+  against the live endpoint: `q8_fetch_url` computed its allow/block DECISION against a separately
+  and *recursively* url-decoded copy of the URL (`decoded_url = unquote(unquote(...))` until
+  stable), so an obfuscated host like `%65xample.com` or `%2565xample.com` decoded down to
+  `example.com` and passed the allowlist check — but the ACTUAL `httpx` request was made against
+  `normalized_url`, the RAW, never-decoded string, which targets a completely different (and
+  usually unresolvable, since `%` is invalid in a real DNS hostname) host. Decision and execution
+  operated on two different URLs — the same decide-vs-execute split as the `read_file` bug fixed
+  earlier, just on the network side instead of the filesystem side.
+- Fix: removed the separate pre-decode step entirely. The host is now extracted via `urlparse`
+  directly from the same `normalized_url` that gets fetched (only a backslash→slash normalization
+  is applied, identically, before both the decision and the request), and any host containing `%`
+  or any other non-hostname character is rejected outright via `_HOSTNAME_CHARS_RE` rather than
+  decoded — percent-encoding is never legitimate inside a real DNS name.
+- Verified locally and LIVE: single/double/triple percent-encoded host obfuscation
+  (`%65xample.com`, `%2565xample.com`, `%252565xample.com`) now all `block`
+  ("Destination host is not on the allowed list."); benign `example.com`/`www.iana.org` fetches
+  (including uppercase-host and query/fragment-in-authority variants) still `allow` with real page
+  content; userinfo-confusion and private/metadata-IP probes still correctly `block`; `read_file`
+  behavior from the earlier fix is untouched and still correct.
+- `verify_ga5_endpoints.py` passes 12/12. Pushed to GitHub (`main`, commit `f5c7b54`) and Hugging
+  Face (squash-commit `9a1edaf`).
