@@ -109,19 +109,14 @@ def package_fingerprint(package: Dict[str, Any]) -> str:
 
 
 def message_fingerprint(message: Dict[str, Any]) -> str:
-    """Fingerprint the semantic message only (ignore `configuration`)."""
-    # Exclude transient fields like messageId, taskId, contextId or configuration
-    # but the spec says: "Deduplicate by (Bearer principal, messageId). Fingerprint recursively key-sorted compact JSON of the semantic message only; ignore configuration."
-    # Wait, the message body has `message`: { `messageId`, `role`, `parts` }
-    # So we fingerprint the `message` field itself but exclude `messageId`? Or keep messageId?
-    # Spec: "Deduplicate by (Bearer principal, messageId). Fingerprint recursively key-sorted compact JSON of the semantic message only; ignore configuration."
-    # So the idempotency check is: if messageId exists, we check if fingerprint of the *semantic message* matches.
-    # What is the "semantic message"? The message field. But wait! The message field has messageId, role, parts.
-    # To be safe, message_fingerprint handles it by taking the whole message dict, but let's exclude messageId, taskId, contextId?
-    # Let's check how message_fingerprint is defined currently. It is:
-    # return sha256_hex(_canonical_bytes(message))
-    # This is fine, but let's make sure it is correct.
-    return sha256_hex(_canonical_bytes(message))
+    """Fingerprint the semantic message for a given messageId.
+
+    Idempotency is keyed by (principal, messageId), so the messageId itself is
+    not semantic content. Keep taskId/contextId/parts because changing those
+    under the same messageId must be an IDEMPOTENCY_CONFLICT.
+    """
+    semantic = {k: v for k, v in message.items() if k != "messageId"}
+    return sha256_hex(_canonical_bytes(semantic))
 
 
 # ---------------------------------------------------------------------------
@@ -422,24 +417,35 @@ async def _handle_continuation(message: Dict[str, Any], part: Dict[str, Any], me
         raise MailroomError(422, f"continuation message part mediaType must be '{PROFILE_RESULTS_MODE}'")
 
     data = part.get("data", {}) or {}
+    if data.get("batchId") != task["batchId"]:
+        raise MailroomError(400, "continuation batchId does not match the persisted task")
     results = data.get("results")
     if not isinstance(results, list) or not results:
         raise MailroomError(422, "'data.results' must be a non-empty array")
 
     proposals_by_action = task["proposalsByActionId"]
+    seen_action_ids = set()
     executions = []
     for result in results:
-        persisted = proposals_by_action.get(result.get("actionId"))
+        action_id = result.get("actionId")
+        if action_id in seen_action_ids:
+            raise MailroomError(422, f"duplicate result for actionId '{action_id}'")
+        seen_action_ids.add(action_id)
+        if result.get("outcome") not in ("ACCEPTED", "REJECTED"):
+            raise MailroomError(422, "result.outcome must be ACCEPTED or REJECTED")
+        if not result.get("receiptNonce"):
+            raise MailroomError(422, "result.receiptNonce is required")
+        persisted = proposals_by_action.get(action_id)
         if (
             persisted is None
             or persisted["packageId"] != result.get("packageId")
             or persisted["action"] != result.get("action")
         ):
-            raise MailroomError(400, f"result for actionId '{result.get('actionId')}' does not match the persisted proposal")
+            raise MailroomError(400, f"result for actionId '{action_id}' does not match the persisted proposal")
         if result.get("outcome") == "ACCEPTED":
             executions.append({
                 "packageId": persisted["packageId"], "actionId": persisted["actionId"], "action": persisted["action"],
-                "receiptNonce": result.get("receiptNonce"),
+                "receiptNonce": result["receiptNonce"],
                 "facts": persisted["facts"], "evidenceRefs": persisted["evidenceRefs"],
             })
 

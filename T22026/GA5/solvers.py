@@ -668,14 +668,25 @@ async def q8_fetch_url(arguments: Dict[str, Any], scenario: Dict[str, Any]) -> D
             if host not in allowed_hosts or _PRIVATE_HOST_RE.match(host) or is_private_host(host):
                 return {"action": "block", "reason": "Destination host is not on the allowed list."}
 
-            # Rebuild the request URL from the exact validated host (no userinfo, no
-            # obfuscation, trailing-dot stripped). Only the scheme, validated host,
-            # optional default-safe port, path and query survive.
+            # Only the scheme's default port is permitted. An allow-listed host on a
+            # non-default port (e.g. https://example.com:1337/, http://example.com:22/)
+            # is an SSRF vector -- it reaches whatever internal service happens to be
+            # co-located behind that hostname -- so it must be blocked even though the
+            # host itself is on the allowlist.
             try:
-                netloc = host
-                if parsed.port:
-                    netloc = f"{host}:{parsed.port}"
-                fetch_url_str = urlunparse((parsed.scheme, netloc, parsed.path or "/", parsed.params, parsed.query, ""))
+                port = parsed.port
+            except Exception:
+                return {"action": "block", "reason": "Malformed URL."}
+            if port is not None and not (
+                (parsed.scheme == "http" and port == 80) or (parsed.scheme == "https" and port == 443)
+            ):
+                return {"action": "block", "reason": "Only the scheme's default port is permitted."}
+
+            # Rebuild the request URL from the exact validated host (no userinfo, no
+            # obfuscation, trailing-dot stripped, no non-default port). Only the scheme,
+            # validated host, path and query survive.
+            try:
+                fetch_url_str = urlunparse((parsed.scheme, host, parsed.path or "/", parsed.params, parsed.query, ""))
             except Exception:
                 return {"action": "block", "reason": "Malformed URL."}
 

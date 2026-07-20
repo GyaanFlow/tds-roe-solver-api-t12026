@@ -43,6 +43,11 @@ def _tenant_token() -> str | None:
     return resolve_aipipe_token(current_token.get(), stored)
 
 
+def _content_type_matches(request: Request, expected: str) -> bool:
+    content_type = (request.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+    return content_type == expected
+
+
 async def _read_json_body(request: Request) -> Dict[str, Any]:
     try:
         raw = await request.body()
@@ -191,7 +196,7 @@ async def guardrail_redteam_endpoint(request: Request):
         arguments = body.get("arguments")
         if not isinstance(arguments, dict):
             # Gracefully handle missing/null arguments instead of crashing
-            arguments = {}
+            body["arguments"] = {}
         email = current_email.get()
         return await redteam_guardrail_decision(body, email)
     return await _run_solver(_handle, "Q8")
@@ -242,21 +247,34 @@ async def mailroom_endpoint(request: Request):
 # hf_space/app.py (not here) -- see T22026/GA5/a2a_agent.register_base_url.
 # ---------------------------------------------------------------------------
 def _a2a_principal(request: Request) -> str:
-    """Tenant isolation key: exact Bearer token from the Authorization header.
-    Every Bearer token represents a completely separate principal."""
+    """Tenant isolation key: normalized email + exact Bearer token.
+    This avoids cross-email task visibility when two learners reuse a token."""
     auth = request.headers.get("Authorization") or request.headers.get("authorization") or ""
     if auth.lower().startswith("bearer "):
-        return auth[7:].strip()
+        return f"{current_email.get()}:{auth[7:].strip()}"
     return ""
-
 
 def _check_a2a_auth(request: Request) -> None:
     version = request.headers.get("A2A-Version") or request.headers.get("a2a-version")
     if version and version != "1.0":
         raise HTTPException(status_code=400, detail="Unsupported A2A-Version")
+    if request.method.upper() == "POST" and not _content_type_matches(request, "application/a2a+json"):
+        raise HTTPException(status_code=415, detail="Content-Type must be application/a2a+json")
     auth = request.headers.get("Authorization") or request.headers.get("authorization") or ""
     if not auth.lower().startswith("bearer ") or not auth[7:].strip():
         raise HTTPException(status_code=401, detail="Missing or malformed Bearer token")
+    bearer = auth[7:].strip()
+    expected = current_token.get()
+    stored = get_tenant_config(current_email.get()).get("aipipe_token")
+    
+    is_valid = False
+    if expected and bearer == expected:
+        is_valid = True
+    elif stored and bearer == stored:
+        is_valid = True
+        
+    if not is_valid:
+        raise HTTPException(status_code=403, detail="Bearer token does not match the tenant token")
 
 
 @router.post("/a2a/message:send")
@@ -321,8 +339,9 @@ async def incidents_create_endpoint(request: Request):
         email = current_email.get()
         token = _tenant_token()
         incoming_traceparent = request.headers.get("traceparent")
+        incoming_tracestate = request.headers.get("tracestate")
         try:
-            return await incident_agent.create_incident(body, email, token, incoming_traceparent)
+            return await incident_agent.create_incident(body, email, token, incoming_traceparent, incoming_tracestate)
         except incident_agent.MailroomError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.message)
     return await _run_solver(_handle, "Q11/create")
