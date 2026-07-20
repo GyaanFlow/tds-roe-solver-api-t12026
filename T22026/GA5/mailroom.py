@@ -424,7 +424,7 @@ def build_proposal_from_fields(dossier, call_id, action, f, evidence):
 
     # Validate evidence: every lineId must actually exist in the dossier
     valid_ids = _valid_line_ids(dossier)
-    evidence = [e for e in evidence if e in valid_ids]
+    evidence = sorted([e for e in evidence if e in valid_ids])
     if not evidence:
         # Last-resort: pick first lineId from dossier
         evidence = _clean_evidence([], dossier)
@@ -515,10 +515,8 @@ def build_proposal_from_fields(dossier, call_id, action, f, evidence):
             else:
                 rc = "INFORMATIONAL"
         target = None
-        p = {"reasonCode": rc}
-        if ref is not None:
-            p["referenceId"] = ref
-        payload = p
+        # Per spec: payload always includes referenceId (null when absent) and reasonCode
+        payload = {"reasonCode": rc, "referenceId": ref}
 
     return {"dossierId": dossier["dossierId"], "callId": call_id, "action": action, "target": target, "payload": payload, "evidence": evidence}
 
