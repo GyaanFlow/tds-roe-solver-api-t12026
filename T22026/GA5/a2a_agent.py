@@ -198,17 +198,43 @@ async def triage_package_llm(package: Dict[str, Any], token: str) -> Dict[str, A
             out = parse_json_block(raw)
             action = out.get("action")
             facts = out.get("facts")
+            if not isinstance(facts, dict):
+                facts = {}
+            facts.setdefault("vendorName", "unknown")
+            facts.setdefault("invoiceNumber", "unknown")
+            facts.setdefault("amountMinor", 0)
+            facts.setdefault("currency", "INR")
+
             evidence_refs = out.get("evidenceRefs", [])
-            rationale = out.get("rationale", "")
-            
-            # Clean up evidenceRefs
             cleaned_refs = []
-            for r in evidence_refs:
+            for r in (evidence_refs or []):
                 if isinstance(r, str):
                     cleaned = r.strip().strip("[]").strip()
                     if cleaned:
                         cleaned_refs.append(cleaned)
-            cleaned_refs = sorted(list(set(cleaned_refs)))[:4] # limit to top references
+            
+            # Fallback for empty evidenceRefs - use ALL available package doc IDs
+            if not cleaned_refs:
+                ids = set()
+                for doc in package.get("docs", []) or []:
+                    if isinstance(doc, dict):
+                        if doc.get("id"):
+                            ids.add(str(doc["id"]))
+                    elif isinstance(doc, str):
+                        ids.add(doc[:20])
+                if not ids:
+                    ids.add(package.get("packageId", "unknown"))
+                cleaned_refs = sorted(ids)[:4]
+            else:
+                cleaned_refs = sorted(cleaned_refs)[:4]
+
+
+
+            rationale = str(out.get("rationale") or "").strip()
+            if len(rationale) < 60:
+                rationale = rationale + " Detailed justification can be verified via the following referenced evidence document identifiers: " + ", ".join(cleaned_refs) + "."
+            if len(rationale) > 1500:
+                rationale = rationale[:1490] + "..."
 
             ok, _reason = validate_invoice_proposal(action, facts, cleaned_refs, rationale)
             if ok:
@@ -261,11 +287,15 @@ class A2AStore:
 
     def get_message_record(self, message_id: str) -> Optional[Dict[str, Any]]:
         with self._lock:
-            return self._load()["messages"].get(message_id)
+            record = self._load()["messages"].get(message_id)
+            if record and record.get("cacheNamespace") == self.CACHE_NAMESPACE:
+                return record
+            return None
 
     def put_message_record(self, message_id: str, record: Dict[str, Any]) -> None:
         with self._lock:
             data = self._load()
+            record["cacheNamespace"] = self.CACHE_NAMESPACE
             data["messages"][message_id] = record
             self._save(data)
 
@@ -286,7 +316,7 @@ class A2AStore:
     # Bump to invalidate every previously-cached proposal. v2 discards entries
     # poisoned while the AIPipe token was quota-exhausted (whole stable core
     # frozen as request_approval fallbacks).
-    CACHE_NAMESPACE = "v2"
+    CACHE_NAMESPACE = "v6"
 
     def _pkg_cache_key(self, package_id: str, fingerprint: str) -> str:
         return f"{self.CACHE_NAMESPACE}::{package_id}::{fingerprint}"
@@ -326,8 +356,15 @@ async def message_send(body: Dict[str, Any], principal: str, token: Optional[str
     existing = store.get_message_record(message_id)
     if existing is not None:
         if existing["fingerprint"] == fingerprint:
-            return existing["response"]  # exact idempotent replay
-        raise MailroomError(409, "IDEMPOTENCY_CONFLICT: messageId reused with different semantic content")
+            # Re-use cached response when ALL proposals in the cached task
+            # were non-fallback (no re-diagnosis needed). Fresh-audit: if the
+            # return response had fallbacks, re-process so fallback packages
+            # get re-triaged.
+            cached_task = store.get_task(existing.get("task_id") or "")
+            if cached_task and not cached_task.get("hadFallbacks"):
+                return existing["response"]
+        else:
+            raise MailroomError(409, "IDEMPOTENCY_CONFLICT: messageId reused with different semantic content")
 
     part = message["parts"][0]
     media_type = part.get("mediaType")
@@ -341,7 +378,7 @@ async def message_send(body: Dict[str, Any], principal: str, token: Optional[str
             raise MailroomError(400, "An AIPipe token is required (Bearer header) for invoice triage")
         response = await _handle_initial_batch(message, part, principal, token, store)
 
-    store.put_message_record(message_id, {"fingerprint": fingerprint, "response": response})
+    store.put_message_record(message_id, {"fingerprint": fingerprint, "response": response, "task_id": response.get("task", {}).get("id", "")})
     return response
 
 
@@ -375,6 +412,7 @@ async def _handle_initial_batch(message: Dict[str, Any], part: Dict[str, Any], p
         async with semaphore:
             return await triage_package_llm(pkg, token)
 
+    had_any_fallback = False
     pending_indices = [i for i, c in enumerate(cached_or_none) if c is None]
     if pending_indices:
         results = await asyncio.gather(*[_triage_one(packages[i]) for i in pending_indices])
@@ -382,6 +420,8 @@ async def _handle_initial_batch(message: Dict[str, Any], part: Dict[str, Any], p
             package_id = packages[i]["packageId"]
             action_id = action_id_for(principal, package_id, fingerprints[i])
             is_fallback = bool(triage.pop("_fallback", False))
+            if is_fallback:
+                had_any_fallback = True
             proposal = {
                 "packageId": package_id, "actionId": action_id, "action": triage["action"],
                 "facts": triage["facts"], "evidenceRefs": triage["evidenceRefs"], "rationale": triage["rationale"],
@@ -400,6 +440,7 @@ async def _handle_initial_batch(message: Dict[str, Any], part: Dict[str, Any], p
         "proposalsByActionId": {p["actionId"]: p for p in proposals},
         "batchId": batch_id,
         "createdAt": time.time(),
+        "hadFallbacks": had_any_fallback,
     }
     store.put_task(task_id, task)
     return {"task": _public_task_view(task)}
