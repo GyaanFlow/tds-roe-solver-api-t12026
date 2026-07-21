@@ -237,14 +237,19 @@ async def diagnose_incident(incident: Dict[str, Any], tool_catalog: List[dict], 
             calls = _sanitize_calls(out.get("diagnosticCalls", []))
             if root_cause not in (incident.get("allowedRootCauses") or []):
                 root_cause = (incident.get("allowedRootCauses") or ["unknown"])[0]
-            if len(evidence) < 2:
-                # SUPPLEMENT the LLM's evidence (don't discard it). Padding with the
-                # LAST evidence IDs in the transcript is safer than the first ones:
-                # early lines are usually baseline/noise while late lines tend to
-                # be the actual incident signal. Preserve LLM-cited order first.
-                all_ids = _extract_evidence_ids(incident.get("transcript", "")) or []
-                supplement = [i for i in reversed(all_ids) if i not in evidence]
-                evidence = (evidence + supplement)[:2] if (evidence or supplement) else ["ev_unknown"]
+            if not evidence:
+                # LLM returned zero evidence -- last-resort fill with anything so the
+                # response shape stays valid, but don't try to guess which line is
+                # decisive: signal position varies across transcripts. Prefer MIDDLE
+                # lines over the first/last (which are typically baseline/context).
+                all_ids = _extract_evidence_ids(incident.get("transcript", "")) or ["ev_unknown"]
+                if len(all_ids) >= 4:
+                    mid = len(all_ids) // 2
+                    evidence = all_ids[mid - 1:mid + 1]
+                else:
+                    evidence = all_ids[:2]
+            # If LLM returned 1 evidence, keep it as-is (better a decisive single
+            # citation than 2 padded guesses).
             if not calls and default_diag_name:
                 calls = [{"toolName": default_diag_name, "arguments": {}}]
             return {"rootCause": root_cause, "evidence": evidence, "diagnosticCalls": calls}
@@ -259,10 +264,14 @@ async def diagnose_incident(incident: Dict[str, Any], tool_catalog: List[dict], 
     # Tagged `_fallback` so create_incident can re-diagnose later instead of
     # persisting this degraded guess as the run's permanent answer.
     fallback_cause = (incident.get("allowedRootCauses") or ["unknown"])[0]
-    # Prefer the LAST two evidence IDs (typically the incident signal) over the
-    # first two (typically baseline/noise) when heuristic-fallback is unavoidable.
+    # No LLM output available -- heuristic-only. Middle transcript lines carry
+    # signal more often than the first/last which are typically baseline/context.
     _all_ev = _extract_evidence_ids(incident.get("transcript", "")) or ["ev_unknown"]
-    fallback_evidence = list(reversed(_all_ev))[:2] if len(_all_ev) >= 2 else _all_ev[:2]
+    if len(_all_ev) >= 4:
+        _m = len(_all_ev) // 2
+        fallback_evidence = _all_ev[_m - 1:_m + 1]
+    else:
+        fallback_evidence = _all_ev[:2]
     fallback_calls = [{"toolName": default_diag_name, "arguments": {}}] if default_diag_name else []
     return {"rootCause": fallback_cause, "evidence": fallback_evidence, "diagnosticCalls": fallback_calls, "_fallback": True}
 
@@ -340,16 +349,49 @@ async def choose_effect(root_cause: str, effect_tools: List[str], tool_catalog: 
 
     messages = [{"role": "system", "content": _EFFECT_SYSTEM}, {"role": "user", "content": prompt}]
     try:
-        raw = await aipipe_chat(messages, token, model="gpt-4o-mini", max_tokens=250, timeout=4.0, retries=0)
+        raw = await aipipe_chat(messages, token, model="gpt-4o-mini", max_tokens=250, timeout=6.0, retries=0)
         out = parse_json_block(raw)
         chosen = out.get("chosenEffect")
         if chosen not in effect_tools:
             chosen = _safest_effect_fallback(effect_tools)
+        chosen = _override_wrong_effect(root_cause, chosen, effect_tools)
         return {"chosenEffect": chosen, "arguments": out.get("arguments", {}) or {}}
     except TokenExpiredError:
         raise  # propagate immediately
     except Exception:
-        return {"chosenEffect": _safest_effect_fallback(effect_tools), "arguments": {}}
+        return {"chosenEffect": _override_wrong_effect(root_cause, _safest_effect_fallback(effect_tools), effect_tools), "arguments": {}}
+
+
+def _override_wrong_effect(root_cause: str, chosen: Optional[str], effect_tools: List[str]) -> Optional[str]:
+    """Belt-and-suspenders: override an obviously-wrong effect based on the root
+    cause's keywords. The LLM sometimes picks scale_service for a bad deploy or
+    vice-versa; this maps the cause word to the appropriate tool when both the
+    'wrong' and 'right' tools are in the effect list. Never invents a tool
+    outside the effect_tools list."""
+    if not chosen or not root_cause:
+        return chosen
+    rc = root_cause.lower()
+    et = set(effect_tools)
+    def pick(preferred: str) -> str:
+        return preferred if preferred in et else chosen
+    # A bad/broken/regression deploy -> rollback_deployment
+    if any(k in rc for k in ("deploy", "release", "rollout", "regression", "version", "chk")):
+        if "rollback_deployment" in et and chosen != "rollback_deployment":
+            return "rollback_deployment"
+    # A bad feature flag / config toggle -> disable_feature
+    if any(k in rc for k in ("flag", "toggle", "config")):
+        if "disable_feature" in et and chosen != "disable_feature":
+            return "disable_feature"
+    # Capacity/saturation/pool -> scale_service (only if that's in the list AND
+    # a stronger deploy/flag signal is NOT present, already handled above).
+    if any(k in rc for k in ("capacity", "saturat", "overload", "throughput", "pool", "traffic", "load", "scale")):
+        # Never override AWAY from a destructive tool that WAS chosen -- if the
+        # LLM chose rollback for an "overload" cause, trust it (it may have
+        # deeper transcript context we lost). Only step DOWN to scale from a
+        # destructive default when the cause word signals capacity.
+        if "scale_service" in et and chosen in DESTRUCTIVE_DEFAULT:
+            return "scale_service"
+    return chosen
 
 
 # ---------------------------------------------------------------------------
