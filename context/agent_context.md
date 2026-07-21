@@ -584,3 +584,32 @@ the deterministic ones live on Render. Commit `2a99a1e` (GitHub) / `a92c2f3`→`
 - **Takeaway**: never persist a degraded fallback into a cache that is read before the expensive
   path and never invalidated -- one transient outage silently freezes the whole corpus. Tag
   fallbacks, refuse to cache them, and namespace the cache so bad data can be evicted.
+
+### 2026-07-20 (Live recheck round — real Q11 diagnosis/effect bugs found and fixed)
+- Live end-to-end recheck against deployed Render server surfaced two concrete Q11 bugs that
+  wouldn't show up without exercising the full lifecycle:
+  1. **Evidence overwrite bug**: when the LLM returned <2 evidence IDs, my code DISCARDED the
+     LLM's decisive citation and replaced with the first two transcript IDs (usually baseline
+     noise). Live probe: rootCause correctly `bad_deploy_chk42` but evidence became
+     `[ev_1 baseline, ev_2]` instead of `[ev_2 deploy, ev_3 5xx-spike]`.
+     - First fix attempted: reverse-order pad. WORSE — for transcripts where signal is in the
+       middle (typical incident shape), reversing pads from unrelated tail lines.
+     - Correct fix: keep LLM evidence as-is even if only 1 item (a decisive single citation beats
+       two padded guesses). Only pad when completely empty, then prefer MIDDLE transcript lines.
+     - Verified live: evidence now `[ev_2, ev_3]` — the two decisive lines.
+  2. **Wrong effect choice for bad-deploy root cause**: LLM picked `scale_service` for
+     `rootCause=bad_deploy_chk42` even after sharpening the prompt with explicit
+     cause→tool guidance. LLMs are unreliable for this kind of tight semantic mapping in ~5s.
+     - Added `_override_wrong_effect()` deterministic post-filter: maps root-cause keywords
+       (deploy/release/rollout/regression → rollback_deployment; flag/toggle/config →
+       disable_feature; capacity/saturation/overload/pool → scale_service) to the appropriate
+       tool, but only among tools in the policy's `effectTools` list, and never overrides AWAY
+       from a destructive tool the LLM deliberately chose (so it can't scale-when-rollback-is-right).
+     - Unit-tested with 8 cause/chosen/expected combinations, all pass.
+     - Verified live: rootCause=bad_deploy_chk42 now correctly triggers rollback_deployment, which
+       correctly routes through the approval_gate (no direct destructive dispatch).
+- Bumped choose_effect timeout 4.0→6.0s to leave headroom under the 18s per-request budget.
+- Q8, Q9, Q10 all re-verified passing on live endpoints (Q8: 17/17 probes; Q9: 3 semantic
+  probes all correct in 3.2s; Q10: agent card valid, message:send returns settle+approval
+  correctly in 4.6s).
+- `verify_ga5_endpoints.py` passes 13/13. GitHub `23a0334`, `32bfc37`; HF `d7752ca`, `b0ad83e`.
