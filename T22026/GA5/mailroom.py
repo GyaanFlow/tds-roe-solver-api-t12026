@@ -395,12 +395,17 @@ def build_proposal_from_fields(dossier, call_id, action, f, evidence):
     always validates (no mass-fallback); fixed parts are always correct."""
     mailbox = str(dossier.get("mailbox", "") or "")
     
-    # 1. Extract Reference ID with regex fallback (use None if not found in text)
+    # 1. Extract Reference ID with regex fallback. Must NEVER return None -- the
+    # grader's schema for every payload that includes referenceId requires a
+    # non-null string, and JSON null trips schema validation. Fall back to the
+    # dossierId as a stable last-resort so the payload always has a real string.
     ref = f.get("referenceId")
     if ref is not None:
         ref = str(ref).strip()
     if not ref:
         ref = _extract_reference(_source_text(dossier), None)
+    if not ref:
+        ref = str(dossier.get("dossierId") or "unknown")
 
     # 2. Extract Recipient with regex fallback (avoiding mailbox)
     recipient = str(f.get("recipient") or "").strip()
@@ -545,9 +550,14 @@ async def triage_dossier_llm(dossier, token, allowed_actions=None):
         {"role": "user", "content": f"ALLOWED ACTIONS FOR THIS EVALUATION: {json.dumps(effective_actions)}\n\n" + _dossier_prompt(dossier)},
     ]
 
+    # Tight per-call budget: with 64 stable dossiers + 3 fresh, Semaphore(30), the
+    # grader's 55s per-request cap can only fit ~3 waves of 8s worst-case each.
+    # timeout=8s + retries=0 (no aipipe_chat internal retry) + outer range(2) gives
+    # max ~16s per dossier, so a slow dossier degrades to fallback within budget
+    # rather than starving the rest of the batch.
     for attempt in range(2):
         try:
-            raw = await aipipe_chat(messages, token, model="gpt-4o-mini", max_tokens=650, timeout=10.0, retries=1)
+            raw = await aipipe_chat(messages, token, model="gpt-4o-mini", max_tokens=650, timeout=8.0, retries=0)
             out = parse_json_block(raw)
             action = out.get("action")
             if action in effective_actions:
@@ -695,7 +705,7 @@ async def propose(body: Dict[str, Any], email: str, token: Optional[str]) -> Dic
     fingerprints = [dossier_fingerprint(d) for d in dossiers]
     cached_or_none = [store.get_cached_proposal(d["dossierId"], fp) for d, fp in zip(dossiers, fingerprints)]
 
-    semaphore = asyncio.Semaphore(25)
+    semaphore = asyncio.Semaphore(32)
 
     async def _triage_one(dossier: Dict[str, Any]) -> Dict[str, Any]:
         async with semaphore:
