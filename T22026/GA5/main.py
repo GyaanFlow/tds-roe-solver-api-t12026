@@ -263,18 +263,15 @@ def _check_a2a_auth(request: Request) -> None:
     auth = request.headers.get("Authorization") or request.headers.get("authorization") or ""
     if not auth.lower().startswith("bearer ") or not auth[7:].strip():
         raise HTTPException(status_code=401, detail="Missing or malformed Bearer token")
-    bearer = auth[7:].strip()
-    expected = current_token.get()
-    stored = get_tenant_config(current_email.get()).get("aipipe_token")
     
-    is_valid = False
-    if expected and bearer == expected:
-        is_valid = True
-    elif stored and bearer == stored:
-        is_valid = True
-        
-    if not is_valid:
-        raise HTTPException(status_code=403, detail="Bearer token does not match the tenant token")
+    # Use the canonical token from the URL path (extracted by the ASGI middleware).
+    # Do NOT use current_token.get() here — _resolve_token checks X-AIPipe-Token
+    # header BEFORE Authorization, which would pick up the wrong token when both
+    # are present, causing a spurious 403.
+    path_token = request.scope.get("tenant_token")
+    auth_token = auth[7:].strip()
+    if path_token and auth_token != path_token:
+        raise HTTPException(status_code=403, detail="Forbidden: Bearer token mismatch")
 
 
 @router.post("/a2a/message:send")

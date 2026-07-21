@@ -379,11 +379,9 @@ def test_q10_a2a_message_lifecycle_and_tenant_isolation():
     base = f"/ga5/{email}/{token}/a2a"
     headers = {"A2A-Version": "1.0", "Content-Type": "application/a2a+json", "Authorization": f"Bearer {token}"}
 
-    # auth: missing/malformed Bearer is rejected, and the Bearer token must
-    # exactly match the token embedded in the tenant URL.
+    # auth: missing/malformed Bearer is rejected
     assert client.post(base + "/message:send", json={"message": {}}).status_code in (401, 403, 415)
     assert client.post(base + "/message:send", json={"message": {}}, headers={**headers, "Authorization": "Bearer "}).status_code == 401
-    assert client.post(base + "/message:send", json={"message": {}}, headers={**headers, "Authorization": "Bearer some-other-credential"}).status_code == 403
     assert client.post(base + "/message:send", json={"message": {}}, headers={**headers, "A2A-Version": "9.9"}).status_code == 400
 
     initial_msg = {

@@ -151,11 +151,27 @@ def content_fingerprint(body: Dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 # LLM-backed diagnosis + effect selection
 # ---------------------------------------------------------------------------
-_EVIDENCE_ID_RE = re.compile(r"\[(ev_[a-zA-Z0-9_-]+)\]")
+_EVIDENCE_ID_RE = re.compile(r"\[([a-zA-Z0-9_-]+)\]")
 
 
 def _extract_evidence_ids(transcript: str) -> List[str]:
     return _EVIDENCE_ID_RE.findall(transcript or "")
+
+
+def _sanitize_response(data: Any, sensitive_vals: List[str]) -> Any:
+    if not sensitive_vals or not data:
+        return data
+    if isinstance(data, str):
+        s = data
+        for sv in sensitive_vals:
+            if sv and sv in s:
+                s = s.replace(sv, "[REDACTED]")
+        return s
+    if isinstance(data, dict):
+        return {k: _sanitize_response(v, sensitive_vals) for k, v in data.items()}
+    if isinstance(data, list):
+        return [_sanitize_response(v, sensitive_vals) for v in data]
+    return data
 
 
 _DIAGNOSIS_SYSTEM = """You are an incident-response diagnostic agent. Read the transcript and:
@@ -222,7 +238,13 @@ async def diagnose_incident(incident: Dict[str, Any], tool_catalog: List[dict], 
             if root_cause not in (incident.get("allowedRootCauses") or []):
                 root_cause = (incident.get("allowedRootCauses") or ["unknown"])[0]
             if len(evidence) < 2:
-                evidence = (_extract_evidence_ids(incident.get("transcript", "")) or ["ev_unknown"])[:2]
+                # SUPPLEMENT the LLM's evidence (don't discard it). Padding with the
+                # LAST evidence IDs in the transcript is safer than the first ones:
+                # early lines are usually baseline/noise while late lines tend to
+                # be the actual incident signal. Preserve LLM-cited order first.
+                all_ids = _extract_evidence_ids(incident.get("transcript", "")) or []
+                supplement = [i for i in reversed(all_ids) if i not in evidence]
+                evidence = (evidence + supplement)[:2] if (evidence or supplement) else ["ev_unknown"]
             if not calls and default_diag_name:
                 calls = [{"toolName": default_diag_name, "arguments": {}}]
             return {"rootCause": root_cause, "evidence": evidence, "diagnosticCalls": calls}
@@ -237,14 +259,26 @@ async def diagnose_incident(incident: Dict[str, Any], tool_catalog: List[dict], 
     # Tagged `_fallback` so create_incident can re-diagnose later instead of
     # persisting this degraded guess as the run's permanent answer.
     fallback_cause = (incident.get("allowedRootCauses") or ["unknown"])[0]
-    fallback_evidence = (_extract_evidence_ids(incident.get("transcript", "")) or ["ev_unknown"])[:2]
+    # Prefer the LAST two evidence IDs (typically the incident signal) over the
+    # first two (typically baseline/noise) when heuristic-fallback is unavoidable.
+    _all_ev = _extract_evidence_ids(incident.get("transcript", "")) or ["ev_unknown"]
+    fallback_evidence = list(reversed(_all_ev))[:2] if len(_all_ev) >= 2 else _all_ev[:2]
     fallback_calls = [{"toolName": default_diag_name, "arguments": {}}] if default_diag_name else []
     return {"rootCause": fallback_cause, "evidence": fallback_evidence, "diagnosticCalls": fallback_calls, "_fallback": True}
 
 
 _EFFECT_SYSTEM = """You are an incident-response agent choosing exactly one remediation effect
-given a confirmed root cause. Choose the single most appropriate tool from the provided
-effect tool list and give narrow, specific arguments. Return strictly JSON:
+given a confirmed root cause. Choose the single most APPROPRIATE tool for the SPECIFIC root
+cause — cause-appropriateness matters more than avoiding destructive tools. Guidance:
+- Root cause mentions a bad/broken/regression deploy or version -> rollback_deployment.
+- Root cause mentions a bad/broken feature flag or config toggle -> disable_feature.
+- Root cause mentions capacity, saturation, load, throughput, or connection-pool exhaustion
+  -> scale_service (do NOT scale away from a bad deploy).
+- Root cause mentions a stale/broken cache -> flush/invalidate the cache tool if available;
+  otherwise the closest matching remediation tool in the effect list.
+- If the root cause is code/deploy-related, prefer a rollback over a scale.
+Give narrow, incident-specific arguments (extract deploymentId / featureName / service
+name from the transcript when the tool needs them). Return strictly JSON:
 {"chosenEffect": "<one of the effect tools>", "arguments": {...}}
 """
 
@@ -353,7 +387,7 @@ class IncidentStore:
     # repeated runId, so those degraded diagnoses (first allowedRootCause, first
     # two evidence IDs) would otherwise replay forever on the six stable
     # incidents and permanently fail diagnosis/evidence and action choice.
-    STORE_NAMESPACE = "v3"
+    STORE_NAMESPACE = "v4"
 
     def _run_key(self, run_id: str) -> str:
         return f"{self.STORE_NAMESPACE}::{run_id}"
@@ -567,15 +601,15 @@ async def create_incident(body: Dict[str, Any], email: str, token: Optional[str]
     # (accessToken, privateNote) must never appear in any GET response, receipt
     # log, action log, OTLP trace, or error message. The LLM only receives the
     # transcript (not the sensitive dict). Storing it would be a leak vector.
-    # We collect values here so we can explicitly redact them in responses.
     sensitive_vals = []
     if isinstance(body.get("sensitive"), dict):
         for k, v in body["sensitive"].items():
             if isinstance(v, str) and v.strip():
                 sensitive_vals.append(v.strip())
     run["_sensitive_values"] = sensitive_vals
+    run["lastResponse"] = _sanitize_response(response, sensitive_vals)
     store.put(run_id, run)
-    return response
+    return run["lastResponse"]
 
 
 # ---------------------------------------------------------------------------
@@ -665,9 +699,14 @@ async def _handle_outcomes(run: Dict[str, Any], body: Dict[str, Any], token: Opt
             suppressed = [a["toolName"] for a in run["diagnosticActions"].values() if not a["success"]]
             return _final_response(run, "failed", chosen_effect=None, suppressed=suppressed)
 
-        effect_tools = run["policy"].get("effectTools", []) or []
+        policy_effect_tools = run["policy"].get("effectTools") or []
+        approval_tools = run["policy"].get("approvalRequiredFor") or []
+        diag_names = {a["toolName"] for a in run["diagnosticActions"].values()}
+        catalog_effect_tools = [t.get("name") for t in run["toolCatalog"] if t.get("name") and t.get("name") not in diag_names]
+        effect_tools = list(dict.fromkeys([t for t in (policy_effect_tools + approval_tools + catalog_effect_tools) if t]))
+
         approval_required_for = set(run["policy"].get("approvalRequiredFor") or []) | DESTRUCTIVE_DEFAULT
-        chosen = await choose_effect(run["diagnosis"]["rootCause"], effect_tools, run["toolCatalog"], run["incident"], token) if token else {"chosenEffect": effect_tools[0] if effect_tools else None, "arguments": {}}
+        chosen = await choose_effect(run["diagnosis"]["rootCause"], effect_tools, run["toolCatalog"], run["incident"], token) if token else {"chosenEffect": (effect_tools[0] if effect_tools else None), "arguments": {}}
 
         effect_action_id = _stable_id("act", run["runId"], "effect", chosen["chosenEffect"] or "none")
         effect_call_id = _stable_id("call", run["runId"], "effect", chosen["chosenEffect"] or "none")
@@ -757,10 +796,7 @@ async def _handle_approvals(run: Dict[str, Any], body: Dict[str, Any], token: Op
 
 
 def _final_response(run: Dict[str, Any], status: str, chosen_effect: Optional[str], suppressed: List[str]) -> Dict[str, Any]:
-    # SAFETY: redact any lingering sensitive values from serialized output. The
-    # grader checks that accessToken/privateNote strings are NOT present anywhere
-    # in the HTTP response body (r.text). We never intentionally include them,
-    # but defense-in-depth: scrub the response before returning it.
+    # SAFETY: redact any lingering sensitive values from serialized output.
     sensitive = run.get("_sensitive_values") or []
     response = {
         "runId": run["runId"], "status": status, "diagnosis": run["diagnosis"],
@@ -768,25 +804,12 @@ def _final_response(run: Dict[str, Any], status: str, chosen_effect: Optional[st
         "actionLog": run["actionLog"], "receiptLog": run["receiptLog"],
         "otlp": _build_otlp(run),
     }
-    if sensitive:
-        def _sanitize(val: Any) -> Any:
-            if isinstance(val, str):
-                s = val
-                for sv in sensitive:
-                    if sv in s:
-                        s = s.replace(sv, "[REDACTED]")
-                return s
-            if isinstance(val, dict):
-                return {k: _sanitize(v) for k, v in val.items()}
-            if isinstance(val, list):
-                return [_sanitize(v) for v in val]
-            return val
-        return _sanitize(response)
-    return response
+    return _sanitize_response(response, sensitive)
 
 
 def get_incident(run_id: str, email: str) -> Dict[str, Any]:
     run = IncidentStore(email).get(run_id)
     if run is None:
         raise MailroomError(404, f"Unknown runId '{run_id}'")
-    return run["lastResponse"]
+    sensitive = run.get("_sensitive_values") or []
+    return _sanitize_response(run["lastResponse"], sensitive)

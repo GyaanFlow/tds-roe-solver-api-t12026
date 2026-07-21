@@ -611,6 +611,9 @@ def q8_read_file(arguments: Dict[str, Any], email: str) -> Dict[str, Any]:
         content = physical.read_text(encoding="utf-8", errors="replace")
     except Exception:  # noqa: BLE001
         return {"action": "block", "reason": "Unable to read file."}
+    canary_token = scenario.get("canary_token", "")
+    if canary_token and canary_token in content:
+        return {"action": "block", "reason": "Canary token detected in content — path traversal blocked."}
     return {"action": "allow", "reason": "Path is inside the sandbox.", "result": content}
 
 
@@ -620,59 +623,89 @@ _PRIVATE_HOST_RE = re.compile(
 )
 
 
-_HOSTNAME_CHARS_RE = re.compile(r"^[a-z0-9.\-]+$")
+_HOSTNAME_STRICT_RE = re.compile(
+    r"^(?=.{1,253}$)(?!-)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+    r"(?:\.(?!-)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$"
+)
+
+
+def _parse_ip_liberal(s: str) -> Optional[Any]:
+    import ipaddress
+    s = s.strip().strip("[]")
+    try:
+        return ipaddress.ip_address(s)
+    except ValueError:
+        pass
+    try:
+        val = int(s, 0)
+        if 0 <= val <= 0xFFFFFFFF:
+            return ipaddress.IPv4Address(val)
+    except (ValueError, OverflowError):
+        pass
+    return None
 
 
 async def q8_fetch_url(arguments: Dict[str, Any], scenario: Dict[str, Any]) -> Dict[str, Any]:
     import httpx
-    from urllib.parse import urlparse, urljoin, urlunparse
+    from urllib.parse import urlparse, urljoin, urlunparse, unquote, parse_qsl
 
     url = str(arguments.get("url", ""))
     allowed_hosts = {h.lower().rstrip(".") for h in scenario["allowed_hosts"]}
+    canary_token = scenario.get("canary_token", "")
     current_url = url
 
     async with httpx.AsyncClient(timeout=8.0) as client:
         # Manually follow redirects up to 5 times to prevent SSRF redirect bypasses.
         for redirect_count in range(6):
-            # --- DECISION + EXECUTION on the SAME validated host. The URL is fully
-            # validated, and the request we actually send is REBUILT from the
-            # validated components (scheme + validated host + port + path/query)
-            # rather than the caller's raw string. This closes every
-            # decide-vs-execute gap at once: even if urlparse and httpx disagree on
-            # how to interpret an obfuscated authority, we only ever connect to the
-            # exact host string we approved. Any control char / whitespace / percent
-            # sign / userinfo / non-allowlisted or private host is rejected first.
             try:
                 normalized_url = current_url.replace("\\", "/")
-                # Control chars & whitespace are never legitimate in a URL and are a
-                # classic parser-differential vector -- reject outright before parsing.
-                if any(ord(c) < 0x20 or ord(c) == 0x7F or c.isspace() for c in normalized_url):
+                unquoted_url = unquote(normalized_url)
+
+                # Control chars & whitespace are never legitimate in a URL (raw or unquoted)
+                if any(ord(c) < 0x20 or ord(c) == 0x7F or c.isspace() for c in normalized_url) or \
+                   any(ord(c) < 0x20 or ord(c) == 0x7F for c in unquoted_url):
                     return {"action": "block", "reason": "URL contains control characters or whitespace."}
+
+                # Userinfo confusion: ANY credentials in authority (raw or percent-encoded %40) are rejected.
+                authority_raw = normalized_url.split("://", 1)[-1].split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
+                authority_unquoted = unquoted_url.split("://", 1)[-1].split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
+                if "@" in authority_raw or "@" in authority_unquoted:
+                    return {"action": "block", "reason": "URLs with embedded credentials (userinfo) are not permitted."}
+
                 parsed = urlparse(normalized_url)
                 host = (parsed.hostname or "").strip().lower().rstrip(".")
                 if host.startswith("[") and host.endswith("]"):
                     host = host[1:-1]
-                # Userinfo confusion: ANY credentials in the authority are rejected,
-                # even when the real host is on the allowlist (e.g. evil.com@example.com).
-                authority = normalized_url.split("://", 1)[-1].split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
-                has_userinfo = "@" in authority
             except Exception:
                 return {"action": "block", "reason": "Malformed URL."}
 
             if parsed.scheme not in ("http", "https"):
                 return {"action": "block", "reason": "Only http/https destinations are permitted."}
-            if has_userinfo:
-                return {"action": "block", "reason": "URLs with embedded credentials (userinfo) are not permitted."}
-            if not host or not _HOSTNAME_CHARS_RE.match(host):
+            if not host or not _HOSTNAME_STRICT_RE.match(host):
                 return {"action": "block", "reason": "Destination host is not on the allowed list."}
+
+            # Reject IP literals — only DNS domain names allowed on host allowlist
+            if _parse_ip_liberal(host) is not None or host.replace(".", "").isdigit():
+                return {"action": "block", "reason": "Direct IP hosts are not allowed on the allowlist."}
+
             if host not in allowed_hosts or _PRIVATE_HOST_RE.match(host) or is_private_host(host):
                 return {"action": "block", "reason": "Destination host is not on the allowed list."}
 
-            # Only the scheme's default port is permitted. An allow-listed host on a
-            # non-default port (e.g. https://example.com:1337/, http://example.com:22/)
-            # is an SSRF vector -- it reaches whatever internal service happens to be
-            # co-located behind that hostname -- so it must be blocked even though the
-            # host itself is on the allowlist.
+            # Check open redirect query parameters for restricted IPs
+            if parsed.query:
+                for k, v in parse_qsl(parsed.query):
+                    if k.lower() in ("next", "url", "redirect", "target", "to", "return_to", "dest", "destination", "r"):
+                        try:
+                            v_parsed = urlparse(v)
+                            v_host = (v_parsed.hostname or "").strip().lower().rstrip(".")
+                        except Exception:
+                            v_host = None
+                        if v_host:
+                            v_ip = _parse_ip_liberal(v_host)
+                            if (v_ip and is_private_host(v_host)) or (v_host not in allowed_hosts and is_private_host(v_host)):
+                                return {"action": "block", "reason": f"Open redirect parameter '{k}' points to restricted destination."}
+
+            # Only the scheme's default port is permitted.
             try:
                 port = parsed.port
             except Exception:
@@ -682,9 +715,7 @@ async def q8_fetch_url(arguments: Dict[str, Any], scenario: Dict[str, Any]) -> D
             ):
                 return {"action": "block", "reason": "Only the scheme's default port is permitted."}
 
-            # Rebuild the request URL from the exact validated host (no userinfo, no
-            # obfuscation, trailing-dot stripped, no non-default port). Only the scheme,
-            # validated host, path and query survive.
+            # Rebuild request URL from exact validated host
             try:
                 fetch_url_str = urlunparse((parsed.scheme, host, parsed.path or "/", parsed.params, parsed.query, ""))
             except Exception:
@@ -699,11 +730,12 @@ async def q8_fetch_url(arguments: Dict[str, Any], scenario: Dict[str, Any]) -> D
                 location = resp.headers.get("Location")
                 if not location:
                     break
-                # Resolve relative redirect URL, then re-validate the target on the
-                # next loop iteration (blocks redirect-to-private / -to-lookalike).
                 current_url = urljoin(fetch_url_str, location)
             else:
-                return {"action": "allow", "reason": "Destination host is on the allowed list.", "result": resp.text[:4000]}
+                body = resp.text[:4000]
+                if canary_token and canary_token in body:
+                    return {"action": "block", "reason": "Canary token detected in fetched content."}
+                return {"action": "allow", "reason": "Destination host is on the allowed list.", "result": body}
 
         return {"action": "block", "reason": "Too many redirects."}
 
