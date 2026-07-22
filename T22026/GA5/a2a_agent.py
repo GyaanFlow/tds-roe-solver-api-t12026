@@ -347,39 +347,67 @@ def _validate_message_envelope(body: Dict[str, Any]) -> Dict[str, Any]:
     return message
 
 
+_principal_locks: Dict[str, asyncio.Lock] = {}
+_principal_locks_guard = threading.Lock()
+
+
+def _principal_lock(principal: str) -> asyncio.Lock:
+    """One asyncio.Lock per principal, serializing message_send end-to-end for
+    that principal. This makes the dedup check-then-act sequence ATOMIC: two
+    concurrent requests carrying the same messageId (exactly what the spec's
+    "equivalent concurrent messages must resolve to the same stored Task and
+    context" requirement tests) previously raced -- get_message_record() and
+    put_message_record() were two SEPARATE lock acquisitions with a full await
+    (LLM triage) in between, so both concurrent calls could see "not found",
+    both independently run triage, and both write -- last writer wins instead
+    of one canonical resolution. A per-principal asyncio.Lock held across the
+    whole check -> process -> persist sequence fixes this without hurting
+    cross-principal throughput (different principals still run fully
+    concurrently; only same-principal calls serialize, which is exactly the
+    scope the spec's dedup key (principal, messageId) implies)."""
+    key = hashlib.sha256(principal.encode()).hexdigest()[:20]
+    with _principal_locks_guard:
+        lock = _principal_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            _principal_locks[key] = lock
+        return lock
+
+
 async def message_send(body: Dict[str, Any], principal: str, token: Optional[str]) -> Dict[str, Any]:
     message = _validate_message_envelope(body)
     message_id = message["messageId"]
     fingerprint = message_fingerprint(message)
 
     store = A2AStore(principal)
-    existing = store.get_message_record(message_id)
-    if existing is not None:
-        if existing["fingerprint"] == fingerprint:
-            # Re-use cached response when ALL proposals in the cached task
-            # were non-fallback (no re-diagnosis needed). Fresh-audit: if the
-            # return response had fallbacks, re-process so fallback packages
-            # get re-triaged.
-            cached_task = store.get_task(existing.get("task_id") or "")
-            if cached_task and not cached_task.get("hadFallbacks"):
-                return existing["response"]
+    async with _principal_lock(principal):
+        existing = store.get_message_record(message_id)
+        if existing is not None:
+            if existing["fingerprint"] == fingerprint:
+                # Re-use cached response when ALL proposals in the cached task
+                # were non-fallback (no re-diagnosis needed). Fresh-audit: if the
+                # return response had fallbacks, re-process so fallback packages
+                # get re-triaged.
+                cached_task = store.get_task(existing.get("task_id") or "")
+                if cached_task and not cached_task.get("hadFallbacks"):
+                    return existing["response"]
+            else:
+                raise MailroomError(409, "IDEMPOTENCY_CONFLICT: messageId reused with different semantic content")
+
+        part = message["parts"][0]
+        media_type = part.get("mediaType")
+
+        if message.get("taskId"):
+            response = await _handle_continuation(message, part, media_type, principal, store)
         else:
-            raise MailroomError(409, "IDEMPOTENCY_CONFLICT: messageId reused with different semantic content")
+            if media_type != PROFILE_INPUT_MODE:
+                raise MailroomError(422, f"initial message part mediaType must be '{PROFILE_INPUT_MODE}'")
+            if not token:
+                raise MailroomError(400, "An AIPipe token is required (Bearer header) for invoice triage")
+            response = await _handle_initial_batch(message, part, principal, token, store)
 
-    part = message["parts"][0]
-    media_type = part.get("mediaType")
-
-    if message.get("taskId"):
-        response = await _handle_continuation(message, part, media_type, principal, store)
-    else:
-        if media_type != PROFILE_INPUT_MODE:
-            raise MailroomError(422, f"initial message part mediaType must be '{PROFILE_INPUT_MODE}'")
-        if not token:
-            raise MailroomError(400, "An AIPipe token is required (Bearer header) for invoice triage")
-        response = await _handle_initial_batch(message, part, principal, token, store)
-
-    store.put_message_record(message_id, {"fingerprint": fingerprint, "response": response, "task_id": response.get("task", {}).get("id", "")})
-    return response
+        store.put_message_record(message_id, {"fingerprint": fingerprint, "response": response, "task_id": response.get("task", {}).get("id", "")})
+        return response
 
 
 async def _handle_initial_batch(message: Dict[str, Any], part: Dict[str, Any], principal: str, token: str, store: A2AStore) -> Dict[str, Any]:

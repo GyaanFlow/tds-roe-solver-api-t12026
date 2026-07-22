@@ -270,6 +270,20 @@ def _check_a2a_auth(request: Request) -> None:
     # Bearer == URL-embedded AIPipe token here made the endpoint 403 the grader
     # (whose Bearer is its own opaque token, unrelated to your billing token).
 
+    # Auto-register THIS exact base URL into the shared, origin-level Agent Card
+    # on every A2A call. The spec requires supportedInterfaces to contain "the
+    # exact submitted base URL" -- previously this only happened if the student
+    # separately called /onboard first, which the grader never does, so the
+    # card's supportedInterfaces was empty for any token the grader used
+    # directly (AGENT_CARD_CONTRACT failure). Deriving the base URL from the
+    # CURRENT request guarantees it exactly matches whatever URL the caller is
+    # actually using -- no separate registration step required.
+    tenant_token = request.scope.get("tenant_token")
+    if tenant_token:
+        base_now = str(request.base_url).rstrip("/")
+        prefix = build_solver_url_prefix(base_now, current_email.get() or "")
+        a2a_agent.register_base_url(f"{prefix}/{tenant_token}/a2a/")
+
 
 @router.post("/a2a/message:send")
 async def a2a_message_send(request: Request):
