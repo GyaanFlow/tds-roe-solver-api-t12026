@@ -155,6 +155,10 @@ def _verify_receipt_signatures(
     if not public_key_jwk:
         return  # No verifier stored (local/legacy) — skip.
 
+    # Extract inner JWK if wrapper object was passed
+    if isinstance(public_key_jwk, dict) and "publicKeyJwk" in public_key_jwk and isinstance(public_key_jwk["publicKeyJwk"], dict):
+        public_key_jwk = public_key_jwk["publicKeyJwk"]
+
     import base64
     try:
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -164,7 +168,7 @@ def _verify_receipt_signatures(
         return
 
     # Import Ed25519 public key from JWK {kty:"OKP", crv:"Ed25519", x:"<base64url>"}
-    x_b64 = public_key_jwk.get("x", "")
+    x_b64 = public_key_jwk.get("x", "") if isinstance(public_key_jwk, dict) else ""
     if not x_b64:
         raise MailroomError(400, "receiptVerifier.publicKeyJwk missing 'x' field")
     # Add padding if needed for urlsafe_b64decode

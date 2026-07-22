@@ -377,7 +377,13 @@ def test_q10_a2a_message_lifecycle_and_tenant_isolation():
     a2a_agent.A2AStore(principal).path.unlink(missing_ok=True)
 
     base = f"/ga5/{email}/{token}/a2a"
+    encoded_email = quote(email)
+    encoded_base = f"/ga5/{encoded_email}/{token}/a2a"
     headers = {"A2A-Version": "1.0", "Content-Type": "application/a2a+json", "Authorization": f"Bearer {token}"}
+
+    # Verify percent-encoded (%40) URL path routes properly (doesn't 404)
+    assert client.post(encoded_base + "/message:send", json={"message": {}}, headers=headers).status_code != 404
+
 
     # auth: missing/malformed Bearer is rejected
     assert client.post(base + "/message:send", json={"message": {}}).status_code in (401, 403, 415)

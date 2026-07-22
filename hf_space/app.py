@@ -44,7 +44,9 @@ class MultiTenantASGIMiddleware:
 
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http":
-            path = scope.get("path", "")
+            from urllib.parse import unquote
+            raw_path = scope.get("path", "")
+            path = unquote(raw_path)
             match = re.match(r"^/(ga2|ga3|ga4|ga5)/([^/]+@[^/]+)(/.*)?$", path)
             if match:
                 ga_version = match.group(1)
