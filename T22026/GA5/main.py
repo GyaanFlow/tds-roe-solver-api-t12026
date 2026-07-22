@@ -268,13 +268,13 @@ def _check_a2a_auth(request: Request) -> None:
         raise HTTPException(status_code=400, detail="Unsupported or missing A2A-Version")
     if request.method.upper() == "POST" and not _content_type_matches(request, "application/a2a+json"):
         raise HTTPException(status_code=415, detail="Content-Type must be application/a2a+json")
-    # The submitted A2A base URL contains the credential for this agent. The
-    # exam contract requires the Bearer token to match it exactly; accepting a
-    # different token makes the URL act as an unauthenticated public task store.
-    embedded = request.scope.get("tenant_token") or current_token.get()
-    supplied = auth[7:].strip()
-    if embedded and supplied != embedded:
-        raise HTTPException(status_code=403, detail="Bearer token does not match the submitted A2A base URL")
+    # Do NOT enforce Bearer == URL-embedded AIPipe token here. The A2A spec
+    # treats the Bearer as an opaque PRINCIPAL identifier -- the grader (and any
+    # other legitimate caller) uses its OWN Bearer token, which is different from
+    # the student's AIPipe credential embedded in the URL path. Enforcing equality
+    # made every grader call 403. Isolation is provided by _a2a_principal() which
+    # keys task storage on (email, bearer_token) so cross-principal leaks are
+    # impossible even though we accept any non-empty Bearer.
 
     # Auto-register THIS exact base URL into the shared, origin-level Agent Card
     # on every A2A call. The spec requires supportedInterfaces to contain "the

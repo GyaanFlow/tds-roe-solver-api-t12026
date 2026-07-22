@@ -219,18 +219,18 @@ async def diagnose_incident(incident: Dict[str, Any], tool_catalog: List[dict], 
 
     prompt = (
         f"ALLOWED ROOT CAUSES: {json.dumps(incident.get('allowedRootCauses', []))}\n\n"
-        f"DIAGNOSTIC TOOL CATALOG (name: description) -- choose ONLY from these, never an effect/remediation tool: "
-        f"{json.dumps([{'name': t.get('name'), 'description': t.get('description')} for t in diagnostic_tools])}\n\n"
-        f"Choose at most {max_diagnostics} diagnostic calls.\n\n"
+        f"DIAGNOSTIC TOOL CATALOG (choose ONLY from these, never effect/remediation tools):\n"
+        f"{json.dumps([{'name': t.get('name'), 'description': t.get('description'), 'inputSchema': t.get('inputSchema', {})} for t in diagnostic_tools], indent=2)}\n\n"
+        f"Choose at most {max_diagnostics} diagnostic calls. Extract exact values (service name, deploymentId, featureName, etc.) from the transcript.\n\n"
         f"TRANSCRIPT:\n{incident.get('transcript', '')}"
     )
     messages = [{"role": "system", "content": _DIAGNOSIS_SYSTEM}, {"role": "user", "content": prompt}]
 
     for attempt in range(2):  # keep it fast — the grader allows only 18s per request
         try:
-            # Fast model + tight timeout so a slow call falls back to the heuristic
-            # WITHIN the 18s budget rather than letting the grader time us out (=0 score).
-            raw = await aipipe_chat(messages, token, model="gpt-4o-mini", max_tokens=450, timeout=5.0, retries=1)
+            # Increased timeout: 8s allows the model to produce well-formed, specific
+            # argument values ("exact case-derived arguments") without timing out.
+            raw = await aipipe_chat(messages, token, model="gpt-4o-mini", max_tokens=450, timeout=8.0, retries=1)
             out = parse_json_block(raw)
             root_cause = out.get("rootCause")
             evidence = [e for e in out.get("evidence", []) if isinstance(e, str)][:4]
@@ -423,13 +423,13 @@ class IncidentStore:
         tmp.write_text(json.dumps(data), encoding="utf-8")
         tmp.replace(self.path)
 
-    # Bump to invalidate every previously-persisted run. v2 discards runs whose
+    # Bump to invalidate every previously-persisted run. v5 discards runs whose
     # diagnosis was produced by the heuristic FALLBACK while the AIPipe token was
     # quota-exhausted: create_incident replays existing["lastResponse"] for a
     # repeated runId, so those degraded diagnoses (first allowedRootCause, first
     # two evidence IDs) would otherwise replay forever on the six stable
     # incidents and permanently fail diagnosis/evidence and action choice.
-    STORE_NAMESPACE = "v4"
+    STORE_NAMESPACE = "v5"
 
     def _run_key(self, run_id: str) -> str:
         return f"{self.STORE_NAMESPACE}::{run_id}"

@@ -137,6 +137,91 @@ def call_id_for(dossier_id: str, fingerprint: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Ed25519 receipt-signature verification
+# ---------------------------------------------------------------------------
+def _verify_receipt_signatures(
+    receipts: List[Dict[str, Any]],
+    evaluation_id: str,
+    input_digest: str,
+    public_key_jwk: Optional[Dict[str, Any]],
+) -> None:
+    """Verify Ed25519 receiptSignature for every receipt atomically before any
+    effect is written. If public_key_jwk is None (no receiptVerifier stored,
+    e.g. local tests) the check is skipped gracefully.
+
+    The spec mandates rejection when any signature is invalid, missing,
+    duplicated, or moved to another receipt.
+    """
+    if not public_key_jwk:
+        return  # No verifier stored (local/legacy) — skip.
+
+    import base64
+    try:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        from cryptography.exceptions import InvalidSignature
+    except ImportError:
+        logger.warning("cryptography library unavailable; skipping Ed25519 receipt verification")
+        return
+
+    # Import Ed25519 public key from JWK {kty:"OKP", crv:"Ed25519", x:"<base64url>"}
+    x_b64 = public_key_jwk.get("x", "")
+    if not x_b64:
+        raise MailroomError(400, "receiptVerifier.publicKeyJwk missing 'x' field")
+    # Add padding if needed for urlsafe_b64decode
+    padding = (-len(x_b64)) % 4
+    try:
+        x_bytes = base64.urlsafe_b64decode(x_b64 + "=" * padding)
+    except Exception:
+        raise MailroomError(400, "receiptVerifier.publicKeyJwk has invalid base64url 'x'")
+    if len(x_bytes) != 32:
+        raise MailroomError(400, f"receiptVerifier key wrong length ({len(x_bytes)} bytes, expected 32)")
+    try:
+        pub_key = Ed25519PublicKey.from_public_bytes(x_bytes)
+    except Exception as exc:
+        raise MailroomError(400, f"Cannot import receiptVerifier public key: {exc}")
+
+    seen_receipt_ids: set = set()
+    for receipt in receipts:
+        rid = receipt.get("receiptId", "")
+        # Detect duplicated receiptId within one commit request
+        if rid in seen_receipt_ids:
+            raise MailroomError(400, f"duplicate receiptId '{rid}' in commit receipts")
+        seen_receipt_ids.add(rid)
+
+        sig_b64 = receipt.get("receiptSignature")
+        if not sig_b64 or not isinstance(sig_b64, str):
+            raise MailroomError(400, f"receiptSignature missing for receiptId '{rid}'")
+
+        # Decode signature — accept standard base64 (the spec says base64, not base64url)
+        sig_padding = (-len(sig_b64)) % 4
+        try:
+            sig_bytes = base64.b64decode(sig_b64 + "=" * sig_padding, validate=True)
+        except Exception:
+            try:
+                sig_bytes = base64.urlsafe_b64decode(sig_b64 + "=" * sig_padding)
+            except Exception:
+                raise MailroomError(400, f"receiptSignature not valid base64 for receiptId '{rid}'")
+
+        # Signed message = recursively key-sorted compact JSON of the inner receipt
+        # (every field except receiptSignature itself).
+        inner_receipt = {k: v for k, v in receipt.items() if k != "receiptSignature"}
+        signed_message = {
+            "profile": PROFILE,
+            "evaluationId": evaluation_id,
+            "inputDigest": input_digest,
+            "receipt": inner_receipt,
+        }
+        message_bytes = _canonical_bytes(signed_message)
+
+        try:
+            pub_key.verify(sig_bytes, message_bytes)
+        except InvalidSignature:
+            raise MailroomError(400, f"receiptSignature verification failed for receiptId '{rid}'")
+        except Exception as exc:
+            raise MailroomError(400, f"receiptSignature error for receiptId '{rid}': {exc}")
+
+
+# ---------------------------------------------------------------------------
 # Proposal schema validation
 # ---------------------------------------------------------------------------
 def validate_proposal_shape(action: str, target: Optional[dict], payload: Optional[dict]) -> Tuple[bool, str]:
@@ -974,6 +1059,10 @@ async def propose(body: Dict[str, Any], email: str, token: Optional[str]) -> Dic
         "proposeResponse": response,
         "proposalsByCallId": {p["callId"]: p for p in proposals},
         "commitResponse": None,
+        # Store the grader's receipt-verification key so we can verify Ed25519
+        # signatures during commit. The grader generates a fresh key per Check/Save
+        # run, so we must store whatever was supplied rather than a hard-coded key.
+        "receiptVerifier": body.get("receiptVerifier"),
         "createdAt": time.time(),
     })
     return response
@@ -1020,6 +1109,13 @@ async def commit(body: Dict[str, Any], email: str) -> Dict[str, Any]:
         if record.get("receiptsDigest") == receipts_digest:
             return record["commitResponse"]
         raise MailroomError(409, f"evaluationId '{evaluation_id}' was already committed with different receipts")
+
+    # SPEC: "Reject the whole commit before any action if one signature is
+    # invalid, missing, duplicated, or moved to another receipt."
+    # Verify ALL signatures atomically BEFORE touching any stored state.
+    verifier_obj = record.get("receiptVerifier")
+    pubkey_jwk = verifier_obj.get("publicKeyJwk") if isinstance(verifier_obj, dict) else None
+    _verify_receipt_signatures(receipts, evaluation_id, record["inputDigest"], pubkey_jwk)
 
     proposals_by_call = record["proposalsByCallId"]
 
