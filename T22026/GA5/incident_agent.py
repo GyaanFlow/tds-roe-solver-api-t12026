@@ -730,7 +730,7 @@ async def _handle_outcomes(run: Dict[str, Any], body: Dict[str, Any], token: Opt
 
         if retry_dispatches:
             run["actionLog"].extend(retry_dispatches)
-            return {"runId": run["runId"], "status": "waiting", "diagnosis": run["diagnosis"], "dispatches": retry_dispatches, "approvals": []}
+            return {"profile": PROFILE, "runId": run["runId"], "status": "waiting", "diagnosis": run["diagnosis"], "dispatches": retry_dispatches, "approvals": []}
 
         if not all(a["resolved"] for a in run["diagnosticActions"].values()):
             return run["lastResponse"]  # still awaiting other pending diagnostics
@@ -784,6 +784,7 @@ async def _handle_outcomes(run: Dict[str, Any], body: Dict[str, Any], token: Opt
             }
             run["state"] = "WAITING_APPROVAL"
             return {
+                "profile": PROFILE,
                 "runId": run["runId"], "status": "waiting", "dispatches": [], "approvals": [{
                     "approvalId": approval_id, "actionId": effect_action_id,
                     "toolName": chosen["chosenEffect"], "argumentsDigest": run["approval"]["argumentsDigest"],
@@ -795,7 +796,7 @@ async def _handle_outcomes(run: Dict[str, Any], body: Dict[str, Any], token: Opt
         dispatch = _public_dispatch(effect_action, attempt, "effect", run["diagnosis"]["evidence"], run["traceId"], run.get("incomingTracestate"))
         run["actionLog"].append(dispatch)
         run["state"] = "WAITING_EFFECT_OUTCOME"
-        return {"runId": run["runId"], "status": "waiting", "dispatches": [dispatch], "approvals": []}
+        return {"profile": PROFILE, "runId": run["runId"], "status": "waiting", "dispatches": [dispatch], "approvals": []}
 
     if run["state"] == "WAITING_EFFECT_OUTCOME":
         effect = run["effectAction"]
@@ -849,13 +850,14 @@ async def _handle_approvals(run: Dict[str, Any], body: Dict[str, Any], token: Op
     dispatch["approvalNonce"] = approval["nonce"]
     run["actionLog"].append(dispatch)
     run["state"] = "WAITING_EFFECT_OUTCOME"
-    return {"runId": run["runId"], "status": "waiting", "dispatches": [dispatch], "approvals": []}
+    return {"profile": PROFILE, "runId": run["runId"], "status": "waiting", "dispatches": [dispatch], "approvals": []}
 
 
 def _final_response(run: Dict[str, Any], status: str, chosen_effect: Optional[str], suppressed: List[str]) -> Dict[str, Any]:
     # SAFETY: redact any lingering sensitive values from serialized output.
     sensitive = run.get("_sensitive_values") or []
     response = {
+        "profile": PROFILE,
         "runId": run["runId"], "status": status, "diagnosis": run["diagnosis"],
         "chosenEffect": chosen_effect, "suppressed": suppressed,
         "actionLog": run["actionLog"], "receiptLog": run["receiptLog"],
