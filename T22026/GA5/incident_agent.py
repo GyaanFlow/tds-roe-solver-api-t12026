@@ -230,7 +230,7 @@ async def diagnose_incident(incident: Dict[str, Any], tool_catalog: List[dict], 
         try:
             # Fast model + tight timeout so a slow call falls back to the heuristic
             # WITHIN the 18s budget rather than letting the grader time us out (=0 score).
-            raw = await aipipe_chat(messages, token, model="gpt-4o-mini", max_tokens=450, timeout=5.0, retries=0)
+            raw = await aipipe_chat(messages, token, model="gpt-4o-mini", max_tokens=450, timeout=5.0, retries=1)
             out = parse_json_block(raw)
             root_cause = out.get("rootCause")
             evidence = [e for e in out.get("evidence", []) if isinstance(e, str)][:4]
@@ -349,7 +349,7 @@ async def choose_effect(root_cause: str, effect_tools: List[str], tool_catalog: 
 
     messages = [{"role": "system", "content": _EFFECT_SYSTEM}, {"role": "user", "content": prompt}]
     try:
-        raw = await aipipe_chat(messages, token, model="gpt-4o-mini", max_tokens=250, timeout=6.0, retries=0)
+        raw = await aipipe_chat(messages, token, model="gpt-4o-mini", max_tokens=250, timeout=6.0, retries=1)
         out = parse_json_block(raw)
         chosen = out.get("chosenEffect")
         if chosen not in effect_tools:

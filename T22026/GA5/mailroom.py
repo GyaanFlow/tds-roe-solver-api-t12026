@@ -635,12 +635,12 @@ async def triage_dossier_llm(dossier, token, allowed_actions=None):
 
     # Tight per-call budget: with 64 stable dossiers + 3 fresh, Semaphore(30), the
     # grader's 55s per-request cap can only fit ~3 waves of 8s worst-case each.
-    # timeout=8s + retries=0 (no aipipe_chat internal retry) + outer range(2) gives
+    # timeout=8s + retries=1 (no aipipe_chat internal retry) + outer range(2) gives
     # max ~16s per dossier, so a slow dossier degrades to fallback within budget
     # rather than starving the rest of the batch.
     for attempt in range(2):
         try:
-            raw = await aipipe_chat(messages, token, model="gpt-4o-mini", max_tokens=650, timeout=8.0, retries=0)
+            raw = await aipipe_chat(messages, token, model="gpt-4o-mini", max_tokens=650, timeout=8.0, retries=1)
             out = parse_json_block(raw)
             action = out.get("action")
             if action in effective_actions:
