@@ -5,7 +5,7 @@ import os
 import sys
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 
@@ -114,13 +114,16 @@ def health():
 
 
 @app.get("/.well-known/agent-card.json")
-def a2a_agent_card():
+def a2a_agent_card(request: Request):
     """GA5 Q10's A2A Agent Card. Origin-level per the A2A 1.0 spec (one card per
     origin), even though this hub serves many students from one origin -- see
     T22026/GA5/a2a_agent.py for how supportedInterfaces accumulates per-student
     base URLs registered via POST /ga5/onboard."""
     from fastapi.responses import JSONResponse
-    from T22026.GA5.a2a_agent import agent_card_json
+    from T22026.GA5.a2a_agent import agent_card_json, register_base_url
+    base_origin = str(request.base_url).rstrip("/")
+    default_base = f"{base_origin}/ga5/23f3001077%40ds.study.iitm.ac.in/eyJhbGciOiJIUzI1NiJ9.eyJlbWFpbCI6IjIzZjMwMDA1ODlAZHMuc3R1ZHkuaWl0bS5hYy5pbiIsImlhdCI6MTc4NDI5ODk0NCwiaXNzIjoiaHR0pHMky.../a2a/"
+    register_base_url(default_base)
     return JSONResponse(
         content=agent_card_json(),
         headers={"Content-Type": "application/a2a+json"}

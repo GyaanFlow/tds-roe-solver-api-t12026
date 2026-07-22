@@ -49,12 +49,17 @@ _REGISTRY_PATH = Path(gettempdir()) / "ga5_q10_agent_card_registry.json"
 
 
 def register_base_url(base_url: str) -> None:
+    from urllib.parse import quote, unquote
     base_url = base_url.rstrip("/") + "/"
     with _registry_lock:
         data = _load_registry()
-        if base_url not in data["bases"]:
-            data["bases"].append(base_url)
-            _REGISTRY_PATH.write_text(json.dumps(data), encoding="utf-8")
+        unquoted = unquote(base_url).rstrip("/") + "/"
+        quoted = quote(unquoted, safe=":/").rstrip("/") + "/"
+        for b in (base_url, unquoted, quoted):
+            b_clean = b.rstrip("/") + "/"
+            if b_clean not in data["bases"]:
+                data["bases"].append(b_clean)
+        _REGISTRY_PATH.write_text(json.dumps(data), encoding="utf-8")
 
 
 def _load_registry() -> Dict[str, Any]:
