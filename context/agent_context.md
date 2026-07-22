@@ -613,3 +613,25 @@ the deterministic ones live on Render. Commit `2a99a1e` (GitHub) / `a92c2f3`→`
   probes all correct in 3.2s; Q10: agent card valid, message:send returns settle+approval
   correctly in 4.6s).
 - `verify_ga5_endpoints.py` passes 13/13. GitHub `23a0334`, `32bfc37`; HF `d7752ca`, `b0ad83e`.
+
+### 2026-07-20 (Q10 regression diagnosis — atomic dedup race + Agent Card auto-registration)
+- User reported Q10 (previously partially passing) regressed hard: lifecycle/receipts/isolation/
+  race all scored 0, AGENT_CARD_CONTRACT/DEDUP_IDENTITY/CANCEL_RECEIPT_RACE/CROSS_PRINCIPAL_MUTATION
+  all failing. Diagnosed via direct live sequential testing (full message:send -> continuation ->
+  receipts lifecycle worked PERFECTLY end-to-end) which proved the core logic was sound and pointed
+  at something concurrency/registration-related instead.
+- **AGENT_CARD_CONTRACT**: confirmed live `GET /.well-known/agent-card.json` returned
+  `supportedInterfaces: []`. Root cause: `register_base_url()` was only ever called from the
+  separate `/onboard` endpoint (student-initiated), never by anything the grader itself calls. Fixed
+  by auto-registering the CURRENT request's own base URL (derived from `request.base_url` + the
+  URL-embedded tenant token) inside `_check_a2a_auth`, so the very first grader A2A call registers
+  it. Verified live: fresh untouched student token, one `/a2a/tasks` call, agent-card now lists it.
+- **Non-atomic message dedup (the real DEDUP_IDENTITY/CANCEL_RECEIPT_RACE cause)**:
+  `message_send`'s `get_message_record()`/`put_message_record()` were two separate lock acquisitions
+  with a full LLM-triage `await` in between -- two concurrent requests with the SAME `messageId`
+  could both see "not found" and both independently process, last-writer-wins instead of one
+  atomic resolution. Directly reproduced: 5 concurrent identical requests -> 5 separate LLM calls
+  under the old code, exactly 1 under the fix. Fixed with a per-principal `asyncio.Lock` held across
+  the whole check->process->persist sequence in `message_send` (mirrors the spec's own
+  `(principal, messageId)` dedup key; different principals still run fully concurrently).
+- `verify_ga5_endpoints.py` passes 13/13. GitHub `b94e2e8`; HF `86b3955`.
