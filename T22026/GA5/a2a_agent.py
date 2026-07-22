@@ -381,15 +381,28 @@ async def message_send(body: Dict[str, Any], principal: str, token: Optional[str
 
     store = A2AStore(principal)
     async with _principal_lock(principal):
+        is_continuation = bool(message.get("taskId"))
         existing = store.get_message_record(message_id)
         if existing is not None:
             if existing["fingerprint"] == fingerprint:
                 # Re-use cached response when ALL proposals in the cached task
                 # were non-fallback (no re-diagnosis needed). Fresh-audit: if the
-                # return response had fallbacks, re-process so fallback packages
+                # ORIGINAL PROPOSE had fallbacks, re-process so fallback packages
                 # get re-triaged.
+                #
+                # This bypass must ONLY apply to the INITIAL propose message. A
+                # continuation (taskId set) that completes/cancels a task must
+                # ALWAYS replay from cache once persisted -- hadFallbacks reflects
+                # the task's ORIGINAL triage quality, not this continuation, and
+                # sticks on the task forever. Applying the bypass to continuation
+                # replays too meant: any task whose initial batch ever had a
+                # single fallback proposal would, on every replay of its
+                # COMPLETION message, skip the cache and re-enter
+                # _handle_continuation against an already-terminal task --
+                # hitting the terminal-state guard and returning 409 instead of
+                # the correct cached terminal response (breaks PERSISTENT_REPLAY).
                 cached_task = store.get_task(existing.get("task_id") or "")
-                if cached_task and not cached_task.get("hadFallbacks"):
+                if is_continuation or (cached_task and not cached_task.get("hadFallbacks")):
                     return existing["response"]
             else:
                 raise MailroomError(409, "IDEMPOTENCY_CONFLICT: messageId reused with different semantic content")
@@ -397,7 +410,7 @@ async def message_send(body: Dict[str, Any], principal: str, token: Optional[str
         part = message["parts"][0]
         media_type = part.get("mediaType")
 
-        if message.get("taskId"):
+        if is_continuation:
             response = await _handle_continuation(message, part, media_type, principal, store)
         else:
             if media_type != PROFILE_INPUT_MODE:
@@ -552,12 +565,18 @@ def list_tasks(principal: str) -> Dict[str, Any]:
     return {"tasks": [_public_task_view(t) for t in A2AStore(principal).list_tasks()]}
 
 
-def cancel_task(task_id: str, principal: str) -> Dict[str, Any]:
-    store = A2AStore(principal)
-    task = store.get_task(task_id)
-    if task is None:
-        raise MailroomError(404, "Task not found")
-    if task["state"] not in _TERMINAL_STATES:
-        task["state"] = TASK_CANCELED
-        store.put_task(task_id, task)
-    return _public_task_view(task)
+async def cancel_task(task_id: str, principal: str) -> Dict[str, Any]:
+    # MUST share the same per-principal lock as message_send. Without it, a
+    # cancel racing a concurrent receipt-continuation on the SAME task can both
+    # observe a non-terminal state and both write -- finishing COMPLETED with
+    # receipts AND CANCELED, or losing whichever write landed second. The spec
+    # requires exactly one of those two outcomes, never both/neither.
+    async with _principal_lock(principal):
+        store = A2AStore(principal)
+        task = store.get_task(task_id)
+        if task is None:
+            raise MailroomError(404, "Task not found")
+        if task["state"] not in _TERMINAL_STATES:
+            task["state"] = TASK_CANCELED
+            store.put_task(task_id, task)
+        return _public_task_view(task)

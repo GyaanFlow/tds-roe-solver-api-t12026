@@ -330,7 +330,7 @@ async def a2a_cancel_task(task_id: str, request: Request):
     async def _handle():
         principal = _a2a_principal(request)
         try:
-            return a2a_agent.cancel_task(task_id, principal)
+            return await a2a_agent.cancel_task(task_id, principal)
         except a2a_agent.MailroomError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.message)
     return await _run_solver(_handle, "Q10/cancel-task")
