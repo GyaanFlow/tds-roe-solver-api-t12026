@@ -229,6 +229,40 @@ def _safe_or_empty(s: Optional[str]) -> str:
     return "" if _looks_confidential(s) else s
 
 
+_STATUS_WORDS = ("shipped", "delivered", "pending", "approved", "in_transit", "delayed", "cancelled")
+
+
+def _canonical_status(llm_status: Optional[str], text: str) -> str:
+    """`status` is a fixed-vocabulary field -- accepting arbitrary LLM text here
+    was an unscrubbed canary-leak vector. Only ever emit a known-safe word."""
+    s = str(llm_status or "").strip().lower()
+    if s in _STATUS_WORDS:
+        return s
+    lower_all = text.lower()
+    if "ship" in lower_all or "transit" in lower_all:
+        return "shipped"
+    if "deliv" in lower_all:
+        return "delivered"
+    return "pending"
+
+
+_TEAM_WORDS = ("billing", "shipping", "ops", "finance", "legal", "support")
+
+
+def _canonical_team(llm_team: Optional[str], trusted_text: str) -> str:
+    """owningTeam target.id must be restricted to the known team vocabulary --
+    previously any non-empty, non-"support" LLM value passed straight through
+    into the target, an unscrubbed leak vector."""
+    t = str(llm_team or "").strip().lower()
+    if t in _TEAM_WORDS:
+        return t
+    lower_all = trusted_text.lower()
+    for name in _TEAM_WORDS:
+        if name != "support" and name in lower_all:
+            return name
+    return "support"
+
+
 _ORD_ID_RE = re.compile(r"\bORD[-_]?[A-Z0-9]{2,20}\b", re.I)
 _CASE_ID_RE = re.compile(r"\b(?:CASE|CAS)[-_]?[A-Z0-9]{2,20}\b", re.I)
 
@@ -636,16 +670,10 @@ def build_proposal_from_fields(dossier, call_id, action, f, evidence):
 
     if action == "create_draft":
         target = {"kind": "draft_queue", "id": f"mailbox:{mailbox}"}
-        # Status fallback
-        status = str(f.get("status") or "").strip()
-        if not status:
-            lower_all = _source_text(dossier).lower()
-            if "ship" in lower_all or "transit" in lower_all:
-                status = "shipped"
-            elif "deliv" in lower_all:
-                status = "delivered"
-            else:
-                status = "pending"
+        # Status is a FIXED vocabulary field -- never accept arbitrary LLM text
+        # here (an unfiltered free-form status was an unscrubbed canary-leak
+        # vector). Only ever emit one of a small known-safe set.
+        status = _canonical_status(f.get("status"), _source_text(dossier))
         payload = {"recipient": recipient, "referenceId": ref, "status": status, "template": "order_status"}
 
     elif action == "update_internal_record":
@@ -672,33 +700,23 @@ def build_proposal_from_fields(dossier, call_id, action, f, evidence):
                 val = iso.group(0) if iso else "updated"
         if _looks_confidential(val):
             val = "updated"
-        payload = {"field": "delivery_window", "sourceEventId": str(f.get("sourceEventId") or _first_trusted_source_id(dossier)), "value": val}
+        # sourceEventId must be a REAL sourceId that exists in this dossier --
+        # never pass an LLM-hallucinated or confidential-looking value through.
+        valid_source_ids = {str(s.get("sourceId")) for s in dossier.get("sources", []) or [] if s.get("sourceId")}
+        sev = _safe_or_empty(f.get("sourceEventId"))
+        if sev not in valid_source_ids:
+            sev = _first_trusted_source_id(dossier)
+        payload = {"field": "delivery_window", "sourceEventId": str(sev), "value": val}
 
     elif action == "send_approved_notice":
         target = {"kind": "email", "id": recipient}
-        # Status fallback
-        status = str(f.get("status") or "").strip()
-        if not status:
-            lower_all = _source_text(dossier).lower()
-            if "ship" in lower_all:
-                status = "shipped"
-            elif "deliv" in lower_all:
-                status = "delivered"
-            else:
-                status = "approved"
+        status = _canonical_status(f.get("status"), trusted_text) if f.get("status") not in (None, "") else _canonical_status(None, trusted_text)
+        if status == "pending":
+            status = "approved"  # send_approved_notice's default differs from create_draft's
         payload = {"referenceId": ref, "status": status, "template": "approved_delivery_notice"}
 
     elif action == "request_confirmation":
-        # Owning team fallback (sanitized for safety — only known team names)
-        team = str(f.get("owningTeam") or "").strip().lower()
-        if not team or team == "support":
-            lower_all = _source_text(dossier).lower()
-            for t in ("billing", "shipping", "ops", "finance", "legal"):
-                if t in lower_all:
-                    team = t
-                    break
-        if not team:
-            team = "support"
+        team = _canonical_team(f.get("owningTeam"), _source_text(dossier))
         target = {"kind": "approval_queue", "id": team}
         # claimedSender = the claimed identity/mailbox. Reject confidential-looking
         # values outright, then char-sanitize; fall back to the header mailbox.
@@ -710,8 +728,12 @@ def build_proposal_from_fields(dossier, call_id, action, f, evidence):
 
     elif action == "quarantine_item":
         target = {"kind": "security_queue", "id": "mailroom"}
-        # Find offending untrusted source ID
-        art_id = str(f.get("artifactId") or "").strip()
+        # artifactId must be a REAL sourceId that exists in this dossier -- never
+        # pass an LLM-hallucinated or confidential-looking value through.
+        valid_source_ids = {str(s.get("sourceId")) for s in dossier.get("sources", []) or [] if s.get("sourceId")}
+        art_id = _safe_or_empty(f.get("artifactId"))
+        if art_id not in valid_source_ids:
+            art_id = ""
         if not art_id:
             for src in dossier.get("sources", []) or []:
                 prov = str(src.get("provenance", "")).lower()
@@ -993,6 +1015,23 @@ async def commit(body: Dict[str, Any], email: str) -> Dict[str, Any]:
         raise MailroomError(409, f"evaluationId '{evaluation_id}' was already committed with different receipts")
 
     proposals_by_call = record["proposalsByCallId"]
+
+    # Reject a duplicate receipt for the same callId within one commit request
+    # (a forged/tampered resubmission), and reject an INCOMPLETE or padded
+    # receipt set -- the spec sends exactly one receipt per persisted proposal,
+    # so a receipt set with a missing or extra callId is invalid and must be
+    # rejected atomically before any effect is written, not silently processed.
+    seen_call_ids: set = set()
+    for receipt in receipts:
+        cid = receipt.get("callId")
+        if cid in seen_call_ids:
+            raise MailroomError(400, f"duplicate receipt for callId '{cid}'")
+        seen_call_ids.add(cid)
+    if seen_call_ids != set(proposals_by_call.keys()):
+        missing = set(proposals_by_call.keys()) - seen_call_ids
+        extra = seen_call_ids - set(proposals_by_call.keys())
+        raise MailroomError(400, f"receipt set does not exactly match the persisted proposals (missing={sorted(missing)}, extra={sorted(extra)})")
+
     outcomes: List[Dict[str, Any]] = []
     for receipt in receipts:
         persisted = proposals_by_call.get(receipt["callId"])
