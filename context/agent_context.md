@@ -635,3 +635,42 @@ the deterministic ones live on Render. Commit `2a99a1e` (GitHub) / `a92c2f3`→`
   the whole check->process->persist sequence in `message_send` (mirrors the spec's own
   `(principal, messageId)` dedup key; different principals still run fully concurrently).
 - `verify_ga5_endpoints.py` passes 13/13. GitHub `b94e2e8`; HF `86b3955`.
+
+### 2026-07-20 (Fifth round — Q9 actions 70/70; Q10 cancel-race + replay bug; Q9 canary sweep completed)
+- Q9 improved substantially: actions 70/70 (from 57), isolation-adjacent categories improved. Still:
+  exact arguments 55/70, sufficient/minimal evidence ~50/70, audit 3/6, canary cap STILL triggered,
+  invalid-receipt/conflict rejection failing.
+- Q10 regressed further on a fresh check despite prior fixes landing: isolation now 0.75/0.75 (fixed!)
+  but lifecycle/receipts/race still 0. Diagnosed two NEW concrete bugs beyond the earlier atomic-dedup
+  fix:
+  1. **CANCEL_RECEIPT_RACE**: `cancel_task()` was still completely unlocked (no `_principal_lock`),
+     racing directly against a concurrent `message_send` continuation on the same task -- the
+     previous lock only covered `message_send`, not the separate `:cancel` endpoint. Made
+     `cancel_task` async and wrapped it in the same per-principal lock.
+  2. **PERSISTENT_REPLAY**: the `hadFallbacks` cache-bypass (meant only to force re-triage of an
+     INITIAL propose whose original batch had a degraded fallback) was being applied to EVERY
+     message replay including continuations. Since `hadFallbacks` sticks on the task forever, ANY
+     task whose initial batch ever had one fallback proposal would, on every replay of its
+     COMPLETION message, skip the cache and re-enter `_handle_continuation` against an
+     already-terminal task -- hitting the terminal-state guard and returning 409 instead of the
+     cached terminal Task. Fixed: bypass now only applies when the message has no `taskId` (i.e.
+     is itself an initial propose); continuation replays always return cached response once
+     persisted. Verified directly: a completion message replayed against a `hadFallbacks=True` task
+     now correctly returns the cached `TASK_STATE_COMPLETED` response byte-identical to the
+     original, instead of 409.
+- Q9 canary sweep completed: found FOUR more unscrubbed free-form fields beyond the previous
+  round's value/claimedSender/recipient fixes -- `status` (create_draft/send_approved_notice, only
+  replaced when empty, never content-checked), `owningTeam` (only replaced when empty or literally
+  "support"), `sourceEventId` and `artifactId` (both passed raw LLM output with zero validation).
+  Fixed all four: `status`/`owningTeam` now restricted to small known-safe vocabularies
+  (`_canonical_status`/`_canonical_team`), `sourceEventId`/`artifactId` now must be a REAL sourceId
+  present in the dossier or fall back to one, never an LLM-hallucinated/confidential value.
+- Also closed a `commit()` gap: receipts were validated individually but the overall SET was never
+  checked for completeness (spec: exactly one receipt per persisted proposal). Added duplicate-
+  callId and exact-set-match (missing/extra) checks before any outcome is computed.
+- `verify_ga5_endpoints.py` passes 13/13 throughout. GitHub `8cf51b7`, `716bcd9`; HF `8b3e809`,
+  `fde8f8d`.
+- **Still open / lower confidence**: Q9's `audit executable proposals 3/6` (fresh-audit semantic
+  accuracy -- likely genuine LLM judgment quality on novel cases, not a code bug) and Q10's
+  `BUSINESS_SEMANTICS`/`AUDIT_RECEIPT_CAP` (same category of issue). These need real grader
+  re-checks to see if the structural fixes above move them before further chasing.
