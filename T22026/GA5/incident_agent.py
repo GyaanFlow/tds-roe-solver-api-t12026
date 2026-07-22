@@ -741,11 +741,26 @@ async def _handle_outcomes(run: Dict[str, Any], body: Dict[str, Any], token: Opt
             suppressed = [a["toolName"] for a in run["diagnosticActions"].values() if not a["success"]]
             return _final_response(run, "failed", chosen_effect=None, suppressed=suppressed)
 
+        # Effect tools MUST be exactly policy.effectTools -- the set the grader
+        # actually authorized as remediation actions. approvalRequiredFor is a
+        # SEPARATE list (which of those effect tools need approval before
+        # dispatch, e.g. rollback_deployment/disable_feature) -- it is NOT
+        # itself a list of available effects, and unioning it in previously let
+        # the agent choose/dispatch a tool (e.g. rollback_deployment) that
+        # wasn't even in policy.effectTools or the toolCatalog at all, which is
+        # an out-of-policy action choice the grader correctly never resolves
+        # (explaining a cascading 0 across every category -- the run never
+        # reaches a valid completion once the effect itself is wrong).
         policy_effect_tools = run["policy"].get("effectTools") or []
-        approval_tools = run["policy"].get("approvalRequiredFor") or []
         diag_names = {a["toolName"] for a in run["diagnosticActions"].values()}
-        catalog_effect_tools = [t.get("name") for t in run["toolCatalog"] if t.get("name") and t.get("name") not in diag_names]
-        effect_tools = list(dict.fromkeys([t for t in (policy_effect_tools + approval_tools + catalog_effect_tools) if t]))
+        if policy_effect_tools:
+            effect_tools = list(dict.fromkeys([t for t in policy_effect_tools if t]))
+        else:
+            # Only if the policy genuinely provides no effect tools at all,
+            # fall back to non-diagnostic catalog tools as a last resort.
+            effect_tools = list(dict.fromkeys([
+                t.get("name") for t in run["toolCatalog"] if t.get("name") and t.get("name") not in diag_names
+            ]))
 
         approval_required_for = set(run["policy"].get("approvalRequiredFor") or []) | DESTRUCTIVE_DEFAULT
         chosen = await choose_effect(run["diagnosis"]["rootCause"], effect_tools, run["toolCatalog"], run["incident"], token) if token else {"chosenEffect": (effect_tools[0] if effect_tools else None), "arguments": {}}
