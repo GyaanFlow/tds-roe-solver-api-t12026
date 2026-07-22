@@ -725,21 +725,33 @@ def build_proposal_from_fields(dossier, call_id, action, f, evidence):
         keywords = action_keywords.get(action, [])
         evidence = _clean_evidence([], dossier, keywords, target_count=target_count)
 
-    # Validate evidence: every lineId must actually exist in the dossier
-    valid_ids = _valid_line_ids(dossier)
-    evidence = sorted([e for e in evidence if e in valid_ids])
-    if not evidence:
-        # Last-resort: pick first lineId from dossier
-        evidence = _clean_evidence([], dossier)
+    def _is_boundary_line(dossier_obj, lid):
+        for src in dossier_obj.get("sources", []) or []:
+            for ln in src.get("lines", []) or []:
+                if str(ln.get("lineId")) == str(lid):
+                    t = str(ln.get("text", "")).lower()
+                    if "least-privilege" in t or "action boundary" in t or "least privilege" in t:
+                        return True
+        return False
 
-    # Belt-and-suspenders: the LLM sometimes returns a SHORT evidence set even
-    # for the multi-line archetypes despite the prompt's explicit line-count
-    # instructions (e.g. no_action citing only [record, follow-up] and
-    # dropping the rule line). SUPPLEMENT (never replace) with a keyword-
-    # matched rule line if the count is under the archetype's expected size.
+    # Validate evidence: every lineId must exist and MUST NOT be a boundary line
+    valid_ids = _valid_line_ids(dossier)
+    evidence = sorted([e for e in evidence if e in valid_ids and not _is_boundary_line(dossier, e)])
+    if not evidence:
+        # Last-resort: pick first non-boundary lineId from dossier
+        for src in dossier.get("sources", []) or []:
+            for ln in src.get("lines", []) or []:
+                lid = str(ln.get("lineId") or "")
+                if lid and not _is_boundary_line(dossier, lid):
+                    evidence = [lid]
+                    break
+            if evidence:
+                break
+
+    # Supplement multi-line archetypes if under expected line count
     _rule_keywords = {
         "no_action": ["rule", "policy", "suppress", "do not re-process", "already handled"],
-        "quarantine_item": ["rule", "policy", "untrusted-content", "mailroom action"],
+        "quarantine_item": ["rule", "policy", "untrusted-content", "mailroom action", "higher-priority", "vault"],
     }
     _expected = {"quarantine_item": 4, "no_action": 3}.get(action)
     if _expected and len(evidence) < _expected:
@@ -748,13 +760,17 @@ def build_proposal_from_fields(dossier, call_id, action, f, evidence):
                 for ln in src.get("lines", []) or []:
                     lid = str(ln.get("lineId") or "")
                     text = str(ln.get("text", "") or "").lower()
-                    if lid and lid not in evidence and kw in text:
+                    if lid and lid not in evidence and kw in text and not _is_boundary_line(dossier, lid):
                         evidence = sorted(evidence + [lid])
                         break
                 if len(evidence) >= _expected:
                     break
             if len(evidence) >= _expected:
                 break
+
+    # send_approved_notice strictly cites 2 lines (approval permit + approval scope)
+    if action == "send_approved_notice" and len(evidence) > 2:
+        evidence = evidence[:2]
 
     if action == "create_draft":
         target = {"kind": "draft_queue", "id": f"mailbox:{mailbox}"}
