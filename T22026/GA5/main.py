@@ -47,6 +47,11 @@ def _content_type_matches(request: Request, expected: str) -> bool:
     content_type = (request.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
     return content_type == expected
 
+def _require_content_type(request: Request, expected: str) -> None:
+    """Reject protocol-invalid requests before invoking an agent."""
+    if not _content_type_matches(request, expected):
+        raise HTTPException(status_code=415, detail=f"Content-Type must be {expected}")
+
 
 async def _read_json_body(request: Request) -> Dict[str, Any]:
     try:
@@ -256,19 +261,20 @@ def _a2a_principal(request: Request) -> str:
 
 def _check_a2a_auth(request: Request) -> None:
     version = request.headers.get("A2A-Version") or request.headers.get("a2a-version")
-    if version and version != "1.0":
-        raise HTTPException(status_code=400, detail="Unsupported A2A-Version")
-    if request.method.upper() == "POST" and not _content_type_matches(request, "application/a2a+json"):
-        raise HTTPException(status_code=415, detail="Content-Type must be application/a2a+json")
     auth = request.headers.get("Authorization") or request.headers.get("authorization") or ""
     if not auth.lower().startswith("bearer ") or not auth[7:].strip():
         raise HTTPException(status_code=401, detail="Missing or malformed Bearer token")
-    # Do NOT reject non-matching Bearer tokens here. Per the A2A spec, the Bearer
-    # is the PRINCIPAL identifier -- different callers legitimately hit the same
-    # base URL with different Bearer tokens, and task-level scoping (via
-    # _a2a_principal) enforces isolation on read/list/continue/cancel. Requiring
-    # Bearer == URL-embedded AIPipe token here made the endpoint 403 the grader
-    # (whose Bearer is its own opaque token, unrelated to your billing token).
+    if version != "1.0":
+        raise HTTPException(status_code=400, detail="Unsupported or missing A2A-Version")
+    if request.method.upper() == "POST" and not _content_type_matches(request, "application/a2a+json"):
+        raise HTTPException(status_code=415, detail="Content-Type must be application/a2a+json")
+    # The submitted A2A base URL contains the credential for this agent. The
+    # exam contract requires the Bearer token to match it exactly; accepting a
+    # different token makes the URL act as an unauthenticated public task store.
+    embedded = request.scope.get("tenant_token") or current_token.get()
+    supplied = auth[7:].strip()
+    if embedded and supplied != embedded:
+        raise HTTPException(status_code=403, detail="Bearer token does not match the submitted A2A base URL")
 
     # Auto-register THIS exact base URL into the shared, origin-level Agent Card
     # on every A2A call. The spec requires supportedInterfaces to contain "the
@@ -342,6 +348,7 @@ async def a2a_cancel_task(task_id: str, request: Request):
 # ---------------------------------------------------------------------------
 @router.post("/v2/incidents")
 async def incidents_create_endpoint(request: Request):
+    _require_content_type(request, "application/json")
     async def _handle():
         body = await _read_json_body(request)
         email = current_email.get()
@@ -357,6 +364,7 @@ async def incidents_create_endpoint(request: Request):
 
 @router.post("/v2/incidents/{run_id}/receipts")
 async def incidents_receipts_endpoint(run_id: str, request: Request):
+    _require_content_type(request, "application/json")
     async def _handle():
         body = await _read_json_body(request)
         email = current_email.get()

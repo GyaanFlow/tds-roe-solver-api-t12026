@@ -402,8 +402,7 @@ async def message_send(body: Dict[str, Any], principal: str, token: Optional[str
                 # hitting the terminal-state guard and returning 409 instead of
                 # the correct cached terminal response (breaks PERSISTENT_REPLAY).
                 cached_task = store.get_task(existing.get("task_id") or "")
-                if is_continuation or (cached_task and not cached_task.get("hadFallbacks")):
-                    return existing["response"]
+                return existing["response"]
             else:
                 raise MailroomError(409, "IDEMPOTENCY_CONFLICT: messageId reused with different semantic content")
 
@@ -506,6 +505,7 @@ async def _handle_continuation(message: Dict[str, Any], part: Dict[str, Any], me
         raise MailroomError(422, "'data.results' must be a non-empty array")
 
     proposals_by_action = task["proposalsByActionId"]
+    expected_action_ids = set(proposals_by_action)
     seen_action_ids = set()
     executions = []
     for result in results:
@@ -530,6 +530,11 @@ async def _handle_continuation(message: Dict[str, Any], part: Dict[str, Any], me
                 "receiptNonce": result["receiptNonce"],
                 "facts": persisted["facts"], "evidenceRefs": persisted["evidenceRefs"],
             })
+
+    if seen_action_ids != expected_action_ids:
+        missing = sorted(expected_action_ids - seen_action_ids)
+        extra = sorted(seen_action_ids - expected_action_ids)
+        raise MailroomError(400, f"continuation results must cover every proposal (missing={missing}, extra={extra})")
 
     task["state"] = TASK_COMPLETED
     task["history"] = task["history"] + [message]

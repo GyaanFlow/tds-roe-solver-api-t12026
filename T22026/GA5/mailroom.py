@@ -987,8 +987,15 @@ def _validate_commit_schema(body: Dict[str, Any]) -> None:
     if not isinstance(body.get("receipts"), list) or not body["receipts"]:
         raise MailroomError(422, "'receipts' must be a non-empty array")
     for r in body["receipts"]:
-        if not isinstance(r, dict) or not all(k in r for k in ("dossierId", "callId", "action", "accepted", "proposalDigest", "receiptId")):
+        required = ("dossierId", "callId", "action", "accepted", "proposalDigest", "receiptId")
+        if not isinstance(r, dict) or not all(k in r for k in required):
             raise MailroomError(422, "each receipt must have dossierId, callId, action, accepted, proposalDigest, receiptId")
+        if not all(isinstance(r[k], str) and r[k].strip() for k in ("dossierId", "callId", "action", "proposalDigest", "receiptId")):
+            raise MailroomError(422, "receipt identifiers and proposalDigest must be non-empty strings")
+        if not isinstance(r["accepted"], bool):
+            raise MailroomError(422, "receipt accepted must be a boolean")
+        if not re.fullmatch(r"[0-9a-f]+", r["proposalDigest"]):
+            raise MailroomError(422, "proposalDigest must be lowercase hexadecimal")
 
 
 async def commit(body: Dict[str, Any], email: str) -> Dict[str, Any]:
