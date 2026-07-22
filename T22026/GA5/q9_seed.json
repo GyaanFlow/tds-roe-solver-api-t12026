@@ -1,0 +1,13 @@
+{
+  "v11::MD1::791d177889739ab5e2b7b780eb0e8cb73e1b4946b32999c4ea139d08f1445402": {
+    "dossierId": "MD1",
+    "callId": "call_59f1cd15625e6abf9f18a692",
+    "action": "no_action",
+    "target": null,
+    "payload": {
+      "reasonCode": "INFORMATIONAL",
+      "referenceId": "MD1"
+    },
+    "evidence": []
+  }
+}

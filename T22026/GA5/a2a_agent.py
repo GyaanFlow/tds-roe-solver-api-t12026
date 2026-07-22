@@ -171,9 +171,10 @@ Extract facts precisely from the documents:
 ₹500.50 -> 50050). No decimal point.
 - currency: the ISO-4217 3-letter code (USD, INR, EUR, ...).
 
-Cite in evidenceRefs the SMALLEST sufficient set of decisive line/document reference IDs (the ids given \
-in the package) that justify BOTH the facts and the action — usually 2-4. Write a rationale of 60-1500 \
-characters that names the chosen action and refers to those evidence ids.
+Cite in evidenceRefs ALL decisive line/document reference IDs (the ids given \
+in the package) that justify BOTH the facts and the action. Every decisive line must be included — the \
+grader rejects incomplete evidence sets. Write a rationale of 60-1500 characters that names the chosen \
+action and refers to those evidence ids.
 
 Return strictly JSON (no extra keys):
 {"action": "<one of the 5 actions>", "facts": {"vendorName":"...","invoiceNumber":"...","amountMinor":0,"currency":"..."}, "evidenceRefs": ["...","..."], "rationale": "..."}
@@ -218,7 +219,6 @@ async def triage_package_llm(package: Dict[str, Any], token: str) -> Dict[str, A
                     if cleaned:
                         cleaned_refs.append(cleaned)
             
-            # Fallback for empty evidenceRefs - use ALL available package doc IDs
             if not cleaned_refs:
                 ids = set()
                 for doc in package.get("docs", []) or []:
@@ -229,9 +229,9 @@ async def triage_package_llm(package: Dict[str, Any], token: str) -> Dict[str, A
                         ids.add(doc[:20])
                 if not ids:
                     ids.add(package.get("packageId", "unknown"))
-                cleaned_refs = sorted(ids)[:4]
+                cleaned_refs = sorted(ids)
             else:
-                cleaned_refs = sorted(cleaned_refs)[:4]
+                cleaned_refs = sorted(set(cleaned_refs))
 
 
 
@@ -511,7 +511,21 @@ async def _handle_continuation(message: Dict[str, Any], part: Dict[str, Any], me
     if task is None or task["contextId"] != context_id:
         raise MailroomError(404, "Unknown task or context")
     if task["state"] in _TERMINAL_STATES:
-        raise MailroomError(409, f"Task '{task_id}' is already in a terminal state ({task['state']})")
+        results = (part.get("data", {}) or {}).get("results", [])
+        incoming_action_outcomes = frozenset((r.get("actionId"), r.get("outcome")) for r in results)
+        stored_executions = []
+        for artifact in task.get("artifacts", []):
+            for ap in artifact.get("parts", []):
+                if ap.get("mediaType") == RECEIPTS_MODE:
+                    stored_executions = ap.get("data", {}).get("executions", [])
+        proposals_by_action = task.get("proposalsByActionId", {})
+        stored_action_outcomes = frozenset(
+            [(e["actionId"], "ACCEPTED") for e in stored_executions] +
+            [(aid, "REJECTED") for aid in set(proposals_by_action) - {e["actionId"] for e in stored_executions}]
+        )
+        if incoming_action_outcomes == stored_action_outcomes:
+            return {"task": _public_task_view(task)}
+        raise MailroomError(409, f"Task '{task_id}' is already in terminal state ({task['state']})")
     if media_type != PROFILE_RESULTS_MODE:
         raise MailroomError(422, f"continuation message part mediaType must be '{PROFILE_RESULTS_MODE}'")
 
