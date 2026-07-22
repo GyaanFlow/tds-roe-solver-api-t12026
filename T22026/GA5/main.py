@@ -68,19 +68,27 @@ async def _read_json_body(request: Request) -> Dict[str, Any]:
     return body
 
 
-async def _run_solver(handler: Callable[[], Awaitable[T]], label: str) -> T | JSONResponse:
+async def _run_solver(handler: Callable[[], Awaitable[T]], label: str, media_type: str | None = None) -> T | JSONResponse:
     email = current_email.get()
     start = time.time()
     try:
         result = await handler()
         elapsed = time.time() - start
         logger.info("GA5 %s by %s completed in %.2fs", label, email, elapsed)
+        # A2A routes (media_type="application/a2a+json") MUST NOT return the
+        # plain dict here -- FastAPI would serialize it with the default
+        # Content-Type: application/json, which the A2A 1.0 spec treats as an
+        # instant protocol failure. Every success response on those routes has
+        # to be wrapped so the exact media type is set.
+        if media_type and isinstance(result, dict):
+            return JSONResponse(status_code=200, content=result, media_type=media_type)
         return result
     except TokenExpiredError as exc:
         elapsed = time.time() - start
         logger.warning("GA5 %s token expired for %s after %.2fs", label, email, elapsed)
         return JSONResponse(
             status_code=401,
+            media_type=media_type or "application/json",
             content={
                 "error": str(exc),
                 "hint": (
@@ -94,15 +102,15 @@ async def _run_solver(handler: Callable[[], Awaitable[T]], label: str) -> T | JS
     except HTTPException as exc:
         elapsed = time.time() - start
         logger.warning("GA5 %s HTTP error for %s after %.2fs: %s", label, email, elapsed, exc.detail)
-        return JSONResponse(status_code=exc.status_code, content={"error": str(exc.detail)})
+        return JSONResponse(status_code=exc.status_code, media_type=media_type or "application/json", content={"error": str(exc.detail)})
     except (RuntimeError, ValueError, KeyError) as exc:
         elapsed = time.time() - start
         logger.warning("GA5 %s client error for %s after %.2fs: %s", label, email, elapsed, exc)
-        return JSONResponse(status_code=400, content={"error": str(exc)})
+        return JSONResponse(status_code=400, media_type=media_type or "application/json", content={"error": str(exc)})
     except Exception:
         elapsed = time.time() - start
         logger.exception("GA5 %s failed for %s after %.2fs", label, email, elapsed)
-        return JSONResponse(status_code=500, content={"error": "Internal server error"})
+        return JSONResponse(status_code=500, media_type=media_type or "application/json", content={"error": "Internal server error"})
 
 
 # ---------------------------------------------------------------------------
@@ -303,7 +311,7 @@ async def a2a_message_send(request: Request):
             return await a2a_agent.message_send(body, principal, token)
         except a2a_agent.MailroomError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.message)
-    return await _run_solver(_handle, "Q10/message:send")
+    return await _run_solver(_handle, "Q10/message:send", media_type="application/a2a+json")
 
 
 @router.get("/a2a/tasks/{task_id}")
@@ -316,7 +324,7 @@ async def a2a_get_task(task_id: str, request: Request):
             return a2a_agent.get_task(task_id, principal)
         except a2a_agent.MailroomError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.message)
-    return await _run_solver(_handle, "Q10/get-task")
+    return await _run_solver(_handle, "Q10/get-task", media_type="application/a2a+json")
 
 
 @router.get("/a2a/tasks")
@@ -326,7 +334,7 @@ async def a2a_list_tasks(request: Request):
     async def _handle():
         principal = _a2a_principal(request)
         return a2a_agent.list_tasks(principal)
-    return await _run_solver(_handle, "Q10/list-tasks")
+    return await _run_solver(_handle, "Q10/list-tasks", media_type="application/a2a+json")
 
 
 @router.post("/a2a/tasks/{task_id}:cancel")
@@ -339,7 +347,7 @@ async def a2a_cancel_task(task_id: str, request: Request):
             return await a2a_agent.cancel_task(task_id, principal)
         except a2a_agent.MailroomError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.message)
-    return await _run_solver(_handle, "Q10/cancel-task")
+    return await _run_solver(_handle, "Q10/cancel-task", media_type="application/a2a+json")
 
 
 # ---------------------------------------------------------------------------

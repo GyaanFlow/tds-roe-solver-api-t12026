@@ -120,10 +120,14 @@ def a2a_agent_card(request: Request):
     T22026/GA5/a2a_agent.py for how supportedInterfaces accumulates per-student
     base URLs registered via POST /ga5/onboard."""
     from fastapi.responses import JSONResponse
-    from T22026.GA5.a2a_agent import agent_card_json, register_base_url
-    base_origin = str(request.base_url).rstrip("/")
-    default_base = f"{base_origin}/ga5/23f3001077%40ds.study.iitm.ac.in/eyJhbGciOiJIUzI1NiJ9.eyJlbWFpbCI6IjIzZjMwMDA1ODlAZHMuc3R1ZHkuaWl0bS5hYy5pbiIsImlhdCI6MTc4NDI5ODk0NCwiaXNzIjoiaHR0pHMky.../a2a/"
-    register_base_url(default_base)
+    from T22026.GA5.a2a_agent import agent_card_json
+    # No hardcoded default registration here -- real base URLs are registered
+    # dynamically per-caller by T22026/GA5/main.py::_check_a2a_auth on every
+    # authenticated A2A request, using that request's own email+token. A
+    # previous hardcoded entry here baked a specific student's email and JWT
+    # token literally into source control and re-registered it on every single
+    # agent-card request -- a credential-hygiene issue with no remaining
+    # purpose now that registration is dynamic.
     return JSONResponse(
         content=agent_card_json(),
         headers={"Content-Type": "application/a2a+json"}
