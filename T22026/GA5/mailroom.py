@@ -144,15 +144,14 @@ def _verify_receipt_signatures(
     evaluation_id: str,
     input_digest: str,
     public_key_jwk: Optional[Dict[str, Any]],
+    verifier_supplied: bool = False,
 ) -> None:
     """Verify Ed25519 receiptSignature for every receipt atomically before any
-    effect is written. If public_key_jwk is None (no receiptVerifier stored,
-    e.g. local tests) the check is skipped gracefully.
-
-    The spec mandates rejection when any signature is invalid, missing,
-    duplicated, or moved to another receipt.
+    effect is written. Rejects immediately if signature is missing or invalid.
     """
     if not public_key_jwk:
+        if verifier_supplied:
+            raise MailroomError(400, "receiptVerifier supplied in propose but publicKeyJwk is missing or invalid")
         return  # No verifier stored (local/legacy) — skip.
 
     # Extract inner JWK if wrapper object was passed
@@ -1005,12 +1004,19 @@ async def propose(body: Dict[str, Any], email: str, token: Optional[str]) -> Dic
     evaluation_id = body["evaluationId"]
     dossiers = body["dossiers"]
     input_digest = compute_input_digest(dossiers)
+    propose_fingerprint = sha256_hex(_canonical_bytes({
+        "dossiers": dossiers,
+        "allowedActions": body.get("allowedActions"),
+        "corpus": body.get("corpus"),
+    }))
 
     store = MailroomStore(email)
     existing = store.get_evaluation(evaluation_id)
     if existing is not None:
-        if existing["inputDigest"] == input_digest:
-            return existing["proposeResponse"]  # exact idempotent replay, no re-work
+        if existing.get("proposeFingerprint") == propose_fingerprint or existing["inputDigest"] == input_digest:
+            if existing.get("proposeFingerprint") == propose_fingerprint:
+                return existing["proposeResponse"]
+            raise MailroomError(409, f"evaluationId '{evaluation_id}' already used with different content")
         raise MailroomError(409, f"evaluationId '{evaluation_id}' already used with different content")
 
     if not token:
@@ -1060,6 +1066,7 @@ async def propose(body: Dict[str, Any], email: str, token: Optional[str]) -> Dic
     }
     store.put_evaluation(evaluation_id, {
         "inputDigest": input_digest,
+        "proposeFingerprint": propose_fingerprint,
         "proposeResponse": response,
         "proposalsByCallId": {p["callId"]: p for p in proposals},
         "commitResponse": None,
@@ -1118,8 +1125,8 @@ async def commit(body: Dict[str, Any], email: str) -> Dict[str, Any]:
     # invalid, missing, duplicated, or moved to another receipt."
     # Verify ALL signatures atomically BEFORE touching any stored state.
     verifier_obj = record.get("receiptVerifier")
-    pubkey_jwk = verifier_obj.get("publicKeyJwk") if isinstance(verifier_obj, dict) else None
-    _verify_receipt_signatures(receipts, evaluation_id, record["inputDigest"], pubkey_jwk)
+    pubkey_jwk = verifier_obj.get("publicKeyJwk") if isinstance(verifier_obj, dict) and "publicKeyJwk" in verifier_obj else verifier_obj
+    _verify_receipt_signatures(receipts, evaluation_id, record["inputDigest"], pubkey_jwk, verifier_supplied=bool(verifier_obj))
 
     proposals_by_call = record["proposalsByCallId"]
 
