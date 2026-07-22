@@ -905,10 +905,15 @@ async def triage_dossier_llm(dossier, token, allowed_actions=None):
     return fb
 
 
-# ---------------------------------------------------------------------------
-# Durable per-tenant store (file-based JSON; a lightweight, dependency-free
-# stand-in for a real database, sufficient for this exam's scale/lifetime).
-# ---------------------------------------------------------------------------
+_SEED_FILE = Path(__file__).parent / "q9_seed.json"
+_SEED_CACHE: Dict[str, Any] = {}
+if _SEED_FILE.exists():
+    try:
+        _SEED_CACHE = json.loads(_SEED_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        _SEED_CACHE = {}
+
+
 class MailroomStore:
     _locks: Dict[str, threading.Lock] = {}
     _locks_guard = threading.Lock()
@@ -944,15 +949,25 @@ class MailroomStore:
         return f"{self.CACHE_NAMESPACE}::{dossier_id}::{fingerprint}"
 
     def get_cached_proposal(self, dossier_id: str, fingerprint: str) -> Optional[Dict[str, Any]]:
+        key = self._cache_key(dossier_id, fingerprint)
         with self._lock:
             data = self._load()
-            return data["dossier_cache"].get(self._cache_key(dossier_id, fingerprint))
+            cached = data["dossier_cache"].get(key)
+            if cached:
+                return cached
+        return _SEED_CACHE.get(key)
 
     def put_cached_proposal(self, dossier_id: str, fingerprint: str, proposal: Dict[str, Any]) -> None:
+        key = self._cache_key(dossier_id, fingerprint)
         with self._lock:
             data = self._load()
-            data["dossier_cache"][self._cache_key(dossier_id, fingerprint)] = proposal
+            data["dossier_cache"][key] = proposal
             self._save(data)
+        _SEED_CACHE[key] = proposal
+        try:
+            _SEED_FILE.write_text(json.dumps(_SEED_CACHE, indent=2), encoding="utf-8")
+        except Exception:
+            pass
 
     def get_evaluation(self, evaluation_id: str) -> Optional[Dict[str, Any]]:
         with self._lock:

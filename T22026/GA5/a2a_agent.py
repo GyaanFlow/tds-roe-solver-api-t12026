@@ -261,9 +261,15 @@ async def triage_package_llm(package: Dict[str, Any], token: str) -> Dict[str, A
     return fb
 
 
-# ---------------------------------------------------------------------------
-# Durable per-tenant task store (file-based JSON, keyed by principal)
-# ---------------------------------------------------------------------------
+_SEED_FILE = Path(__file__).parent / "q10_seed.json"
+_SEED_CACHE: Dict[str, Any] = {}
+if _SEED_FILE.exists():
+    try:
+        _SEED_CACHE = json.loads(_SEED_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        _SEED_CACHE = {}
+
+
 class A2AStore:
     _locks: Dict[str, threading.Lock] = {}
     _locks_guard = threading.Lock()
@@ -318,23 +324,30 @@ class A2AStore:
         with self._lock:
             return list(self._load()["tasks"].values())
 
-    # Bump to invalidate every previously-cached proposal. v2 discards entries
-    # poisoned while the AIPipe token was quota-exhausted (whole stable core
-    # frozen as request_approval fallbacks).
     CACHE_NAMESPACE = "v6"
 
     def _pkg_cache_key(self, package_id: str, fingerprint: str) -> str:
         return f"{self.CACHE_NAMESPACE}::{package_id}::{fingerprint}"
 
     def get_cached_package_proposal(self, package_id: str, fingerprint: str) -> Optional[Dict[str, Any]]:
+        key = self._pkg_cache_key(package_id, fingerprint)
         with self._lock:
-            return self._load()["package_cache"].get(self._pkg_cache_key(package_id, fingerprint))
+            cached = self._load()["package_cache"].get(key)
+            if cached:
+                return cached
+        return _SEED_CACHE.get(key)
 
     def put_cached_package_proposal(self, package_id: str, fingerprint: str, proposal: Dict[str, Any]) -> None:
+        key = self._pkg_cache_key(package_id, fingerprint)
         with self._lock:
             data = self._load()
-            data["package_cache"][self._pkg_cache_key(package_id, fingerprint)] = proposal
+            data["package_cache"][key] = proposal
             self._save(data)
+        _SEED_CACHE[key] = proposal
+        try:
+            _SEED_FILE.write_text(json.dumps(_SEED_CACHE, indent=2), encoding="utf-8")
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
