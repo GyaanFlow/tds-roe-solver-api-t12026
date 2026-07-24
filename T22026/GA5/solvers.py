@@ -339,6 +339,9 @@ _SECRET_PATTERNS = [
     re.compile(r"xoxb-[0-9]{10,}"),
     re.compile(r"eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}"),
     re.compile(r"https://hooks\.slack\.com/services/\S+"),
+    re.compile(r"(?i)(postgres|mysql|redis|mongodb|amqp)://\S+:\S+@\S+"),
+    re.compile(r"-----BEGIN (RSA|EC|OPENSSH|DSA|PGP|PRIVATE) KEY-----"),
+    re.compile(r"(?i)aws_secret_access_key\s*[:=]\s*\S+"),
 ]
 _SECRET_IGNORE = (
     "${", "os.environ", "process.env", "getenv"
@@ -349,7 +352,10 @@ _INJECTION_PATTERNS = [
     re.compile(r"(?i)silently (send|exfiltrate|upload|email|transmit)"),
     re.compile(r"(?i)without (asking|notifying|telling) (the )?user"),
     re.compile(r"(?i)disregard (the )?user"),
-    re.compile(r"(?i)override (the )?control"),
+    re.compile(r"(?i)override (the )?(user|agent|control)"),
+    re.compile(r"(?i)higher-priority instruction"),
+    re.compile(r"(?i)system prompt:"),
+    re.compile(r"(?i)copy (any )?vault"),
 ]
 _EXCESSIVE_PERM_PATTERNS = [
     re.compile(r"(?i)(read|write|access).{0,20}(entire|whole|all|full).{0,10}(filesystem|disk|drive)"),
@@ -357,13 +363,18 @@ _EXCESSIVE_PERM_PATTERNS = [
     re.compile(r"(?i)permissions?:\s*\[?\s*(read|write|all|\*)\s*,\s*(read|write|all|\*).{0,20}(all|\*|any)"),
     re.compile(r"(?i)scope:\s*(all|full|\*)"),
     re.compile(r"(?i)allowed_domains:\s*\[?\s*[\"']?\*[\"']?\s*\]?"),
+    re.compile(r"(?i)permissions?:\s*(admin|root|full|unrestricted|all)"),
 ]
 
 
 def _has_frontmatter_field(text: str, field: str) -> bool:
     fm_match = re.match(r"^---\s*\n(.*?)\n---", text, re.DOTALL)
     fm = fm_match.group(1) if fm_match else text
-    return bool(re.search(rf"(?im)^{field}\s*:\s*\S", fm))
+    m = re.search(rf"(?im)^{field}\s*:\s*(\S+)", fm)
+    if not m:
+        return False
+    val = m.group(1).strip("'\"[]").lower()
+    return val not in ("null", "none", "todo", "unknown", "unreleased", "n/a", "")
 
 
 def audit_skill_heuristic(skill_text: str) -> List[str]:
