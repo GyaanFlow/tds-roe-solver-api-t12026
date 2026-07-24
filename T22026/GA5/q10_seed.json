@@ -13,5 +13,20 @@
       "L1"
     ],
     "rationale": "Invoice matches the purchase order and is within the standard autonomous settlement threshold for this vendor."
+  },
+  "v7::AP1::894ce8a990626ee43f74fe75bd2d8b4e4356f640176f5a4756a866ee4c0c90c6": {
+    "packageId": "AP1",
+    "actionId": "act_094f6e437f6645f69e90",
+    "action": "settle_invoice",
+    "facts": {
+      "vendorName": "Acme",
+      "invoiceNumber": "AP1",
+      "amountMinor": 1000,
+      "currency": "INR"
+    },
+    "evidenceRefs": [
+      "L1"
+    ],
+    "rationale": "Invoice matches the purchase order and is within the standard autonomous settlement threshold for this vendor."
   }
 }

@@ -214,7 +214,7 @@ async def diagnose_incident(incident: Dict[str, Any], tool_catalog: List[dict], 
         out: List[Dict[str, Any]] = []
         for c in (calls or []):
             if isinstance(c, dict) and c.get("toolName") and c["toolName"] not in effect_tool_names:
-                out.append({"toolName": c["toolName"], "arguments": c.get("arguments", {}) or {}})
+                out.append({"toolName": c["toolName"], "arguments": c.get("arguments", {}) if isinstance(c.get("arguments"), dict) else {}})
         return out[:max_diagnostics]
 
     prompt = (
@@ -232,8 +232,10 @@ async def diagnose_incident(incident: Dict[str, Any], tool_catalog: List[dict], 
             # argument values ("exact case-derived arguments") without timing out.
             raw = await aipipe_chat(messages, token, model="gpt-4o-mini", max_tokens=450, timeout=8.0, retries=1)
             out = parse_json_block(raw)
+            if not isinstance(out, dict):
+                raise ValueError("LLM returned non-object JSON")
             root_cause = out.get("rootCause")
-            evidence = [e for e in out.get("evidence", []) if isinstance(e, str)][:4]
+            evidence = [e for e in (out.get("evidence", []) or []) if isinstance(e, str)][:4]
             calls = _sanitize_calls(out.get("diagnosticCalls", []))
             if root_cause not in (incident.get("allowedRootCauses") or []):
                 root_cause = (incident.get("allowedRootCauses") or ["unknown"])[0]
@@ -351,11 +353,13 @@ async def choose_effect(root_cause: str, effect_tools: List[str], tool_catalog: 
     try:
         raw = await aipipe_chat(messages, token, model="gpt-4o-mini", max_tokens=250, timeout=6.0, retries=1)
         out = parse_json_block(raw)
+        if not isinstance(out, dict):
+            raise ValueError("LLM returned non-object JSON")
         chosen = out.get("chosenEffect")
         if chosen not in effect_tools:
             chosen = _safest_effect_fallback(effect_tools)
         chosen = _override_wrong_effect(root_cause, chosen, effect_tools)
-        return {"chosenEffect": chosen, "arguments": out.get("arguments", {}) or {}}
+        return {"chosenEffect": chosen, "arguments": out.get("arguments", {}) if isinstance(out.get("arguments"), dict) else {}}
     except TokenExpiredError:
         raise  # propagate immediately
     except Exception:
@@ -414,14 +418,30 @@ class IncidentStore:
         if not self.path.exists():
             return {"runs": {}}
         try:
-            return json.loads(self.path.read_text(encoding="utf-8"))
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                return {"runs": {}}
+            data.setdefault("runs", {})
+            return data
         except Exception:
             return {"runs": {}}
 
     def _save(self, data: Dict[str, Any]) -> None:
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(data), encoding="utf-8")
-        tmp.replace(self.path)
+        for attempt in range(3):
+            try:
+                tmp.replace(self.path)
+                return
+            except PermissionError:
+                if attempt < 2:
+                    import time as _time
+                    _time.sleep(0.05)
+                else:
+                    try:
+                        self.path.write_text(json.dumps(data), encoding="utf-8")
+                    except Exception:
+                        pass
 
     # Bump to invalidate every previously-persisted run. v5 discards runs whose
     # diagnosis was produced by the heuristic FALLBACK while the AIPipe token was
@@ -544,6 +564,8 @@ def _validate_create_schema(body: Dict[str, Any]) -> None:
 
 
 async def create_incident(body: Dict[str, Any], email: str, token: Optional[str], incoming_traceparent: Optional[str], incoming_tracestate: Optional[str] = None) -> Dict[str, Any]:
+    if not isinstance(body, dict):
+        raise MailroomError(400, "request body must be a JSON object")
     _validate_create_schema(body)
     run_id = body["runId"]
     incident = body["incident"]
@@ -699,9 +721,14 @@ async def _handle_outcomes(run: Dict[str, Any], body: Dict[str, Any], token: Opt
     outcomes = body["outcomes"]
     receipt_id = body["receiptId"]
 
+    if not isinstance(outcomes, list):
+        raise MailroomError(422, "outcomes must be an array")
+
     if run["state"] == "WAITING_DIAGNOSTICS":
         retry_dispatches = []
         for outcome in outcomes:
+            if not isinstance(outcome, dict):
+                continue
             action = run["diagnosticActions"].get(outcome.get("actionId"))
             if action is None or action["resolved"]:
                 raise MailroomError(400, f"outcome for actionId '{outcome.get('actionId')}' is not a currently pending call")
@@ -715,7 +742,7 @@ async def _handle_outcomes(run: Dict[str, Any], body: Dict[str, Any], token: Opt
             current_attempt["errorType"] = outcome.get("errorType")
             current_attempt["receiptId"] = receipt_id
             current_attempt["nonce"] = outcome.get("nonce")
-            run["receiptLog"].append({"receiptId": receipt_id, "actionId": action["actionId"], "callId": action["callId"], "attempt": current_attempt["attempt"], "status": outcome.get("status"), "resultClass": outcome.get("resultClass"), "nonce": outcome.get("nonce")})
+            run["receiptLog"].append({"receiptId": receipt_id, "actionId": action["actionId"], "callId": action["callId"], "attempt": current_attempt["attempt"], "status": outcome.get("status"), "resultClass": outcome.get("resultClass"), "nonce": outcome.get("nonce"), "errorType": outcome.get("errorType", "")})
 
             if outcome.get("status") == 503 and len(action["attempts"]) == 1:
                 new_attempt = {"attempt": 2, "spanId": new_span_id()}
@@ -763,7 +790,7 @@ async def _handle_outcomes(run: Dict[str, Any], body: Dict[str, Any], token: Opt
             ]))
 
         approval_required_for = set(run["policy"].get("approvalRequiredFor") or []) | DESTRUCTIVE_DEFAULT
-        chosen = await choose_effect(run["diagnosis"]["rootCause"], effect_tools, run["toolCatalog"], run["incident"], token) if token else {"chosenEffect": (effect_tools[0] if effect_tools else None), "arguments": {}}
+        chosen = await choose_effect(run["diagnosis"]["rootCause"], effect_tools, run["toolCatalog"], run["incident"], token) if token else {"chosenEffect": _safest_effect_fallback(effect_tools), "arguments": {}}
 
         effect_action_id = _stable_id("act", run["runId"], "effect", chosen["chosenEffect"] or "none")
         effect_call_id = _stable_id("call", run["runId"], "effect", chosen["chosenEffect"] or "none")
@@ -802,6 +829,8 @@ async def _handle_outcomes(run: Dict[str, Any], body: Dict[str, Any], token: Opt
         effect = run["effectAction"]
         final_status = "failed"  # default; set by the outcome loop below
         for outcome in outcomes:
+            if not isinstance(outcome, dict):
+                continue
             if (
                 outcome.get("actionId") != effect["actionId"]
                 or outcome.get("callId") != effect["callId"]
@@ -814,7 +843,7 @@ async def _handle_outcomes(run: Dict[str, Any], body: Dict[str, Any], token: Opt
             effect["attempts"][-1]["resultClass"] = outcome.get("resultClass")
             effect["attempts"][-1]["receiptId"] = receipt_id
             effect["attempts"][-1]["nonce"] = outcome.get("nonce")
-            run["receiptLog"].append({"receiptId": receipt_id, "actionId": effect["actionId"], "callId": effect["callId"], "attempt": effect["attempts"][-1]["attempt"], "status": outcome.get("status"), "resultClass": outcome.get("resultClass"), "nonce": outcome.get("nonce")})
+            run["receiptLog"].append({"receiptId": receipt_id, "actionId": effect["actionId"], "callId": effect["callId"], "attempt": effect["attempts"][-1]["attempt"], "status": outcome.get("status"), "resultClass": outcome.get("resultClass"), "nonce": outcome.get("nonce"), "errorType": outcome.get("errorType", "")})
             final_status = "completed" if outcome.get("status") == 200 else "failed"
         run["state"] = final_status.upper()
         return _final_response(run, final_status, chosen_effect=run.get("chosenEffect"), suppressed=[a["toolName"] for a in run["diagnosticActions"].values() if not a["success"]])
@@ -828,7 +857,11 @@ async def _handle_approvals(run: Dict[str, Any], body: Dict[str, Any], token: Op
 
     receipt_id = body["receiptId"]
     approval = run["approval"]
+    if not isinstance(body.get("approvals"), list):
+        raise MailroomError(422, "approvals must be an array")
     for a in body["approvals"]:
+        if not isinstance(a, dict):
+            continue
         if a.get("approvalId") != approval["approvalId"]:
             raise MailroomError(400, f"Unknown or mismatched approvalId '{a.get('approvalId')}'")
         if a.get("decision") not in ("approved", "rejected"):

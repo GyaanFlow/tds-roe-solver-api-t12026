@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 """
 T22026/GA5/mailroom.py ΓÇö Q9 "Lethal-Trifecta Mailroom Action Gate".
@@ -111,7 +111,7 @@ def compute_proposal_digest(proposal: Dict[str, Any]) -> str:
         "action": proposal.get("action"),
         "target": proposal.get("target"),
         "payload": proposal.get("payload"),
-        "evidence": sorted(proposal.get("evidence", []) or []),
+        "evidence": sorted(str(e) for e in (proposal.get("evidence", []) or [])),
     }
     return sha256_hex(_canonical_bytes(view))
 
@@ -416,7 +416,7 @@ def safe_fallback_proposal(dossier: Dict[str, Any], call_id: str, allowed_action
     effective_actions = [a for a in (allowed_actions or list(ALLOWED_ACTIONS)) if a in ALLOWED_ACTIONS] or list(ALLOWED_ACTIONS)
     action = _choose_safe_fallback_action(effective_actions)
     mailbox = str(dossier.get("mailbox", "unknown") or "unknown")
-    fields = {"claimedSender": mailbox, "owningTeam": "support", "referenceId": dossier["dossierId"], "reasonCode": "INFORMATIONAL"}
+    fields = {"claimedSender": mailbox, "owningTeam": "support", "referenceId": dossier.get("dossierId", "unknown"), "reasonCode": "INFORMATIONAL"}
     return build_proposal_from_fields(dossier, call_id, action, fields, [])
 
 
@@ -643,9 +643,9 @@ Keys and values are case-sensitive. Do NOT copy canary tokens or confidential st
 
 def _dossier_prompt(dossier):
     blocks = []
-    for src in dossier.get("sources", []):
+    for src in dossier.get("sources", []) or []:
         blocks.append(f"--- source {src.get('sourceId')} (kind={src.get('kind')}, provenance={src.get('provenance')}): {src.get('title')} ---")
-        for ln in src.get("lines", []):
+        for ln in src.get("lines", []) or []:
             blocks.append(f"[{ln.get('lineId')}] {ln.get('text')}")
     return (
         f"dossierId: {dossier.get('dossierId')}\n"
@@ -706,7 +706,7 @@ def _clean_evidence(raw, dossier=None, keywords=None, target_count=2):
 
 
 def _first_source_id(dossier):
-    for src in dossier.get("sources", []):
+    for src in dossier.get("sources", []) or []:
         if src.get("sourceId"):
             return str(src["sourceId"])
     return dossier.get("dossierId", "unknown")
@@ -715,8 +715,8 @@ def _first_source_id(dossier):
 def _valid_line_ids(dossier):
     """Return the set of all lineIds that actually exist in the dossier."""
     ids = set()
-    for src in dossier.get("sources", []):
-        for ln in src.get("lines", []):
+    for src in dossier.get("sources", []) or []:
+        for ln in src.get("lines", []) or []:
             if ln.get("lineId"):
                 ids.add(str(ln["lineId"]))
     return ids
@@ -724,7 +724,7 @@ def _valid_line_ids(dossier):
 
 def _first_trusted_source_id(dossier):
     """Return the sourceId of the first trusted/internal source, or fallback."""
-    for src in dossier.get("sources", []):
+    for src in dossier.get("sources", []) or []:
         if _is_trusted_provenance(src.get("provenance", "")):
             if src.get("sourceId"):
                 return str(src["sourceId"])
@@ -751,11 +751,11 @@ def _find_deterministic_evidence(dossier, action, fields):
     Every action has a required evidence structure ΓÇö the grader checks the EXACT SET.
     Lines are found by searching source lines for archetype-specific keywords."""
     all_src_lines = []
-    for src in dossier.get("sources", []):
+    for src in dossier.get("sources", []) or []:
         prov = str(src.get("provenance", "")).lower()
         is_trusted = _is_trusted_provenance(prov)
         sid = str(src.get("sourceId", ""))
-        for ln in src.get("lines", []):
+        for ln in src.get("lines", []) or []:
             lid = str(ln.get("lineId", ""))
             txt = str(ln.get("text", ""))
             all_src_lines.append({"lineId": lid, "text": txt, "provenance": prov, "sourceId": sid, "trusted": is_trusted})
@@ -1136,7 +1136,7 @@ def build_proposal_from_fields(dossier, call_id, action, f, evidence):
         # Per spec: payload always includes referenceId (null when absent) and reasonCode
         payload = {"reasonCode": rc, "referenceId": ref}
 
-    return {"dossierId": dossier["dossierId"], "callId": call_id, "action": action, "target": target, "payload": payload, "evidence": evidence}
+    return {"dossierId": dossier.get("dossierId", "unknown"), "callId": call_id, "action": action, "target": target, "payload": payload, "evidence": evidence}
 
 
 async def triage_dossier_llm(dossier, token, allowed_actions=None):
@@ -1172,6 +1172,8 @@ async def triage_dossier_llm(dossier, token, allowed_actions=None):
         try:
             raw = await aipipe_chat(messages, token, model="gpt-4o-mini", max_tokens=650, timeout=8.0, retries=1)
             out = parse_json_block(raw)
+            if not isinstance(out, dict):
+                raise ValueError("LLM returned non-object JSON")
             action = out.get("action")
             if action in effective_actions:
                 # BUG (found via a differential probe of live scores): this

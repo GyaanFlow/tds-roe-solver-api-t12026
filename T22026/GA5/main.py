@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import time
@@ -64,7 +65,7 @@ async def _read_json_body(request: Request) -> Dict[str, Any]:
     except json.JSONDecodeError as exc:
         raise ValueError(f"Invalid JSON body: {exc}") from exc
     if not isinstance(body, dict):
-        raise ValueError("JSON body must be an object")
+        raise HTTPException(status_code=422, detail="Request body must be a JSON object")
     return body
 
 
@@ -72,7 +73,10 @@ async def _run_solver(handler: Callable[[], Awaitable[T]], label: str, media_typ
     email = current_email.get()
     start = time.time()
     try:
-        result = await handler()
+        try:
+            result = await asyncio.wait_for(handler(), timeout=55.0)
+        except asyncio.TimeoutError:
+            raise RuntimeError("Request timed out after 55 seconds")
         elapsed = time.time() - start
         logger.info("GA5 %s by %s completed in %.2fs", label, email, elapsed)
         # A2A routes (media_type="application/a2a+json") MUST NOT return the
@@ -103,7 +107,7 @@ async def _run_solver(handler: Callable[[], Awaitable[T]], label: str, media_typ
         elapsed = time.time() - start
         logger.warning("GA5 %s HTTP error for %s after %.2fs: %s", label, email, elapsed, exc.detail)
         return JSONResponse(status_code=exc.status_code, media_type=media_type or "application/json", content={"error": str(exc.detail)})
-    except (RuntimeError, ValueError, KeyError) as exc:
+    except (RuntimeError, ValueError, KeyError, TypeError, AttributeError, IndexError) as exc:
         elapsed = time.time() - start
         logger.warning("GA5 %s client error for %s after %.2fs: %s", label, email, elapsed, exc)
         return JSONResponse(status_code=400, media_type=media_type or "application/json", content={"error": str(exc)})
@@ -239,6 +243,10 @@ async def mcp_endpoint(request: Request):
 @router.post("/q9")
 async def mailroom_endpoint(request: Request):
     async def _handle():
+        if request.method == "POST":
+            ct = request.headers.get("content-type", "")
+            if ct and "json" not in ct.lower():
+                raise HTTPException(status_code=415, detail="Content-Type must include application/json")
         body = await _read_json_body(request)
         operation = body.get("operation")
         email = current_email.get()
@@ -301,9 +309,9 @@ def _check_a2a_auth(request: Request) -> None:
 
 @router.post("/a2a/message:send")
 async def a2a_message_send(request: Request):
-    _check_a2a_auth(request)
 
     async def _handle():
+        _check_a2a_auth(request)
         body = await _read_json_body(request)
         principal = _a2a_principal(request)
         token = current_token.get()
@@ -316,9 +324,9 @@ async def a2a_message_send(request: Request):
 
 @router.get("/a2a/tasks/{task_id}")
 async def a2a_get_task(task_id: str, request: Request):
-    _check_a2a_auth(request)
 
     async def _handle():
+        _check_a2a_auth(request)
         principal = _a2a_principal(request)
         try:
             return a2a_agent.get_task(task_id, principal)
@@ -329,9 +337,9 @@ async def a2a_get_task(task_id: str, request: Request):
 
 @router.get("/a2a/tasks")
 async def a2a_list_tasks(request: Request):
-    _check_a2a_auth(request)
 
     async def _handle():
+        _check_a2a_auth(request)
         principal = _a2a_principal(request)
         return a2a_agent.list_tasks(principal)
     return await _run_solver(_handle, "Q10/list-tasks", media_type="application/a2a+json")
@@ -339,9 +347,9 @@ async def a2a_list_tasks(request: Request):
 
 @router.post("/a2a/tasks/{task_id}:cancel")
 async def a2a_cancel_task(task_id: str, request: Request):
-    _check_a2a_auth(request)
 
     async def _handle():
+        _check_a2a_auth(request)
         principal = _a2a_principal(request)
         try:
             return await a2a_agent.cancel_task(task_id, principal)
@@ -356,8 +364,8 @@ async def a2a_cancel_task(task_id: str, request: Request):
 # ---------------------------------------------------------------------------
 @router.post("/v2/incidents")
 async def incidents_create_endpoint(request: Request):
-    _require_content_type(request, "application/json")
     async def _handle():
+        _require_content_type(request, "application/json")
         body = await _read_json_body(request)
         email = current_email.get()
         token = _tenant_token()
@@ -372,8 +380,8 @@ async def incidents_create_endpoint(request: Request):
 
 @router.post("/v2/incidents/{run_id}/receipts")
 async def incidents_receipts_endpoint(run_id: str, request: Request):
-    _require_content_type(request, "application/json")
     async def _handle():
+        _require_content_type(request, "application/json")
         body = await _read_json_body(request)
         email = current_email.get()
         token = _tenant_token()

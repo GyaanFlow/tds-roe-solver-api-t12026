@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 """
 T22026/GA5/a2a_agent.py ΓÇö Q10 "A2A Invoice Action Agent".
@@ -59,7 +59,12 @@ def register_base_url(base_url: str) -> None:
             b_clean = b.rstrip("/") + "/"
             if b_clean not in data["bases"]:
                 data["bases"].append(b_clean)
-        _REGISTRY_PATH.write_text(json.dumps(data), encoding="utf-8")
+        tmp = _REGISTRY_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data), encoding="utf-8")
+        try:
+            tmp.replace(_REGISTRY_PATH)
+        except PermissionError:
+            _REGISTRY_PATH.write_text(json.dumps(data), encoding="utf-8")
 
 
 def _load_registry() -> Dict[str, Any]:
@@ -144,7 +149,7 @@ def _safe_fallback_proposal(package: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "action": "request_approval",
         "facts": {"vendorName": "unknown", "invoiceNumber": "unknown", "amountMinor": 0, "currency": "INR"},
-        "evidenceRefs": [package.get("packageId", "unknown")],
+        "evidenceRefs": [str(package.get("packageId") or "unknown")],
         "rationale": "Automatic fallback: the automated triage could not confidently classify this package, so it is routed for manual approval rather than acting on an uncertain reading of the source documents.",
     }
 
@@ -202,6 +207,8 @@ async def triage_package_llm(package: Dict[str, Any], token: str) -> Dict[str, A
         try:
             raw = await aipipe_chat(messages, token, model="gpt-4o-mini", max_tokens=600, timeout=12.0, retries=1)
             out = parse_json_block(raw)
+            if not isinstance(out, dict):
+                raise ValueError("LLM returned non-object JSON")
             action = out.get("action")
             facts = out.get("facts")
             if not isinstance(facts, dict):
@@ -212,8 +219,10 @@ async def triage_package_llm(package: Dict[str, Any], token: str) -> Dict[str, A
             facts.setdefault("currency", "INR")
 
             evidence_refs = out.get("evidenceRefs", [])
+            if not isinstance(evidence_refs, list):
+                evidence_refs = [str(evidence_refs)] if evidence_refs else []
             cleaned_refs = []
-            for r in (evidence_refs or []):
+            for r in evidence_refs:
                 if isinstance(r, str):
                     cleaned = r.strip().strip("[]").strip()
                     if cleaned:
@@ -221,14 +230,14 @@ async def triage_package_llm(package: Dict[str, Any], token: str) -> Dict[str, A
             
             if not cleaned_refs:
                 ids = set()
-                for doc in package.get("docs", []) or []:
+                for doc in (package.get("docs", []) or []):
                     if isinstance(doc, dict):
                         if doc.get("id"):
                             ids.add(str(doc["id"]))
-                    elif isinstance(doc, str):
-                        ids.add(doc[:20])
+                        elif isinstance(doc, str):
+                            ids.add(doc[:20])
                 if not ids:
-                    ids.add(package.get("packageId", "unknown"))
+                    ids.add(str(package.get("packageId") or "unknown"))
                 cleaned_refs = sorted(ids)
             else:
                 cleaned_refs = sorted(set(cleaned_refs))
@@ -262,6 +271,7 @@ async def triage_package_llm(package: Dict[str, Any], token: str) -> Dict[str, A
 
 
 _SEED_FILE = Path(__file__).parent / "q10_seed.json"
+_SEED_LOCK = threading.Lock()
 _SEED_CACHE: Dict[str, Any] = {}
 if _SEED_FILE.exists():
     try:
@@ -287,14 +297,32 @@ class A2AStore:
         if not self.path.exists():
             return {"messages": {}, "tasks": {}, "package_cache": {}}
         try:
-            return json.loads(self.path.read_text(encoding="utf-8"))
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                return {"messages": {}, "tasks": {}, "package_cache": {}}
+            data.setdefault("messages", {})
+            data.setdefault("tasks", {})
+            data.setdefault("package_cache", {})
+            return data
         except Exception:
             return {"messages": {}, "tasks": {}, "package_cache": {}}
 
     def _save(self, data: Dict[str, Any]) -> None:
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(data), encoding="utf-8")
-        tmp.replace(self.path)
+        for attempt in range(3):
+            try:
+                tmp.replace(self.path)
+                return
+            except PermissionError:
+                if attempt < 2:
+                    import time as _time
+                    _time.sleep(0.05)
+                else:
+                    try:
+                        self.path.write_text(json.dumps(data), encoding="utf-8")
+                    except Exception:
+                        pass
 
     def get_message_record(self, message_id: str) -> Optional[Dict[str, Any]]:
         with self._lock:
@@ -335,7 +363,8 @@ class A2AStore:
             cached = self._load()["package_cache"].get(key)
             if cached:
                 return cached
-        return _SEED_CACHE.get(key)
+        with _SEED_LOCK:
+            return _SEED_CACHE.get(key)
 
     def put_cached_package_proposal(self, package_id: str, fingerprint: str, proposal: Dict[str, Any]) -> None:
         key = self._pkg_cache_key(package_id, fingerprint)
@@ -343,17 +372,20 @@ class A2AStore:
             data = self._load()
             data["package_cache"][key] = proposal
             self._save(data)
-        _SEED_CACHE[key] = proposal
-        try:
-            _SEED_FILE.write_text(json.dumps(_SEED_CACHE, indent=2), encoding="utf-8")
-        except Exception:
-            pass
+        with _SEED_LOCK:
+            _SEED_CACHE[key] = proposal
+            try:
+                _SEED_FILE.write_text(json.dumps(_SEED_CACHE, indent=2), encoding="utf-8")
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------
 # message:send
 # ---------------------------------------------------------------------------
 def _validate_message_envelope(body: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(body, dict):
+        raise MailroomError(400, "request body must be a JSON object")
     message = body.get("message")
     if not isinstance(message, dict) or not message.get("messageId"):
         raise MailroomError(400, "'message.messageId' is required")
@@ -447,11 +479,16 @@ async def _handle_initial_batch(message: Dict[str, Any], part: Dict[str, Any], p
     if not batch_id or not isinstance(packages, list) or not packages:
         raise MailroomError(422, "'data.batchId' and non-empty 'data.packages' are required")
 
+    if not isinstance(packages, list):
+        raise MailroomError(422, "'packages' must be an array")
+
     task_id = task_id_for(principal, batch_id)
     context_id = context_id_for(principal, batch_id)
 
     seen_package_ids = set()
     for pkg in packages:
+        if not isinstance(pkg, dict):
+            raise MailroomError(422, "each package must be an object")
         package_id = pkg.get("packageId")
         if not package_id or package_id in seen_package_ids:
             raise MailroomError(422, "each package needs a unique 'packageId'")
@@ -473,7 +510,14 @@ async def _handle_initial_batch(message: Dict[str, Any], part: Dict[str, Any], p
     had_any_fallback = False
     pending_indices = [i for i, c in enumerate(cached_or_none) if c is None]
     if pending_indices:
-        results = await asyncio.gather(*[_triage_one(packages[i]) for i in pending_indices])
+        results = await asyncio.gather(*[_triage_one(packages[i]) for i in pending_indices], return_exceptions=True)
+        for idx, result in enumerate(results):
+            if isinstance(result, BaseException):
+                import logging
+                logging.getLogger("ga5_a2a").warning("Q10 triage failed for package %s: %s", packages[pending_indices[idx]].get('packageId'), result)
+                fb = _safe_fallback_proposal(packages[pending_indices[idx]])
+                fb['_fallback'] = True
+                results[idx] = fb
         for i, triage in zip(pending_indices, results):
             package_id = packages[i]["packageId"]
             action_id = action_id_for(principal, package_id, fingerprints[i])
@@ -578,14 +622,15 @@ async def _handle_continuation(message: Dict[str, Any], part: Dict[str, Any], me
 def _public_task_view(task: Dict[str, Any]) -> Dict[str, Any]:
     """Return only the A2A spec-mandated task fields. Never leak internal
     bookkeeping fields (batchId, proposalsByActionId, createdAt, etc.)."""
-    view: Dict[str, Any] = {
-        "id": task["id"],
-        "contextId": task["contextId"],
-        "state": task["state"],
-        "history": task["history"],
-        "artifacts": task["artifacts"],
+    state = task.get("state", TASK_SUBMITTED)
+    return {
+        "id": task.get("id", ""),
+        "contextId": task.get("contextId", ""),
+        "state": state,
+        "status": {"state": state},
+        "history": task.get("history", []),
+        "artifacts": task.get("artifacts", []),
     }
-    return view
 
 
 # ---------------------------------------------------------------------------
