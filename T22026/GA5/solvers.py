@@ -435,7 +435,7 @@ async def audit_skill_llm(skill_text: str, token: str) -> List[str]:
         'Return strictly JSON: {"categories": ["category_name", ...]}\n\n'
         f"SKILL FILE:\n{skill_text}"
     )
-    out = parse_json_block(await aipipe_chat([{"role": "user", "content": prompt}], token, model="gpt-4o-mini", max_tokens=300))
+    out = parse_json_block(await aipipe_chat([{"role": "user", "content": prompt}], token, model="gpt-4o", max_tokens=600))
     categories = out.get("categories", [])
     if not isinstance(categories, list):
         return []
