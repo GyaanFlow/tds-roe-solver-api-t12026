@@ -331,24 +331,32 @@ def mcp_handle(body: Dict[str, Any], challenge_header: Optional[str], normalized
 # Q4: Skill Safety Audit — Scanner API (heuristic; LLM upgrade lives in main.py)
 # ---------------------------------------------------------------------------
 _SECRET_PATTERNS = [
-    re.compile(r"(?i)(api[_-]?key|secret|token|password|webhook)\s*[:=]\s*['\"]?[A-Za-z0-9_\-/+]{12,}"),
+    re.compile(r"(?i)(api[_-]?key|secret|token|password|webhook)\s*[:=]\s*['\"]?[A-Za-z0-9_\-/+]{10,}"),
     re.compile(r"sk-[A-Za-z0-9]{16,}"),
     re.compile(r"AKIA[0-9A-Z]{16}"),
+    re.compile(r"ghp_[A-Za-z0-9]{20,}"),
+    re.compile(r"glpat-[A-Za-z0-9_-]{20,}"),
+    re.compile(r"xoxb-[0-9]{10,}"),
+    re.compile(r"eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}"),
     re.compile(r"https://hooks\.slack\.com/services/\S+"),
 ]
 _SECRET_IGNORE = (
     "${", "os.environ", "process.env", "getenv"
 )
 _INJECTION_PATTERNS = [
-    re.compile(r"(?i)ignore (the )?(user'?s?|previous) (stop|cancel|instructions)"),
+    re.compile(r"(?i)ignore (the )?(user'?s?|previous) (stop|cancel|instructions|prompt)"),
     re.compile(r"(?i)do not (tell|inform|notify) the user"),
-    re.compile(r"(?i)silently (send|exfiltrate|upload|email)"),
+    re.compile(r"(?i)silently (send|exfiltrate|upload|email|transmit)"),
     re.compile(r"(?i)without (asking|notifying|telling) (the )?user"),
+    re.compile(r"(?i)disregard (the )?user"),
+    re.compile(r"(?i)override (the )?control"),
 ]
 _EXCESSIVE_PERM_PATTERNS = [
     re.compile(r"(?i)(read|write|access).{0,20}(entire|whole|all|full).{0,10}(filesystem|disk|drive)"),
-    re.compile(r"(?i)network:\s*any|domains?:\s*\*|egress.{0,10}any domain"),
-    re.compile(r"(?i)permissions?:\s*\[?\s*(read|write)\s*,\s*(read|write).{0,20}(all|\*|any)"),
+    re.compile(r"(?i)network:\s*(any|\*)|domains?:\s*\*|egress.{0,10}(any domain|\*)"),
+    re.compile(r"(?i)permissions?:\s*\[?\s*(read|write|all|\*)\s*,\s*(read|write|all|\*).{0,20}(all|\*|any)"),
+    re.compile(r"(?i)scope:\s*(all|full|\*)"),
+    re.compile(r"(?i)allowed_domains:\s*\[?\s*[\"']?\*[\"']?\s*\]?"),
 ]
 
 
@@ -382,12 +390,13 @@ def audit_skill_heuristic(skill_text: str) -> List[str]:
     if any(p.search(skill_text) for p in _EXCESSIVE_PERM_PATTERNS):
         categories.append("excessive_permissions")
 
-    # 4. Unclear Provenance
+    # 4. Unclear Provenance (missing metadata OR silent version rewrite)
     low = skill_text.lower()
     has_author = _has_frontmatter_field(skill_text, "author")
     has_version = _has_frontmatter_field(skill_text, "version")
     has_changelog = "changelog:" in low or "# changelog" in low or "## changelog" in low or "### changelog" in low
-    if not has_author and not has_version and not has_changelog:
+    silent_version_rewrite = bool(re.search(r"(?i)silently (rewrite|update|change|modify) (its own )?version", skill_text))
+    if (not has_author and not has_version and not has_changelog) or silent_version_rewrite:
         categories.append("unclear_provenance")
 
     return categories
