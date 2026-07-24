@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 """
-T22026/GA5/a2a_agent.py ΓÇö Q10 "A2A Invoice Action Agent".
+T22026/GA5/a2a_agent.py — Q10 "A2A Invoice Action Agent".
 
 Implements the A2A 1.0 HTTP+JSON surface (agent-card discovery, message:send,
 tasks list/get/cancel) for a durable invoice-triage agent. Reuses the same
@@ -12,7 +12,7 @@ Card published at a fixed origin-level path. This hub is shared across every
 student at one origin, so the Agent Card's `supportedInterfaces` is a *shared,
 accumulating registry* of every base URL a student has registered (via
 `POST /ga5/onboard`, which every student calls anyway to get their submission
-URLs) ΓÇö see `register_base_url` / `agent_card_json`.
+URLs) — see `register_base_url` / `agent_card_json`.
 """
 
 import asyncio
@@ -157,13 +157,13 @@ def _safe_fallback_proposal(package: Dict[str, Any]) -> Dict[str, Any]:
 _TRIAGE_SYSTEM = """You are a precise invoice-triage agent for an accounts-payable team. Read ONE \
 invoice package (case file of documents/lines) and choose EXACTLY one action:
 - settle_invoice: the invoice is valid, reconciled against its PO/receipt, and within autonomous \
-payment authority ΓÇö pay it now.
+payment authority — pay it now.
 - request_approval: commercially valid but ABOVE the delegated authority threshold or otherwise \
 needs a human approver before payment.
 - hold_invoice: pause payment until a specific, stated verification completes (e.g. awaiting goods \
 receipt, awaiting tax/bank detail confirmation).
 - reject_duplicate: this same commercial invoice (same vendor + invoice number/amount) was ALREADY paid \
-or already submitted ΓÇö reject as a duplicate.
+or already submitted — reject as a duplicate.
 - open_exception: the records materially CONFLICT (e.g. amount/PO/vendor mismatch) and need an \
 exception workflow to resolve.
 
@@ -177,7 +177,7 @@ Extract facts precisely from the documents:
 - currency: the ISO-4217 3-letter code (USD, INR, EUR, ...).
 
 Cite in evidenceRefs ALL decisive line/document reference IDs (the ids given \
-in the package) that justify BOTH the facts and the action. Every decisive line must be included ΓÇö the \
+in the package) that justify BOTH the facts and the action. Every decisive line must be included — the \
 grader rejects incomplete evidence sets. Write a rationale of 60-1500 characters that names the chosen \
 action and refers to those evidence ids.
 
@@ -186,7 +186,7 @@ Return strictly JSON (no extra keys):
 """
 
 
-# NOTE ΓÇö LLM-backed triage (triage_package_llm): uses GPT-4o-mini via AIPipe to classify
+# NOTE — LLM-backed triage (triage_package_llm): uses GPT-4o-mini via AIPipe to classify
 # each invoice package. The LLM may hallucinate or return malformed JSON; the code
 # retries up to 3 times automatically. If your AIPipe token has EXPIRED (HTTP 401/403),
 # you will receive a clear 401 error. Get a fresh token at https://aipipe.org and embed it:
@@ -195,7 +195,7 @@ async def triage_package_llm(package: Dict[str, Any], token: str) -> Dict[str, A
     """LLM-backed invoice package triage. Uses GPT-4o-mini via AIPipe.
 
     ΓÜá∩╕Å  LLM NOTE: Retries up to 3 times for schema/hallucination errors.
-    TokenExpiredError is re-raised immediately ΓÇö retrying won't fix an expired token.
+    TokenExpiredError is re-raised immediately — retrying won't fix an expired token.
     """
     from T22026.GA4.solvers import TokenExpiredError, aipipe_chat, parse_json_block
 
@@ -256,7 +256,7 @@ async def triage_package_llm(package: Dict[str, Any], token: str) -> Dict[str, A
             import logging
             logging.getLogger("ga5_a2a").warning("Q10 triage attempt %d schema invalid for package %s: %s", attempt + 1, package.get("packageId"), _reason)
         except TokenExpiredError:
-            raise  # propagate immediately ΓÇö retrying won't fix an expired token
+            raise  # propagate immediately — retrying won't fix an expired token
         except Exception as exc:
             import logging
             logging.getLogger("ga5_a2a").warning("Q10 triage attempt %d failed for package %s: %s", attempt + 1, package.get("packageId"), exc)

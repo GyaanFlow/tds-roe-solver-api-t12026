@@ -230,7 +230,7 @@ async def diagnose_incident(incident: Dict[str, Any], tool_catalog: List[dict], 
         try:
             # Increased timeout: 8s allows the model to produce well-formed, specific
             # argument values ("exact case-derived arguments") without timing out.
-            raw = await aipipe_chat(messages, token, model="gpt-4o-mini", max_tokens=450, timeout=8.0, retries=1)
+            raw = await aipipe_chat(messages, token, model="gpt-4o-mini", max_tokens=450, timeout=4.5, retries=0)
             out = parse_json_block(raw)
             if not isinstance(out, dict):
                 raise ValueError("LLM returned non-object JSON")
@@ -351,7 +351,7 @@ async def choose_effect(root_cause: str, effect_tools: List[str], tool_catalog: 
 
     messages = [{"role": "system", "content": _EFFECT_SYSTEM}, {"role": "user", "content": prompt}]
     try:
-        raw = await aipipe_chat(messages, token, model="gpt-4o-mini", max_tokens=250, timeout=6.0, retries=1)
+        raw = await aipipe_chat(messages, token, model="gpt-4o-mini", max_tokens=250, timeout=4.0, retries=0)
         out = parse_json_block(raw)
         if not isinstance(out, dict):
             raise ValueError("LLM returned non-object JSON")

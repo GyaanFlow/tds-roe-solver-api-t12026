@@ -114,20 +114,14 @@ def health():
 
 
 @app.get("/.well-known/agent-card.json")
+@app.get("/.well-known/a2a/agent-card.json")
+@app.get("/.well-known/a2a/agent.json")
+@app.get("/agent-card.json")
+@app.get("/agent.json")
 def a2a_agent_card(request: Request):
-    """GA5 Q10's A2A Agent Card. Origin-level per the A2A 1.0 spec (one card per
-    origin), even though this hub serves many students from one origin -- see
-    T22026/GA5/a2a_agent.py for how supportedInterfaces accumulates per-student
-    base URLs registered via POST /ga5/onboard."""
+    """GA5 Q10's A2A Agent Card. Origin-level per the A2A 1.0 spec."""
     from fastapi.responses import JSONResponse
     from T22026.GA5.a2a_agent import agent_card_json
-    # No hardcoded default registration here -- real base URLs are registered
-    # dynamically per-caller by T22026/GA5/main.py::_check_a2a_auth on every
-    # authenticated A2A request, using that request's own email+token. A
-    # previous hardcoded entry here baked a specific student's email and JWT
-    # token literally into source control and re-registered it on every single
-    # agent-card request -- a credential-hygiene issue with no remaining
-    # purpose now that registration is dynamic.
     return JSONResponse(
         content=agent_card_json(),
         headers={"Content-Type": "application/a2a+json"}

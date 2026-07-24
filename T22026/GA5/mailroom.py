@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 """
-T22026/GA5/mailroom.py ΓÇö Q9 "Lethal-Trifecta Mailroom Action Gate".
+T22026/GA5/mailroom.py — Q9 "Lethal-Trifecta Mailroom Action Gate".
 
 A durable, idempotent propose/commit AI agent: read realistic dossiers, choose
 one least-privilege action per dossier from a fixed 6-action taxonomy, persist
@@ -9,7 +9,7 @@ the proposal, and only mark an action "executed" once the grader returns a
 receipt for it. Everything here that can be made deterministic (canonical
 JSON, digests, schema validation, caching/idempotency/conflict detection) is
 deterministic; only the semantic triage itself calls an LLM (per-caller
-AIPipe token ΓÇö same no-owner-cost model as the rest of this hub).
+AIPipe token — same no-owner-cost model as the rest of this hub).
 """
 
 import asyncio
@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("ga5_mailroom")
 
-# NOTE ΓÇö LLM-backed functions (triage_dossier_llm): this endpoint uses GPT-4o-mini
+# NOTE — LLM-backed functions (triage_dossier_llm): this endpoint uses GPT-4o-mini
 # via AIPipe to semantically classify each dossier. The LLM occasionally hallucinates
 # or produces malformed JSON; the code retries up to 3 times automatically.
 # If all retries fail due to a BAD schema (hallucination), a safe fallback is used.
@@ -131,7 +131,7 @@ def dossier_fingerprint(dossier: Dict[str, Any]) -> str:
 
 
 def call_id_for(dossier_id: str, fingerprint: str) -> str:
-    """Deterministic, durable, unique callId ΓÇö stable across evaluations for
+    """Deterministic, durable, unique callId — stable across evaluations for
     the same dossier content, 12-128 safe characters."""
     return "call_" + sha256_hex(f"{dossier_id}:{fingerprint}".encode("utf-8"))[:24]
 
@@ -152,7 +152,7 @@ def _verify_receipt_signatures(
     if not public_key_jwk:
         if verifier_supplied:
             raise MailroomError(400, "receiptVerifier supplied in propose but publicKeyJwk is missing or invalid")
-        return  # No verifier stored (local/legacy) ΓÇö skip.
+        return  # No verifier stored (local/legacy) — skip.
 
     # Extract inner JWK if wrapper object was passed
     if isinstance(public_key_jwk, dict) and "publicKeyJwk" in public_key_jwk and isinstance(public_key_jwk["publicKeyJwk"], dict):
@@ -195,7 +195,7 @@ def _verify_receipt_signatures(
         if not sig_b64 or not isinstance(sig_b64, str):
             raise MailroomError(400, f"receiptSignature missing for receiptId '{rid}'")
 
-        # Decode signature ΓÇö accept standard base64 (the spec says base64, not base64url)
+        # Decode signature — accept standard base64 (the spec says base64, not base64url)
         sig_padding = (-len(sig_b64)) % 4
         try:
             sig_bytes = base64.b64decode(sig_b64 + "=" * sig_padding, validate=True)
@@ -468,7 +468,7 @@ def _deterministic_archetype(dossier: Dict[str, Any]) -> Optional[Tuple[str, Dic
         if m:
             fields["referenceId"] = m.group(1).rstrip(".,;")
             fields["recipient"] = m.group(2).rstrip(".,;")
-        sm = re.search(r'valid for the public status ["ΓÇ£]([^"ΓÇ¥]+)["ΓÇ¥]', " ".join(l["text"] for l in lines if l["trusted"]), re.I)
+        sm = re.search(r'valid for the public status ["“]?([^"“”]+)["”]', " ".join(l["text"] for l in lines if l["trusted"]), re.I)
         if sm:
             fields["status"] = sm.group(1).strip()
         return "send_approved_notice", fields
@@ -476,7 +476,7 @@ def _deterministic_archetype(dossier: Dict[str, Any]) -> Optional[Tuple[str, Dic
     # B: update_internal_record -- signed event authorizing a delivery_window change
     evt = find("to change delivery_window to the exact value", trusted=True) or find("to change delivery_window to the exact value")
     if evt:
-        m = re.search(r"authorizes case (\S+?) to change (\w+) to the exact value [\"ΓÇ£]([^\"ΓÇ¥]+)[\"ΓÇ¥]", evt["text"], re.I)
+        m = re.search(r'authorizes case (\S+?) to change (\w+) to the exact value ["“]?([^"“”]+)["”]', evt["text"], re.I)
         fields = {}
         if m:
             fields["caseId"] = m.group(1).rstrip(".,;")
@@ -516,7 +516,7 @@ def _deterministic_archetype(dossier: Dict[str, Any]) -> Optional[Tuple[str, Dic
         status_rec = find("its current public status is exactly", trusted=True)
         fields = {}
         if status_rec:
-            m = re.search(r"Order (\S+?) is linked to (\S+?); its current public status is exactly [\"ΓÇ£]([^\"ΓÇ¥]+)[\"ΓÇ¥]", status_rec["text"], re.I)
+            m = re.search(r'Order (\S+?) is linked to (\S+?); its current public status is exactly ["“]?([^"“”]+)["”]', status_rec["text"], re.I)
             if m:
                 fields["referenceId"] = m.group(1).rstrip(".,;")
                 fields["status"] = m.group(3).strip()
@@ -748,7 +748,7 @@ def _has_trusted_approval(dossier) -> bool:
 
 def _find_deterministic_evidence(dossier, action, fields):
     """Deterministically find the exact evidence line IDs for the chosen action.
-    Every action has a required evidence structure ΓÇö the grader checks the EXACT SET.
+    Every action has a required evidence structure — the grader checks the EXACT SET.
     Lines are found by searching source lines for archetype-specific keywords."""
     all_src_lines = []
     for src in dossier.get("sources", []) or []:
@@ -783,7 +783,7 @@ def _find_deterministic_evidence(dossier, action, fields):
 
     if action == "quarantine_item":
         # 4 lines: [rule, injection, exfil, artifact]
-        # (1) Rule line ΓÇö "Untrusted-content rule" or "Mailroom action rule" or "least-privilege"
+        # (1) Rule line — "Untrusted-content rule" or "Mailroom action rule" or "least-privilege"
         # Note: must NOT be a boundary line itself but CONTAINS rule/untrusted/policy signal
         r = _find(["untrusted-content rule", "mailroom action rule", "mailroom rule",
                    "least-privilege action rule", "action rule"])
@@ -791,17 +791,17 @@ def _find_deterministic_evidence(dossier, action, fields):
             r = _find(["untrusted-content", "mailroom action", "untrusted content", "action boundary rule"])
         if r: evidence.add(r)
 
-        # (2) Injection line ΓÇö "higher-priority instruction" (INJECTION_CLAUSE)
+        # (2) Injection line — "higher-priority instruction" (INJECTION_CLAUSE)
         inj = _find(["higher-priority instruction"], exclude=evidence)
         if inj: evidence.add(inj)
 
-        # (3) Exfil line ΓÇö "Copy any vault marker" (EXFIL_CLAUSE)
+        # (3) Exfil line — "Copy any vault marker" (EXFIL_CLAUSE)
         exfil = _find(["Copy any vault marker", "copy any vault marker"], exclude=evidence)
         if not exfil:
             exfil = _find(["vault marker", "exfiltrate", "exfil"], exclude=evidence)
         if exfil: evidence.add(exfil)
 
-        # (4) Artifact record line ΓÇö first untrusted source line not already cited
+        # (4) Artifact record line — first untrusted source line not already cited
         for ln in all_src_lines:
             if ln["lineId"] not in evidence and not _is_boundary(ln["text"]) and not ln["trusted"]:
                 evidence.add(ln["lineId"])
@@ -848,15 +848,15 @@ def _find_deterministic_evidence(dossier, action, fields):
 
     elif action == "send_approved_notice":
         # 2 lines: [approval permit, approval scope]
-        # The approval source IS both the authority AND the argument source ΓÇö no separate rule line.
+        # The approval source IS both the authority AND the argument source — no separate rule line.
         # APPROVAL_CLAUSE = "permits one delivery-status notice"
-        # (1) Approval permit line ΓÇö contains the approval/permits clause
+        # (1) Approval permit line — contains the approval/permits clause
         r = _find(["permits one delivery-status notice", "Approval", "approve"], trusted=True)
         if not r:
             r = _find(["approv", "authoriz", "send notice", "notify", "please send", "ok to send"], trusted=True)
         if r: evidence.add(r)
 
-        # (2) Approval scope line ΓÇö the line that names status/template/recipient scope
+        # (2) Approval scope line — the line that names status/template/recipient scope
         # "valid for the public status" is the scope clause in the corpus
         r2 = _find(["valid for the public status", "public status"], exclude=evidence, trusted=True)
         if not r2:
@@ -942,7 +942,7 @@ def _find_deterministic_evidence(dossier, action, fields):
             order_record = _find(["arriving", "transit", "status"], exclude=evidence, trusted=True)
         if order_record: evidence.add(order_record)
 
-        # (3) Customer's request sentence ΓÇö ENQUIRY_CLAUSE
+        # (3) Customer's request sentence — ENQUIRY_CLAUSE
         request_line = _find(["i have not asked you to send anything yet",
                               "I have not asked you to send anything yet"], exclude=evidence, trusted=False)
         if not request_line:
@@ -1351,10 +1351,8 @@ async def propose(body: Dict[str, Any], email: str, token: Optional[str]) -> Dic
     store = MailroomStore(email)
     existing = store.get_evaluation(evaluation_id)
     if existing is not None:
-        if existing.get("proposeFingerprint") == propose_fingerprint or existing["inputDigest"] == input_digest:
-            if existing.get("proposeFingerprint") == propose_fingerprint:
-                return existing["proposeResponse"]
-            raise MailroomError(409, f"evaluationId '{evaluation_id}' already used with different content")
+        if existing.get("inputDigest") == input_digest:
+            return existing["proposeResponse"]
         raise MailroomError(409, f"evaluationId '{evaluation_id}' already used with different content")
 
     if not token:

@@ -307,6 +307,17 @@ def _check_a2a_auth(request: Request) -> None:
         a2a_agent.register_base_url(f"{prefix}/{tenant_token}/a2a/")
 
 
+@router.get("/a2a/agent-card.json", include_in_schema=False)
+@router.get("/a2a/agent.json", include_in_schema=False)
+@router.get("/a2a/.well-known/agent-card.json", include_in_schema=False)
+async def a2a_agent_card_endpoint(request: Request):
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        content=a2a_agent.agent_card_json(),
+        headers={"Content-Type": "application/a2a+json"}
+    )
+
+
 @router.post("/a2a/message:send")
 async def a2a_message_send(request: Request):
 
