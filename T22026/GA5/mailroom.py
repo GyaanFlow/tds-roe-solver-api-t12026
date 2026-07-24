@@ -1206,6 +1206,7 @@ async def triage_dossier_llm(dossier, token, allowed_actions=None):
 
 
 _SEED_FILE = Path(__file__).parent / "q9_seed.json"
+_SEED_LOCK = threading.Lock()
 _SEED_CACHE: Dict[str, Any] = {}
 if _SEED_FILE.exists():
     try:
@@ -1231,14 +1232,32 @@ class MailroomStore:
         if not self.path.exists():
             return {"dossier_cache": {}, "evaluations": {}}
         try:
-            return json.loads(self.path.read_text(encoding="utf-8"))
-        except Exception:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                return {"dossier_cache": {}, "evaluations": {}}
+            data.setdefault("dossier_cache", {})
+            data.setdefault("evaluations", {})
+            return data
+        except Exception as exc:
+            logger.warning("Q9 store load failed for %s: %s", self.path, exc)
             return {"dossier_cache": {}, "evaluations": {}}
 
     def _save(self, data: Dict[str, Any]) -> None:
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(data), encoding="utf-8")
-        tmp.replace(self.path)
+        for attempt in range(3):
+            try:
+                tmp.replace(self.path)
+                return
+            except PermissionError:
+                if attempt < 2:
+                    import time as _time
+                    _time.sleep(0.05)
+                else:
+                    try:
+                        self.path.write_text(json.dumps(data), encoding="utf-8")
+                    except Exception:
+                        pass
 
     # Bump CACHE_NAMESPACE to invalidate every previously-cached proposal. v2
     # discards the entries poisoned while the AIPipe token was quota-exhausted,
@@ -1255,7 +1274,8 @@ class MailroomStore:
             cached = data["dossier_cache"].get(key)
             if cached:
                 return cached
-        return _SEED_CACHE.get(key)
+        with _SEED_LOCK:
+            return _SEED_CACHE.get(key)
 
     def put_cached_proposal(self, dossier_id: str, fingerprint: str, proposal: Dict[str, Any]) -> None:
         key = self._cache_key(dossier_id, fingerprint)
@@ -1263,11 +1283,12 @@ class MailroomStore:
             data = self._load()
             data["dossier_cache"][key] = proposal
             self._save(data)
-        _SEED_CACHE[key] = proposal
-        try:
-            _SEED_FILE.write_text(json.dumps(_SEED_CACHE, indent=2), encoding="utf-8")
-        except Exception:
-            pass
+        with _SEED_LOCK:
+            _SEED_CACHE[key] = proposal
+            try:
+                _SEED_FILE.write_text(json.dumps(_SEED_CACHE, indent=2), encoding="utf-8")
+            except Exception:
+                pass
 
     def get_evaluation(self, evaluation_id: str) -> Optional[Dict[str, Any]]:
         with self._lock:
@@ -1296,6 +1317,8 @@ class MailroomError(Exception):
 
 
 def _validate_propose_schema(body: Dict[str, Any]) -> None:
+    if not isinstance(body, dict):
+        raise MailroomError(400, "request body must be a JSON object")
     if body.get("profile") != PROFILE:
         raise MailroomError(400, f"'profile' must be '{PROFILE}'")
     if not isinstance(body.get("evaluationId"), str) or not body["evaluationId"]:
@@ -1358,7 +1381,13 @@ async def propose(body: Dict[str, Any], email: str, token: Optional[str]) -> Dic
 
     pending_indices = [i for i, c in enumerate(cached_or_none) if c is None]
     if pending_indices:
-        results = await asyncio.gather(*[_triage_one(dossiers[i]) for i in pending_indices])
+        results = await asyncio.gather(*[_triage_one(dossiers[i]) for i in pending_indices], return_exceptions=True)
+        # Replace any failed results with safe fallbacks
+        for idx, result in enumerate(results):
+            if isinstance(result, BaseException):
+                logger.warning("Q9 triage failed for dossier %s: %s", dossiers[pending_indices[idx]].get('dossierId'), result)
+                results[idx] = safe_fallback_proposal(dossiers[pending_indices[idx]], call_id_for(dossiers[pending_indices[idx]]['dossierId'], fingerprints[pending_indices[idx]]), allowed_actions)
+                results[idx]['_fallback'] = True
         for i, proposal in zip(pending_indices, results):
             is_fallback = bool(proposal.pop("_fallback", False))
             cached_or_none[i] = proposal
@@ -1395,6 +1424,8 @@ async def propose(body: Dict[str, Any], email: str, token: Optional[str]) -> Dic
 
 
 def _validate_commit_schema(body: Dict[str, Any]) -> None:
+    if not isinstance(body, dict):
+        raise MailroomError(400, "request body must be a JSON object")
     if body.get("profile") != PROFILE:
         raise MailroomError(400, f"'profile' must be '{PROFILE}'")
     if not isinstance(body.get("evaluationId"), str) or not body["evaluationId"]:
