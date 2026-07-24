@@ -711,6 +711,8 @@ async def submit_receipts(run_id: str, body: Dict[str, Any], email: str, token: 
     else:
         response = await _handle_outcomes(run, body, token)
 
+    sensitive_vals = run.get("_sensitive_values", [])
+    response = _sanitize_response(response, sensitive_vals)
     run["receiptFingerprints"][receipt_id] = receipt_fp
     run["lastResponse"] = response
     store.put(run_id, run)
@@ -868,12 +870,11 @@ async def _handle_approvals(run: Dict[str, Any], body: Dict[str, Any], token: Op
             raise MailroomError(422, "approval.decision must be approved or rejected")
         if not a.get("nonce"):
             raise MailroomError(422, "approval.nonce is required")
-        run["receiptLog"].append({"receiptId": receipt_id, "approvalId": a["approvalId"], "decision": a.get("decision"), "nonce": a.get("nonce")})
+        approval["decision"] = a.get("decision")
+        approval["nonce"] = a.get("nonce")
         if a.get("decision") != "approved":
             run["state"] = "FAILED"
             return _final_response(run, "failed", chosen_effect=None, suppressed=[approval["toolName"]])
-        approval["decision"] = "approved"
-        approval["nonce"] = a.get("nonce")
 
     effect = run["effectAction"]
     attempt = {"attempt": 1, "spanId": new_span_id()}
