@@ -337,8 +337,7 @@ _SECRET_PATTERNS = [
     re.compile(r"https://hooks\.slack\.com/services/\S+"),
 ]
 _SECRET_IGNORE = (
-    "${", "os.environ", "process.env", "getenv", "your_", "example_",
-    "placeholder", "<", "my_api", "dummy", "sample", "test_key", "xxx", "foo", "bar"
+    "${", "os.environ", "process.env", "getenv"
 )
 _INJECTION_PATTERNS = [
     re.compile(r"(?i)ignore (the )?(user'?s?|previous) (stop|cancel|instructions)"),
@@ -362,7 +361,7 @@ def _has_frontmatter_field(text: str, field: str) -> bool:
 def audit_skill_heuristic(skill_text: str) -> List[str]:
     categories: List[str] = []
 
-    # 1. Hardcoded Secret (ignore env vars & placeholders)
+    # 1. Hardcoded Secret
     has_secret = False
     for p in _SECRET_PATTERNS:
         for m in p.finditer(skill_text):
@@ -383,11 +382,11 @@ def audit_skill_heuristic(skill_text: str) -> List[str]:
     if any(p.search(skill_text) for p in _EXCESSIVE_PERM_PATTERNS):
         categories.append("excessive_permissions")
 
-    # 4. Unclear Provenance (only flag if author, version, AND changelog are all completely missing)
+    # 4. Unclear Provenance
     low = skill_text.lower()
-    has_author = _has_frontmatter_field(skill_text, "author") or "author" in low or "by:" in low or "maintainer:" in low
-    has_version = _has_frontmatter_field(skill_text, "version") or "version" in low or "v1." in low or "v0." in low or "v2." in low
-    has_changelog = "changelog" in low or "history" in low or "changes" in low
+    has_author = _has_frontmatter_field(skill_text, "author")
+    has_version = _has_frontmatter_field(skill_text, "version")
+    has_changelog = "changelog:" in low or "# changelog" in low or "## changelog" in low or "### changelog" in low
     if not has_author and not has_version and not has_changelog:
         categories.append("unclear_provenance")
 

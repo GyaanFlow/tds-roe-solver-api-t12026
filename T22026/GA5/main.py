@@ -165,13 +165,17 @@ async def skill_scan_endpoint(request: Request):
         if len(skill_text) > MAX_SKILL_TEXT_CHARS:
             raise ValueError(f"'skill' too long (max {MAX_SKILL_TEXT_CHARS} chars)")
 
-        categories = audit_skill_heuristic(skill_text)
+        heuristic_cats = audit_skill_heuristic(skill_text)
         token = _tenant_token()
         if token:
             try:
-                categories = await audit_skill_llm(skill_text, token)
+                llm_cats = await audit_skill_llm(skill_text, token)
+                categories = sorted(set(heuristic_cats) | set(llm_cats))
             except Exception as exc:  # noqa: BLE001 — fall back, never hard-fail grading
                 logger.warning("Q4 LLM failed, using heuristic result: %s", exc)
+                categories = heuristic_cats
+        else:
+            categories = heuristic_cats
         return {"categories": categories}
     return await _run_solver(_handle, "Q4")
 
