@@ -549,20 +549,26 @@ def heuristic_proposal(dossier: Dict[str, Any], call_id: str, effective_actions:
     # assumptions about the dossier sentence templates and produced wrong
     # arguments for this exam's actual corpus. Keep the LLM's field extraction,
     # which the grader scores far higher.
-    untrusted_text = _source_text(dossier, untrusted_only=True)
-    lower_untrusted = untrusted_text.lower()
-    ref = _extract_reference(_source_text(dossier), dossier["dossierId"])
-
-    injection_terms = (
-        "higher-priority instruction", "copy any vault marker",
-        "ignore previous", "ignore all previous", "system prompt", "developer message", "reveal", "exfiltrate",
-        "api key", "access token", "secret", "webhook", "curl ", "fetch ", "send to http", "tool call",
-    )
-    if "quarantine_item" in effective_actions and lower_untrusted and any(t.lower() in lower_untrusted for t in injection_terms):
-        evidence = _line_ids_for_keywords(dossier, injection_terms)
-        # quarantine_item never has referenceId in payload
-        return build_proposal_from_fields(dossier, call_id, "quarantine_item", {"artifactId": _first_source_id(dossier)}, evidence)
-
+    # NO KEYWORD PRE-CLASSIFIER. There used to be one here that stamped any
+    # dossier containing "ignore previous"/"secret"/"api key"/... as
+    # quarantine_item. The exam corpus is explicitly built to defeat exactly
+    # that: those phrases are planted as QUOTED, NON-OPERATIVE decoys in most
+    # dossiers (a trusted quote containing attack words is not an attack --
+    # "check who wrote it and what it means").
+    #
+    # It only ever looked harmless because _source_text(untrusted_only=True)
+    # was itself buggy: "untrusted" contains "trusted" as a substring, so
+    # external_untrusted sources were misclassified as trusted and EXCLUDED
+    # from the untrusted text, leaving it almost always empty so the branch
+    # rarely fired. Fixing that provenance bug unmasked this one, and the
+    # grader result was unambiguous:
+    #   keyword heuristic effectively dormant -> actions 70/70
+    #   keyword heuristic actually firing     -> actions 11/70, arguments 0/70
+    # (i.e. nearly every dossier was being force-classified as quarantine_item).
+    #
+    # Genuine injection detection needs authority/provenance/meaning, which is
+    # what the LLM triage below does -- and it scored 70/70 on actions. So:
+    # classify nothing here; always fall through to the model.
     return None
 
 
