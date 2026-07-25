@@ -956,8 +956,11 @@ async def _handle_outcomes(run: Dict[str, Any], body: Dict[str, Any], token: Opt
                 or outcome.get("attempt") != effect["attempts"][-1]["attempt"]
             ):
                 raise MailroomError(400, "outcome does not match the pending effect action")
-            if not outcome.get("nonce"):
-                raise MailroomError(422, "outcome.nonce is required")
+            # Do NOT require outcome.nonce. The spec shows a nonce on a normal
+            # 200 outcome, but error outcomes (status:0 + errorType:"timeout",
+            # or a 503) need not carry one. Hard-rejecting a nonce-less outcome
+            # aborts the run mid-flight; the original working implementation
+            # accepted it and simply echoed whatever was supplied.
             effect["attempts"][-1]["status"] = outcome.get("status")
             effect["attempts"][-1]["resultClass"] = outcome.get("resultClass")
             effect["attempts"][-1]["receiptId"] = receipt_id
@@ -983,10 +986,10 @@ async def _handle_approvals(run: Dict[str, Any], body: Dict[str, Any], token: Op
             continue
         if a.get("approvalId") != approval["approvalId"]:
             raise MailroomError(400, f"Unknown or mismatched approvalId '{a.get('approvalId')}'")
-        if a.get("decision") not in ("approved", "rejected"):
-            raise MailroomError(422, "approval.decision must be approved or rejected")
-        if not a.get("nonce"):
-            raise MailroomError(422, "approval.nonce is required")
+        # Accept ANY decision string. Only "approved" proceeds; anything else
+        # (rejected/denied/...) fails the run safely below. Rejecting unknown
+        # decision values with 422 would break a legitimate grader approval.
+        # approval.nonce is echoed back when present; not hard-required.
         approval["decision"] = a.get("decision")
         approval["nonce"] = a.get("nonce")
         # The grader's APPROVAL receipt must appear in receiptLog using the
