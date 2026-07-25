@@ -72,8 +72,17 @@ async def aipipe_chat(
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
     last_err = None
+    # DEFENSIVE: `retries` is the ATTEMPT COUNT for this loop, so retries=0 would
+    # mean range(0) -> the body never runs -> NO HTTP REQUEST IS EVER SENT and we
+    # fall straight through to the "failed after 0 retries" raise below. That bug
+    # has been introduced twice in this codebase (both times it looked exactly
+    # like an exhausted API quota, because every caller silently degraded to its
+    # heuristic fallback while the token was perfectly healthy). Clamp to at
+    # least one real attempt so a caller passing retries=0 meaning "don't retry"
+    # still gets the single call it obviously intended.
+    attempts = max(1, int(retries or 0))
     async with httpx.AsyncClient(timeout=httpx.Timeout(timeout)) as client:
-        for attempt in range(retries):
+        for attempt in range(attempts):
             try:
                 r = await client.post(f"{AIPIPE_BASE}/chat/completions", headers=headers, json=body)
             except httpx.RequestError as exc:
@@ -95,7 +104,7 @@ async def aipipe_chat(
             out = r.json()["choices"][0]["message"]["content"]
             _LLM_CACHE[key] = out
             return out
-    raise RuntimeError(f"AIPipe chat failed after {retries} retries: {last_err}")
+    raise RuntimeError(f"AIPipe chat failed after {attempts} attempt(s): {last_err}")
 
 
 def parse_json_block(s: str) -> dict:

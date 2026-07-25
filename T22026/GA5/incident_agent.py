@@ -158,6 +158,55 @@ def _extract_evidence_ids(transcript: str) -> List[str]:
     return _EVIDENCE_ID_RE.findall(transcript or "")
 
 
+def _normalize_evidence(raw: Any, incident: Dict[str, Any]) -> List[str]:
+    """Enforce the spec's exact evidence contract for the diagnosis.
+
+    Spec: "cite two to four evidence IDs" and (for the dispatches that cite
+    them) "Do not cite duplicate evidence IDs". So the result must be:
+      * de-duplicated, order-preserving,
+      * only IDs that ACTUALLY appear in this incident's transcript (a
+        hallucinated ID is a correlation failure the grader can detect),
+      * at least 2 and at most 4 entries.
+
+    A previous revision deliberately allowed a single-ID citation ("better one
+    decisive line than two padded guesses") -- that reasoning is wrong here
+    because the spec states a hard 2..4 range, so a 1-ID diagnosis is simply
+    invalid regardless of how decisive it is.
+    """
+    all_ids = _extract_evidence_ids(incident.get("transcript", "")) or []
+    valid = set(all_ids)
+
+    out: List[str] = []
+    for e in (raw or []):
+        if not isinstance(e, str):
+            continue
+        e = e.strip()
+        # Keep only real transcript IDs; drop dupes while preserving order.
+        if e and e in valid and e not in out:
+            out.append(e)
+        if len(out) == 4:
+            break
+
+    # Pad up to the 2-ID minimum from unused real transcript IDs. Prefer the
+    # middle of the transcript over either end -- opening/closing lines are
+    # typically baseline or wrap-up context, while the incident signal tends to
+    # sit in the body.
+    if len(out) < 2 and all_ids:
+        unused = [i for i in all_ids if i not in out]
+        if unused:
+            mid = len(unused) // 2
+            ordered = unused[mid:] + unused[:mid]
+            for cand in ordered:
+                out.append(cand)
+                if len(out) >= 2:
+                    break
+
+    # Absolute last resort: the response shape still needs a non-empty array.
+    if not out:
+        out = ["ev_unknown"]
+    return out[:4]
+
+
 def _sanitize_response(data: Any, sensitive_vals: List[str]) -> Any:
     if not sensitive_vals or not data:
         return data
@@ -230,28 +279,15 @@ async def diagnose_incident(incident: Dict[str, Any], tool_catalog: List[dict], 
         try:
             # Increased timeout: 8s allows the model to produce well-formed, specific
             # argument values ("exact case-derived arguments") without timing out.
-            raw = await aipipe_chat(messages, token, model="gpt-4o-mini", max_tokens=450, timeout=4.5, retries=0)
+            raw = await aipipe_chat(messages, token, model="gpt-4o-mini", max_tokens=450, timeout=6.0, retries=1)
             out = parse_json_block(raw)
             if not isinstance(out, dict):
                 raise ValueError("LLM returned non-object JSON")
             root_cause = out.get("rootCause")
-            evidence = [e for e in (out.get("evidence", []) or []) if isinstance(e, str)][:4]
             calls = _sanitize_calls(out.get("diagnosticCalls", []))
             if root_cause not in (incident.get("allowedRootCauses") or []):
                 root_cause = (incident.get("allowedRootCauses") or ["unknown"])[0]
-            if not evidence:
-                # LLM returned zero evidence -- last-resort fill with anything so the
-                # response shape stays valid, but don't try to guess which line is
-                # decisive: signal position varies across transcripts. Prefer MIDDLE
-                # lines over the first/last (which are typically baseline/context).
-                all_ids = _extract_evidence_ids(incident.get("transcript", "")) or ["ev_unknown"]
-                if len(all_ids) >= 4:
-                    mid = len(all_ids) // 2
-                    evidence = all_ids[mid - 1:mid + 1]
-                else:
-                    evidence = all_ids[:2]
-            # If LLM returned 1 evidence, keep it as-is (better a decisive single
-            # citation than 2 padded guesses).
+            evidence = _normalize_evidence(out.get("evidence"), incident)
             if not calls and default_diag_name:
                 calls = [{"toolName": default_diag_name, "arguments": {}}]
             return {"rootCause": root_cause, "evidence": evidence, "diagnosticCalls": calls}
@@ -266,14 +302,9 @@ async def diagnose_incident(incident: Dict[str, Any], tool_catalog: List[dict], 
     # Tagged `_fallback` so create_incident can re-diagnose later instead of
     # persisting this degraded guess as the run's permanent answer.
     fallback_cause = (incident.get("allowedRootCauses") or ["unknown"])[0]
-    # No LLM output available -- heuristic-only. Middle transcript lines carry
-    # signal more often than the first/last which are typically baseline/context.
-    _all_ev = _extract_evidence_ids(incident.get("transcript", "")) or ["ev_unknown"]
-    if len(_all_ev) >= 4:
-        _m = len(_all_ev) // 2
-        fallback_evidence = _all_ev[_m - 1:_m + 1]
-    else:
-        fallback_evidence = _all_ev[:2]
+    # No LLM output at all -- let the shared normalizer pick real transcript IDs
+    # so this path obeys the same 2..4 / no-duplicates / must-be-real contract.
+    fallback_evidence = _normalize_evidence([], incident)
     fallback_calls = [{"toolName": default_diag_name, "arguments": {}}] if default_diag_name else []
     return {"rootCause": fallback_cause, "evidence": fallback_evidence, "diagnosticCalls": fallback_calls, "_fallback": True}
 
@@ -351,7 +382,7 @@ async def choose_effect(root_cause: str, effect_tools: List[str], tool_catalog: 
 
     messages = [{"role": "system", "content": _EFFECT_SYSTEM}, {"role": "user", "content": prompt}]
     try:
-        raw = await aipipe_chat(messages, token, model="gpt-4o-mini", max_tokens=250, timeout=4.0, retries=0)
+        raw = await aipipe_chat(messages, token, model="gpt-4o-mini", max_tokens=250, timeout=5.0, retries=1)
         out = parse_json_block(raw)
         if not isinstance(out, dict):
             raise ValueError("LLM returned non-object JSON")
