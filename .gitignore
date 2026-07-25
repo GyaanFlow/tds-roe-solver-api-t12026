@@ -21,3 +21,4 @@ context/graphify/cache/
 # Generated runtime artifacts (Q14 image outputs) — not app assets.
 # Kept out of git; HF Spaces rejects tracked binaries (Xet/LFS policy).
 output/
+T22026/GA5/q10_bases.json
