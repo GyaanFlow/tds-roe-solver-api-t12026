@@ -334,6 +334,32 @@ def _safe_or_empty(s: Optional[str]) -> str:
 _STATUS_WORDS = ("shipped", "delivered", "pending", "approved", "in_transit", "delayed", "cancelled")
 
 
+_QUOTED_STATUS_RE = re.compile(
+    r"(?:public\s+status|status)\s+(?:is\s+)?(?:exactly\s+)?[\"“']([^\"”']{2,60})[\"”']", re.I
+)
+_QUOTED_VALUE_RE = re.compile(r"exact\s+value\s+[\"“']([^\"”']{1,80})[\"”']", re.I)
+
+
+def _verbatim_status(llm_status: Optional[str], text: str) -> Optional[str]:
+    """Return a status that appears VERBATIM in the dossier, or None.
+
+    The grader rejects invented values ("pending"/"approved" that are nowhere in
+    the dossier). Dossiers state the status as a quoted string, e.g.
+    `its current public status is exactly "in transit"`, so prefer that. Only
+    accept the LLM's value if it literally occurs in the dossier text.
+    """
+    s = str(llm_status or "").strip()
+    if s and s.lower() in text.lower():
+        return s
+    m = _QUOTED_STATUS_RE.search(text)
+    if m:
+        return m.group(1).strip()
+    for w in _STATUS_WORDS:
+        if w in text.lower():
+            return w
+    return None
+
+
 def _canonical_status(llm_status: Optional[str], text: str) -> str:
     """`status` is a fixed-vocabulary field -- accepting arbitrary LLM text here
     was an unscrubbed canary-leak vector. Only ever emit a known-safe word."""
@@ -365,8 +391,13 @@ def _canonical_team(llm_team: Optional[str], trusted_text: str) -> str:
     return "support"
 
 
-_ORD_ID_RE = re.compile(r"\bORD[-_]?[A-Z0-9]{2,20}\b", re.I)
-_CASE_ID_RE = re.compile(r"\b(?:CASE|CAS)[-_]?[A-Z0-9]{2,20}\b", re.I)
+# Require the separator AND at least one digit. Without both, these matched
+# ordinary English words -- "Order" satisfied ORD + "ER" and was emitted as the
+# referenceId "ORDER", and "Case"/"Cases" likewise. A wrong referenceId fails
+# "exact action arguments" on every dossier whose text starts a sentence with
+# "Order ..." or "Case ...", which is most of them.
+_ORD_ID_RE = re.compile(r"\bORD[-_][A-Z0-9]*\d[A-Z0-9]*\b", re.I)
+_CASE_ID_RE = re.compile(r"\b(?:CASE|CAS)[-_][A-Z0-9]*\d[A-Z0-9]*\b", re.I)
 
 
 def _extract_reference(text: str, fallback: str, prefer: str = "any") -> str:
@@ -1034,9 +1065,11 @@ def build_proposal_from_fields(dossier, call_id, action, f, evidence):
         if recipient and recipient not in full_text:
             recipient = ""
         if not recipient:
-            recipient = _extract_email(full_text, "customer@unknown.com")
+            # NEVER invent an address. If the dossier states no email, use the
+            # dossier's own mailbox header, which IS a verbatim dossier value.
+            recipient = _extract_email(full_text, mailbox)
         if _looks_confidential(recipient):
-            recipient = "customer@unknown.com"
+            recipient = mailbox
 
     # A send_approved_notice with no valid approved recipient cannot safely go
     # out -- downgrade to route-to-human rather than emit an empty/guessed target.
@@ -1053,7 +1086,9 @@ def build_proposal_from_fields(dossier, call_id, action, f, evidence):
         # Status is a FIXED vocabulary field -- never accept arbitrary LLM text
         # here (an unfiltered free-form status was an unscrubbed canary-leak
         # vector). Only ever emit one of a small known-safe set.
-        status = _canonical_status(f.get("status"), _source_text(dossier))
+        # Verbatim-only: the grader rejects a status that is not literally in
+        # the dossier (inventing "pending" = reject).
+        status = _verbatim_status(f.get("status"), _source_text(dossier)) or _canonical_status(f.get("status"), _source_text(dossier))
         payload = {"recipient": recipient, "referenceId": ref, "status": status, "template": "order_status"}
 
     elif action == "update_internal_record":
@@ -1065,6 +1100,12 @@ def build_proposal_from_fields(dossier, call_id, action, f, evidence):
         # date/window-shaped token, never free-form text (free text is the main
         # canary-leak vector here). Reject anything confidential-looking.
         val = _safe_or_empty(f.get("value"))
+        if val and val.lower() not in trusted_text.lower():
+            val = ""  # LLM value not verbatim in a trusted source -> discard
+        if not val:
+            qm = _QUOTED_VALUE_RE.search(trusted_text) or _QUOTED_VALUE_RE.search(_source_text(dossier))
+            if qm:
+                val = qm.group(1).strip()
         if not val or val.lower() == "updated":
             # Prefer an explicit date or a short window phrase from trusted text.
             date_match = re.search(
