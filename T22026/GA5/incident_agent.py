@@ -158,6 +158,56 @@ def _extract_evidence_ids(transcript: str) -> List[str]:
     return _EVIDENCE_ID_RE.findall(transcript or "")
 
 
+def _derive_tool_arguments(tool_name: str, tool_catalog: List[dict], incident: Dict[str, Any]) -> Dict[str, Any]:
+    """Best-effort incident-specific arguments for a tool, without an LLM.
+
+    The spec grades "exact case-derived arguments", so emitting `{}` (the old
+    fallback) scores nothing. Fill each property the tool's own inputSchema
+    declares from real incident facts: the service name, and IDs mined from the
+    transcript (deployment/build refs, feature-flag names). Only properties the
+    schema actually declares are emitted, so this can never invent a key the
+    tool doesn't accept.
+    """
+    tool = next((t for t in (tool_catalog or []) if t.get("name") == tool_name), None)
+    if not isinstance(tool, dict):
+        return {}
+    props = ((tool.get("inputSchema") or {}).get("properties") or {})
+    if not isinstance(props, dict) or not props:
+        return {}
+
+    service = str(incident.get("service", "") or "")
+    # Mine from the transcript with the bracketed evidence markers REMOVED --
+    # otherwise a generic id-shaped regex happily matches "ev_1" and emits an
+    # evidence marker as a deploymentId.
+    transcript = _EVIDENCE_ID_RE.sub(" ", str(incident.get("transcript", "") or ""))
+    # e.g. "chk-42", "build-991", "v2.3.1" -- a deployment/release-ish token.
+    dep = None
+    for m in re.finditer(r"\b([A-Za-z]{2,10}[-_][A-Za-z0-9.]{1,20})\b", transcript):
+        cand = m.group(1)
+        if re.fullmatch(r"ev[_-]\w+", cand, re.I):
+            continue  # never surface an evidence marker as an argument value
+        dep = cand
+        break
+    flag = re.search(r"(?:flag|feature)[\s:=\"']+([A-Za-z0-9_.\-]{2,40})", transcript, re.I)
+
+    out: Dict[str, Any] = {}
+    for key in props:
+        k = key.lower()
+        if "service" in k or "target" in k or "component" in k:
+            if service:
+                out[key] = service
+        elif "deployment" in k or "release" in k or "build" in k or "version" in k:
+            if dep:
+                out[key] = dep
+        elif "feature" in k or "flag" in k:
+            if flag:
+                out[key] = flag.group(1)
+        elif "incident" in k:
+            if incident.get("incidentId"):
+                out[key] = incident["incidentId"]
+    return out
+
+
 def _normalize_evidence(raw: Any, incident: Dict[str, Any]) -> List[str]:
     """Enforce the spec's exact evidence contract for the diagnosis.
 
@@ -289,7 +339,7 @@ async def diagnose_incident(incident: Dict[str, Any], tool_catalog: List[dict], 
                 root_cause = (incident.get("allowedRootCauses") or ["unknown"])[0]
             evidence = _normalize_evidence(out.get("evidence"), incident)
             if not calls and default_diag_name:
-                calls = [{"toolName": default_diag_name, "arguments": {}}]
+                calls = [{"toolName": default_diag_name, "arguments": _derive_tool_arguments(default_diag_name, tool_catalog, incident)}]
             return {"rootCause": root_cause, "evidence": evidence, "diagnosticCalls": calls}
         except TokenExpiredError:
             raise  # propagate immediately — retrying won't fix an expired token
@@ -305,7 +355,7 @@ async def diagnose_incident(incident: Dict[str, Any], tool_catalog: List[dict], 
     # No LLM output at all -- let the shared normalizer pick real transcript IDs
     # so this path obeys the same 2..4 / no-duplicates / must-be-real contract.
     fallback_evidence = _normalize_evidence([], incident)
-    fallback_calls = [{"toolName": default_diag_name, "arguments": {}}] if default_diag_name else []
+    fallback_calls = [{"toolName": default_diag_name, "arguments": _derive_tool_arguments(default_diag_name, tool_catalog, incident)}] if default_diag_name else []
     return {"rootCause": fallback_cause, "evidence": fallback_evidence, "diagnosticCalls": fallback_calls, "_fallback": True}
 
 
