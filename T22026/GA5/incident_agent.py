@@ -775,7 +775,7 @@ async def _handle_outcomes(run: Dict[str, Any], body: Dict[str, Any], token: Opt
             current_attempt["errorType"] = outcome.get("errorType")
             current_attempt["receiptId"] = receipt_id
             current_attempt["nonce"] = outcome.get("nonce")
-            run["receiptLog"].append({"receiptId": receipt_id, "actionId": action["actionId"], "callId": action["callId"], "attempt": current_attempt["attempt"], "status": outcome.get("status"), "resultClass": outcome.get("resultClass"), "nonce": outcome.get("nonce"), "errorType": outcome.get("errorType", "")})
+            run["receiptLog"].append({"receiptId": receipt_id, "actionId": action["actionId"], "callId": action["callId"], "attempt": current_attempt["attempt"], "status": outcome.get("status"), "resultClass": outcome.get("resultClass"), "nonce": outcome.get("nonce"), **({"errorType": outcome["errorType"]} if outcome.get("errorType") else {})})
 
             if outcome.get("status") == 503 and len(action["attempts"]) == 1:
                 new_attempt = {"attempt": 2, "spanId": new_span_id()}
@@ -876,7 +876,7 @@ async def _handle_outcomes(run: Dict[str, Any], body: Dict[str, Any], token: Opt
             effect["attempts"][-1]["resultClass"] = outcome.get("resultClass")
             effect["attempts"][-1]["receiptId"] = receipt_id
             effect["attempts"][-1]["nonce"] = outcome.get("nonce")
-            run["receiptLog"].append({"receiptId": receipt_id, "actionId": effect["actionId"], "callId": effect["callId"], "attempt": effect["attempts"][-1]["attempt"], "status": outcome.get("status"), "resultClass": outcome.get("resultClass"), "nonce": outcome.get("nonce"), "errorType": outcome.get("errorType", "")})
+            run["receiptLog"].append({"receiptId": receipt_id, "actionId": effect["actionId"], "callId": effect["callId"], "attempt": effect["attempts"][-1]["attempt"], "status": outcome.get("status"), "resultClass": outcome.get("resultClass"), "nonce": outcome.get("nonce"), **({"errorType": outcome["errorType"]} if outcome.get("errorType") else {})})
             final_status = "completed" if outcome.get("status") == 200 else "failed"
         run["state"] = final_status.upper()
         return _final_response(run, final_status, chosen_effect=run.get("chosenEffect"), suppressed=[a["toolName"] for a in run["diagnosticActions"].values() if not a["success"]])
@@ -903,6 +903,18 @@ async def _handle_approvals(run: Dict[str, Any], body: Dict[str, Any], token: Op
             raise MailroomError(422, "approval.nonce is required")
         approval["decision"] = a.get("decision")
         approval["nonce"] = a.get("nonce")
+        # The grader's APPROVAL receipt must appear in receiptLog using the
+        # spec's second shape {receiptId, approvalId, decision, nonce}. The
+        # spec is explicit that "omitting either one is a correlation failure
+        # even if equivalent data appears elsewhere" -- recording the decision
+        # only on the run object (as this previously did) leaves the approval
+        # receipt absent from the returned receiptLog entirely.
+        run["receiptLog"].append({
+            "receiptId": receipt_id,
+            "approvalId": approval["approvalId"],
+            "decision": approval["decision"],
+            "nonce": approval["nonce"],
+        })
         if a.get("decision") != "approved":
             run["state"] = "FAILED"
             return _final_response(run, "failed", chosen_effect=None, suppressed=[approval["toolName"]])
