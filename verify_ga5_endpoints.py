@@ -76,7 +76,14 @@ def test_onboard_and_status():
 
     r = client.get(f"{BASE}/status")
     assert r.status_code == 200
-    assert len(r.json()["ready_routes"]) == 8
+    # Assert against the canonical suffix list rather than a hardcoded count, so
+    # adding a route can't silently drift the dashboard/status out of sync (and
+    # so this test doesn't need editing every time a route is added).
+    from T22026.GA5.shared.tenant import GA5_API_ROUTE_SUFFIXES
+    ready = r.json()["ready_routes"]
+    assert len(ready) == len(GA5_API_ROUTE_SUFFIXES)
+    for suffix in GA5_API_ROUTE_SUFFIXES:
+        assert any(u.endswith(suffix) for u in ready), f"missing route suffix {suffix}"
 
 
 def test_q2_proration():

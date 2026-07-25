@@ -119,13 +119,20 @@ def health():
 @app.get("/agent-card.json")
 @app.get("/agent.json")
 def a2a_agent_card(request: Request):
-    """GA5 Q10's A2A Agent Card. Origin-level per the A2A 1.0 spec."""
+    """GA5 Q10's A2A Agent Card. Origin-level per the A2A 1.0 spec.
+
+    The card is the one PUBLIC, unauthenticated route, and unlike the
+    authenticated /a2a/* routes the spec does not mandate the a2a+json media
+    type for it. Content-negotiate on Accept so a client asking for plain
+    application/json gets it, while an A2A-aware client asking for
+    application/a2a+json still gets that. Always answering a2a+json risked a
+    strict plain-JSON fetch rejecting the card.
+    """
     from fastapi.responses import JSONResponse
     from T22026.GA5.a2a_agent import agent_card_json
-    return JSONResponse(
-        content=agent_card_json(),
-        headers={"Content-Type": "application/a2a+json"}
-    )
+    accept = (request.headers.get("accept") or "").lower()
+    media = "application/a2a+json" if "a2a+json" in accept else "application/json"
+    return JSONResponse(content=agent_card_json(), media_type=media)
 
 
 @app.get("/", response_class=HTMLResponse)
