@@ -380,7 +380,15 @@ async def a2a_cancel_task(task_id: str, request: Request):
 @router.post("/v2/incidents")
 async def incidents_create_endpoint(request: Request):
     async def _handle():
-        _require_content_type(request, "application/json")
+        # NO request Content-Type gate here. The Q11 spec constrains RESPONSES
+        # ("Successful responses must be JSON and no larger than 768 KiB") and
+        # never mandates a request media type -- unlike Q10, which explicitly
+        # requires application/a2a+json. This check was copied over from Q10 and
+        # made every grader POST without an exact `application/json` header fail
+        # with 415 before any run was created, which zeroes ALL seven Q11
+        # categories at once (verified live: omitted or text/plain -> 415).
+        # The body is parsed as JSON regardless, so a wrong/absent header is
+        # harmless; a non-JSON body still fails cleanly in _read_json_body.
         body = await _read_json_body(request)
         email = current_email.get()
         token = _tenant_token()
@@ -396,7 +404,15 @@ async def incidents_create_endpoint(request: Request):
 @router.post("/v2/incidents/{run_id}/receipts")
 async def incidents_receipts_endpoint(run_id: str, request: Request):
     async def _handle():
-        _require_content_type(request, "application/json")
+        # NO request Content-Type gate here. The Q11 spec constrains RESPONSES
+        # ("Successful responses must be JSON and no larger than 768 KiB") and
+        # never mandates a request media type -- unlike Q10, which explicitly
+        # requires application/a2a+json. This check was copied over from Q10 and
+        # made every grader POST without an exact `application/json` header fail
+        # with 415 before any run was created, which zeroes ALL seven Q11
+        # categories at once (verified live: omitted or text/plain -> 415).
+        # The body is parsed as JSON regardless, so a wrong/absent header is
+        # harmless; a non-JSON body still fails cleanly in _read_json_body.
         body = await _read_json_body(request)
         email = current_email.get()
         token = _tenant_token()
