@@ -16,6 +16,13 @@ import weakref
 from collections import OrderedDict, defaultdict, deque
 from typing import Any, Dict, List, Optional, Sequence
 
+from T22026.GA4.resilience import (
+    AIPIPE_BREAKER,
+    AIPIPE_LIMITER,
+    backoff_delay,
+    resilience_snapshot,  # noqa: F401  (re-exported for the health endpoint)
+)
+
 logger = logging.getLogger("ga4_solvers")
 
 TOKEN_RE = re.compile(r"\b[a-z0-9]+\b")
@@ -171,30 +178,60 @@ async def aipipe_chat(
     # unrelated requests dying with ClientDisconnect while the loop was busy.
     client = _get_http_client()
     for attempt in range(attempts):
+        # Fail fast while the upstream is known-sick rather than letting every
+        # one of hundreds of concurrent calls burn its full timeout budget
+        # against it -- that is what turns a slow upstream into a hub-wide
+        # outage. Heals itself: see CircuitBreaker.
+        if not AIPIPE_BREAKER.allows_request():
+            # Do NOT give up instantly. Recovery is a stampede: everyone checks
+            # the moment the window elapses, a few become probes and the rest
+            # would be refused -- so a HEALTHY upstream would still serve almost
+            # nothing (measured: 1 of 60). Wait a slice of our own budget for
+            # the breaker to close; succeeding late beats degrading to a
+            # fallback answer, which costs the student marks.
+            if not await AIPIPE_BREAKER.wait_until_available(max_wait=min(3.0, timeout / 2)):
+                last_err = "circuit open (upstream failing); not attempted"
+                break
         try:
-            r = await client.post(
-                f"{AIPIPE_BASE}/chat/completions",
-                headers=headers,
-                json=body,
-                # Per-phase, NOT a single scalar: httpx.Timeout(8.0) would set
-                # the pool-acquire wait to 8s too, so a call queued behind a
-                # busy pool failed rather than waiting its turn. read/write
-                # keep the caller's tight budget; pool gets its own.
-                timeout=httpx.Timeout(
-                    connect=min(timeout, 10.0),
-                    read=timeout,
-                    write=timeout,
-                    pool=_POOL_WAIT,
-                ),
-            )
+            # AIMD limiter: discovers the concurrency AIPipe can actually
+            # sustain right now instead of trusting a hardcoded guess.
+            async with AIPIPE_LIMITER.slot():
+                r = await client.post(
+                    f"{AIPIPE_BASE}/chat/completions",
+                    headers=headers,
+                    json=body,
+                    # Per-phase, NOT a single scalar: httpx.Timeout(8.0) would
+                    # set the pool-acquire wait to 8s too, so a call queued
+                    # behind a busy pool failed rather than waiting its turn.
+                    # read/write keep the caller's tight budget; pool gets its
+                    # own.
+                    timeout=httpx.Timeout(
+                        connect=min(timeout, 10.0),
+                        read=timeout,
+                        write=timeout,
+                        pool=_POOL_WAIT,
+                    ),
+                )
         except httpx.RequestError as exc:
             # repr, not str: httpx ConnectError/PoolTimeout often stringify to
             # "" and the log line then reads "network error: " with no cause.
             last_err = f"network error: {exc!r}"
-            await asyncio.sleep(1.0 * (attempt + 1))
+            # A pool timeout is congestion, not a broken upstream -- shrink
+            # concurrency so we stop oversubscribing ourselves.
+            AIPIPE_LIMITER.record_overload()
+            AIPIPE_BREAKER.record_failure()
+            if attempt + 1 < attempts:
+                await asyncio.sleep(backoff_delay(attempt))
             continue
         # 401/403 → token is expired or invalid; retrying won't help.
+        # NOTE: deliberately NOT a breaker failure. This is ONE caller's bad
+        # token on a shared hub; counting it would let a single student with an
+        # expired token open the circuit for everybody.
         if r.status_code in (401, 403):
+            # Hand back the probe slot before leaving: this says nothing about
+            # upstream health, but consuming the budget silently would wedge
+            # the breaker in HALF_OPEN and take the hub down for everyone.
+            AIPIPE_BREAKER.release_probe()
             raise TokenExpiredError(
                 "AIPipe token is expired or invalid (HTTP " + str(r.status_code) + "). "
                 "Embed a fresh token in the URL path: /ga5/<email>/<NEW_TOKEN>/... "
@@ -202,10 +239,23 @@ async def aipipe_chat(
             )
         if r.status_code in (429, 500, 502, 503, 504):
             last_err = f"HTTP {r.status_code}: {r.text[:160]}"
-            await asyncio.sleep(1.2 * (attempt + 1))
+            # 429 is this caller's personal quota, not an upstream fault, so it
+            # must not trip the shared breaker either -- but it IS a signal to
+            # ease off, so the limiter still counts it.
+            AIPIPE_LIMITER.record_overload()
+            if r.status_code != 429:
+                AIPIPE_BREAKER.record_failure()
+            else:
+                # 429 is this caller's quota, not upstream health -- release
+                # the probe rather than scoring or silently consuming it.
+                AIPIPE_BREAKER.release_probe()
+            if attempt + 1 < attempts:
+                await asyncio.sleep(backoff_delay(attempt, base=0.6))
             continue
         r.raise_for_status()
         out = r.json()["choices"][0]["message"]["content"]
+        AIPIPE_BREAKER.record_success()
+        AIPIPE_LIMITER.record_success()
         _cache_put(key, out)
         return out
     raise RuntimeError(f"AIPipe chat failed after {attempts} attempt(s): {last_err}")

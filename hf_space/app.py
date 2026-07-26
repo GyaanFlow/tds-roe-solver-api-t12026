@@ -110,7 +110,17 @@ def api_version():
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    # Kept as a plain "ok" for the platform health check, plus live upstream
+    # state so overload can be diagnosed from outside the box instead of by
+    # reading log tails after the fact. `state: open` or a limit pinned near
+    # the minimum means the hub is shedding load, not that it is broken.
+    payload = {"status": "ok"}
+    try:
+        from T22026.GA4.resilience import resilience_snapshot
+        payload["upstream"] = resilience_snapshot()
+    except Exception:
+        pass
+    return payload
 
 
 @app.get("/.well-known/agent-card.json")
