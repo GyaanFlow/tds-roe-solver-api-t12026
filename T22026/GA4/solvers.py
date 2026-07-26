@@ -12,6 +12,7 @@ import logging
 import math
 import os
 import re
+import weakref
 from collections import OrderedDict, defaultdict, deque
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -40,19 +41,35 @@ def _cache_put(key: str, value: str) -> None:
         _LLM_CACHE.popitem(last=False)
 
 
-_HTTP_CLIENT = None
+# Weak-keyed on the loop OBJECT, deliberately not on id(loop): CPython reuses
+# the address of a destroyed loop, so an int key silently collides and hands
+# back a client belonging to a dead loop. A weak key is the object's own
+# identity, and the entry disappears when the loop is collected.
+_HTTP_CLIENTS: "weakref.WeakKeyDictionary[Any, Any]" = weakref.WeakKeyDictionary()
+_HTTP_CLIENT_NOLOOP = None
 
 
 def _get_http_client():
-    """One pooled httpx client per process, created lazily so it binds to the
-    running event loop. Connection limits are deliberately generous enough for
-    a 64-dossier Q9 batch but capped so a burst of concurrent students cannot
-    exhaust the instance's sockets."""
-    global _HTTP_CLIENT
+    """One pooled httpx client PER EVENT LOOP, created lazily.
+
+    Connection limits are generous enough for a 64-dossier Q9 batch but
+    capped so a burst of concurrent students cannot exhaust the instance's
+    sockets.
+
+    Keyed per loop, not a bare module global: a pooled client owns keepalive
+    connections bound to the loop that created them, so handing one to a
+    different loop can fail on a reused connection. Under uvicorn there is a
+    single loop for the process lifetime and this is a no-op, but tests and
+    any asyncio.run() caller create a fresh loop each time -- and
+    `client.is_closed` stays False for a client whose loop is long dead, so it
+    cannot be used to detect this."""
+    global _HTTP_CLIENT_NOLOOP
+    import asyncio
+
     import httpx
 
-    if _HTTP_CLIENT is None or _HTTP_CLIENT.is_closed:
-        _HTTP_CLIENT = httpx.AsyncClient(
+    def _new():
+        return httpx.AsyncClient(
             timeout=httpx.Timeout(30.0),
             limits=httpx.Limits(
                 max_connections=64,
@@ -60,7 +77,21 @@ def _get_http_client():
                 keepalive_expiry=60.0,
             ),
         )
-    return _HTTP_CLIENT
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # No running loop (sync caller). Keep a single spare rather than
+        # allocating one per call.
+        if _HTTP_CLIENT_NOLOOP is None or _HTTP_CLIENT_NOLOOP.is_closed:
+            _HTTP_CLIENT_NOLOOP = _new()
+        return _HTTP_CLIENT_NOLOOP
+
+    client = _HTTP_CLIENTS.get(loop)
+    if client is None or client.is_closed:
+        client = _new()
+        _HTTP_CLIENTS[loop] = client
+    return client
 
 
 class TokenExpiredError(RuntimeError):
