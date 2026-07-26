@@ -16,6 +16,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -1259,6 +1260,7 @@ async def triage_dossier_llm(dossier, token, allowed_actions=None):
 
 
 _SEED_FILE = Path(__file__).parent / "q9_seed.json"
+_SEED_MAX = int(os.getenv("GA5_SEED_MAX", "1500"))
 _SEED_LOCK = threading.Lock()
 _SEED_CACHE: Dict[str, Any] = {}
 if _SEED_FILE.exists():
@@ -1321,14 +1323,33 @@ class MailroomStore:
         return f"{self.CACHE_NAMESPACE}::{dossier_id}::{fingerprint}"
 
     def get_cached_proposal(self, dossier_id: str, fingerprint: str) -> Optional[Dict[str, Any]]:
-        key = self._cache_key(dossier_id, fingerprint)
+        return self.get_cached_proposals([(dossier_id, fingerprint)])[0]
+
+    def get_cached_proposals(
+        self, pairs: List[Tuple[str, str]]
+    ) -> List[Optional[Dict[str, Any]]]:
+        """Look up MANY cached proposals with ONE store read.
+
+        The per-item version was called once per dossier from the propose
+        lookup, and every call did a full blocking read+parse of the tenant
+        store. For 64 dossiers that is 64 synchronous file reads executed
+        INSIDE the async event loop, which freezes the loop for every other
+        in-flight request -- including their `await request.body()`, which is
+        why unrelated tenants saw starlette ClientDisconnect. Read once."""
+        if not pairs:
+            return []
         with self._lock:
-            data = self._load()
-            cached = data["dossier_cache"].get(key)
-            if cached:
-                return cached
+            cache = self._load()["dossier_cache"]
+            out: List[Optional[Dict[str, Any]]] = [
+                cache.get(self._cache_key(d, f)) for d, f in pairs
+            ]
+        if all(o is not None for o in out):
+            return out
         with _SEED_LOCK:
-            return _SEED_CACHE.get(key)
+            for i, (d, f) in enumerate(pairs):
+                if out[i] is None:
+                    out[i] = _SEED_CACHE.get(self._cache_key(d, f))
+        return out
 
     def put_cached_proposal(self, dossier_id: str, fingerprint: str, proposal: Dict[str, Any]) -> None:
         self.put_cached_proposals([(dossier_id, fingerprint, proposal)])
@@ -1356,6 +1377,13 @@ class MailroomStore:
         with _SEED_LOCK:
             for dossier_id, fingerprint, proposal in items:
                 _SEED_CACHE[self._cache_key(dossier_id, fingerprint)] = proposal
+            # _SEED_CACHE is process-global and shared by EVERY tenant, and the
+            # whole of it is re-serialised on each write. Left unbounded it
+            # grows for the entire life of the instance as students hit the
+            # hub, so each write gets progressively more expensive until it is
+            # stalling the event loop on its own. Cap it (oldest first).
+            while len(_SEED_CACHE) > _SEED_MAX:
+                _SEED_CACHE.pop(next(iter(_SEED_CACHE)), None)
             try:
                 # compact, not indent=2 -- this file is machine-read only
                 _SEED_FILE.write_text(json.dumps(_SEED_CACHE, separators=(",", ":")), encoding="utf-8")
@@ -1458,7 +1486,7 @@ async def propose(body: Dict[str, Any], email: str, token: Optional[str]) -> Dic
     # exceed the grader's per-request timeout even though each individual
     # LLM call is fast.
     fingerprints = [dossier_fingerprint(d) for d in dossiers]
-    cached_or_none = [store.get_cached_proposal(d["dossierId"], fp) for d, fp in zip(dossiers, fingerprints)]
+    cached_or_none = store.get_cached_proposals(list(zip([d["dossierId"] for d in dossiers], fingerprints)))
 
     semaphore = asyncio.Semaphore(32)
 

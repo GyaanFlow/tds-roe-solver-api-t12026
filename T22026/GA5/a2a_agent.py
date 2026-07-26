@@ -18,6 +18,7 @@ URLs) — see `register_base_url` / `agent_card_json`.
 import asyncio
 import hashlib
 import json
+import os
 import threading
 import time
 from pathlib import Path
@@ -304,6 +305,7 @@ async def triage_package_llm(package: Dict[str, Any], token: str) -> Dict[str, A
 
 
 _SEED_FILE = Path(__file__).parent / "q10_seed.json"
+_SEED_MAX = int(os.getenv("GA5_SEED_MAX", "1500"))
 _SEED_LOCK = threading.Lock()
 _SEED_CACHE: Dict[str, Any] = {}
 if _SEED_FILE.exists():
@@ -391,13 +393,29 @@ class A2AStore:
         return f"{self.CACHE_NAMESPACE}::{package_id}::{fingerprint}"
 
     def get_cached_package_proposal(self, package_id: str, fingerprint: str) -> Optional[Dict[str, Any]]:
-        key = self._pkg_cache_key(package_id, fingerprint)
+        return self.get_cached_package_proposals([(package_id, fingerprint)])[0]
+
+    def get_cached_package_proposals(
+        self, pairs: List[Tuple[str, str]]
+    ) -> List[Optional[Dict[str, Any]]]:
+        """ONE store read for a whole batch -- see MailroomStore
+        .get_cached_proposals. Per-package reads meant 12 blocking file reads
+        inside the event loop per message:send, stalling every concurrent
+        request on the instance."""
+        if not pairs:
+            return []
         with self._lock:
-            cached = self._load()["package_cache"].get(key)
-            if cached:
-                return cached
+            cache = self._load()["package_cache"]
+            out: List[Optional[Dict[str, Any]]] = [
+                cache.get(self._pkg_cache_key(p, f)) for p, f in pairs
+            ]
+        if all(o is not None for o in out):
+            return out
         with _SEED_LOCK:
-            return _SEED_CACHE.get(key)
+            for i, (p, f) in enumerate(pairs):
+                if out[i] is None:
+                    out[i] = _SEED_CACHE.get(self._pkg_cache_key(p, f))
+        return out
 
     def put_cached_package_proposal(self, package_id: str, fingerprint: str, proposal: Dict[str, Any]) -> None:
         self.put_cached_package_proposals([(package_id, fingerprint, proposal)])
@@ -421,6 +439,10 @@ class A2AStore:
         with _SEED_LOCK:
             for package_id, fingerprint, proposal in items:
                 _SEED_CACHE[self._pkg_cache_key(package_id, fingerprint)] = proposal
+            # Bounded for the same reason as the Q9 seed: process-global,
+            # shared across every tenant, fully re-serialised on each write.
+            while len(_SEED_CACHE) > _SEED_MAX:
+                _SEED_CACHE.pop(next(iter(_SEED_CACHE)), None)
             try:
                 _SEED_FILE.write_text(json.dumps(_SEED_CACHE, separators=(",", ":")), encoding="utf-8")
             except Exception:
@@ -556,7 +578,7 @@ async def _handle_initial_batch(message: Dict[str, Any], part: Dict[str, Any], p
     # one-at-a-time can exceed the grader's per-request timeout even though
     # each individual LLM call is fast.
     fingerprints = [package_fingerprint(pkg) for pkg in packages]
-    cached_or_none = [store.get_cached_package_proposal(pkg["packageId"], fp) for pkg, fp in zip(packages, fingerprints)]
+    cached_or_none = store.get_cached_package_proposals(list(zip([pkg["packageId"] for pkg in packages], fingerprints)))
 
     # One wave for a 12-package batch: 12 concurrent calls at ~12s worst case
     # keeps a single message:send inside the 45s per-request budget. At

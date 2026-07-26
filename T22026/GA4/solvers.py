@@ -12,7 +12,7 @@ import logging
 import math
 import os
 import re
-from collections import defaultdict, deque
+from collections import OrderedDict, defaultdict, deque
 from typing import Any, Dict, List, Optional, Sequence
 
 logger = logging.getLogger("ga4_solvers")
@@ -24,7 +24,43 @@ SENTENCE_SPLIT_RE = re.compile(r"[.!?]\s+")
 # AIPipe LLM client (Q3 grounded QA + Q5 GraphRAG). Q4 needs no LLM.
 # ---------------------------------------------------------------------------
 AIPIPE_BASE = os.getenv("AIPIPE_BASE_URL", "https://aipipe.org/openai/v1")
-_LLM_CACHE: Dict[str, str] = {}
+
+# Bounded LRU-ish response cache. This dict is process-global and shared by
+# every tenant on the hub, so an unbounded version grows for as long as the
+# instance lives -- on Render's 512 MB free plan that ends in an OOM restart
+# mid-exam, which looks to students exactly like "the API is down".
+_LLM_CACHE: "OrderedDict[str, str]" = OrderedDict()
+_LLM_CACHE_MAX = int(os.getenv("LLM_CACHE_MAX", "2000"))
+
+
+def _cache_put(key: str, value: str) -> None:
+    _LLM_CACHE[key] = value
+    _LLM_CACHE.move_to_end(key)
+    while len(_LLM_CACHE) > _LLM_CACHE_MAX:
+        _LLM_CACHE.popitem(last=False)
+
+
+_HTTP_CLIENT = None
+
+
+def _get_http_client():
+    """One pooled httpx client per process, created lazily so it binds to the
+    running event loop. Connection limits are deliberately generous enough for
+    a 64-dossier Q9 batch but capped so a burst of concurrent students cannot
+    exhaust the instance's sockets."""
+    global _HTTP_CLIENT
+    import httpx
+
+    if _HTTP_CLIENT is None or _HTTP_CLIENT.is_closed:
+        _HTTP_CLIENT = httpx.AsyncClient(
+            timeout=httpx.Timeout(30.0),
+            limits=httpx.Limits(
+                max_connections=64,
+                max_keepalive_connections=32,
+                keepalive_expiry=60.0,
+            ),
+        )
+    return _HTTP_CLIENT
 
 
 class TokenExpiredError(RuntimeError):
@@ -81,29 +117,43 @@ async def aipipe_chat(
     # least one real attempt so a caller passing retries=0 meaning "don't retry"
     # still gets the single call it obviously intended.
     attempts = max(1, int(retries or 0))
-    async with httpx.AsyncClient(timeout=httpx.Timeout(timeout)) as client:
-        for attempt in range(attempts):
-            try:
-                r = await client.post(f"{AIPIPE_BASE}/chat/completions", headers=headers, json=body)
-            except httpx.RequestError as exc:
-                last_err = f"network error: {exc}"
-                await asyncio.sleep(1.0 * (attempt + 1))
-                continue
-            # 401/403 → token is expired or invalid; retrying won't help.
-            if r.status_code in (401, 403):
-                raise TokenExpiredError(
-                    "AIPipe token is expired or invalid (HTTP " + str(r.status_code) + "). "
-                    "Embed a fresh token in the URL path: /ga5/<email>/<NEW_TOKEN>/... "
-                    "You can get a new token from https://aipipe.org"
-                )
-            if r.status_code in (429, 500, 502, 503, 504):
-                last_err = f"HTTP {r.status_code}: {r.text[:160]}"
-                await asyncio.sleep(1.2 * (attempt + 1))
-                continue
-            r.raise_for_status()
-            out = r.json()["choices"][0]["message"]["content"]
-            _LLM_CACHE[key] = out
-            return out
+    # Reuse ONE pooled client for the whole process instead of opening a new
+    # AsyncClient (= new TCP + TLS handshake) per call. A single Q9 propose
+    # makes 64 of these and a Q10 send makes 12; multiplied by every student
+    # hitting the shared hub at once, the TLS handshakes alone saturate the
+    # 0.1-CPU Render instance and exhaust ephemeral sockets -- which surfaced
+    # as `network error: ` with an EMPTY message (httpx ConnectError) and as
+    # unrelated requests dying with ClientDisconnect while the loop was busy.
+    client = _get_http_client()
+    for attempt in range(attempts):
+        try:
+            r = await client.post(
+                f"{AIPIPE_BASE}/chat/completions",
+                headers=headers,
+                json=body,
+                timeout=httpx.Timeout(timeout),
+            )
+        except httpx.RequestError as exc:
+            # repr, not str: httpx ConnectError/PoolTimeout often stringify to
+            # "" and the log line then reads "network error: " with no cause.
+            last_err = f"network error: {exc!r}"
+            await asyncio.sleep(1.0 * (attempt + 1))
+            continue
+        # 401/403 → token is expired or invalid; retrying won't help.
+        if r.status_code in (401, 403):
+            raise TokenExpiredError(
+                "AIPipe token is expired or invalid (HTTP " + str(r.status_code) + "). "
+                "Embed a fresh token in the URL path: /ga5/<email>/<NEW_TOKEN>/... "
+                "You can get a new token from https://aipipe.org"
+            )
+        if r.status_code in (429, 500, 502, 503, 504):
+            last_err = f"HTTP {r.status_code}: {r.text[:160]}"
+            await asyncio.sleep(1.2 * (attempt + 1))
+            continue
+        r.raise_for_status()
+        out = r.json()["choices"][0]["message"]["content"]
+        _cache_put(key, out)
+        return out
     raise RuntimeError(f"AIPipe chat failed after {attempts} attempt(s): {last_err}")
 
 
