@@ -48,6 +48,20 @@ def _cache_put(key: str, value: str) -> None:
 _HTTP_CLIENTS: "weakref.WeakKeyDictionary[Any, Any]" = weakref.WeakKeyDictionary()
 _HTTP_CLIENT_NOLOOP = None
 
+# The pool is shared by EVERY tenant on the hub, so it must be sized against
+# AGGREGATE demand, not one request's. A single Q9 propose runs at
+# Semaphore(32), Q10 at 16, plus Q11 -- so even two or three concurrent
+# students exceeded the original 64 and the rest got PoolTimeout and silently
+# degraded to safe fallbacks (i.e. lost marks). Sockets are cheap here; the
+# expensive thing was the TLS handshake, and keepalive reuse still avoids that.
+_MAX_CONNECTIONS = int(os.getenv("HTTP_MAX_CONNECTIONS", "300"))
+_MAX_KEEPALIVE = int(os.getenv("HTTP_MAX_KEEPALIVE", "120"))
+# Waiting for a free slot must NOT be charged against the caller's read budget.
+# httpx.Timeout(8.0) sets connect/read/write/POOL all to 8s, so a queued call
+# burned the whole per-call budget waiting and then failed instead of waiting
+# briefly and succeeding. Pool wait is now its own, more generous dial.
+_POOL_WAIT = float(os.getenv("HTTP_POOL_WAIT", "20"))
+
 
 def _get_http_client():
     """One pooled httpx client PER EVENT LOOP, created lazily.
@@ -72,8 +86,8 @@ def _get_http_client():
         return httpx.AsyncClient(
             timeout=httpx.Timeout(30.0),
             limits=httpx.Limits(
-                max_connections=64,
-                max_keepalive_connections=32,
+                max_connections=_MAX_CONNECTIONS,
+                max_keepalive_connections=_MAX_KEEPALIVE,
                 keepalive_expiry=60.0,
             ),
         )
@@ -162,7 +176,16 @@ async def aipipe_chat(
                 f"{AIPIPE_BASE}/chat/completions",
                 headers=headers,
                 json=body,
-                timeout=httpx.Timeout(timeout),
+                # Per-phase, NOT a single scalar: httpx.Timeout(8.0) would set
+                # the pool-acquire wait to 8s too, so a call queued behind a
+                # busy pool failed rather than waiting its turn. read/write
+                # keep the caller's tight budget; pool gets its own.
+                timeout=httpx.Timeout(
+                    connect=min(timeout, 10.0),
+                    read=timeout,
+                    write=timeout,
+                    pool=_POOL_WAIT,
+                ),
             )
         except httpx.RequestError as exc:
             # repr, not str: httpx ConnectError/PoolTimeout often stringify to
