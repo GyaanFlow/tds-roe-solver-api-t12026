@@ -1331,15 +1331,34 @@ class MailroomStore:
             return _SEED_CACHE.get(key)
 
     def put_cached_proposal(self, dossier_id: str, fingerprint: str, proposal: Dict[str, Any]) -> None:
-        key = self._cache_key(dossier_id, fingerprint)
+        self.put_cached_proposals([(dossier_id, fingerprint, proposal)])
+
+    def put_cached_proposals(self, items: List[Tuple[str, str, Dict[str, Any]]]) -> None:
+        """Persist MANY cached proposals with ONE store read/write and ONE seed
+        write.
+
+        The per-item version was called once per dossier inside the propose
+        loop, and each call re-read the whole tenant store, re-wrote the whole
+        tenant store, AND re-wrote the entire seed file pretty-printed
+        (indent=2). Across 64 dossiers with a seed file of 100+ entries that is
+        megabytes of synchronous I/O -- and because it is blocking I/O executed
+        inside the async event loop, it also stalls the loop, serialising the
+        very asyncio.gather/Semaphore concurrency it sits inside. That is what
+        pushed both propose (Q9) and message:send (Q10) past their request
+        deadlines. Batch the writes instead."""
+        if not items:
+            return
         with self._lock:
             data = self._load()
-            data["dossier_cache"][key] = proposal
+            for dossier_id, fingerprint, proposal in items:
+                data["dossier_cache"][self._cache_key(dossier_id, fingerprint)] = proposal
             self._save(data)
         with _SEED_LOCK:
-            _SEED_CACHE[key] = proposal
+            for dossier_id, fingerprint, proposal in items:
+                _SEED_CACHE[self._cache_key(dossier_id, fingerprint)] = proposal
             try:
-                _SEED_FILE.write_text(json.dumps(_SEED_CACHE, indent=2), encoding="utf-8")
+                # compact, not indent=2 -- this file is machine-read only
+                _SEED_FILE.write_text(json.dumps(_SEED_CACHE, separators=(",", ":")), encoding="utf-8")
             except Exception:
                 pass
 
@@ -1447,6 +1466,7 @@ async def propose(body: Dict[str, Any], email: str, token: Optional[str]) -> Dic
         async with semaphore:
             return await triage_dossier_llm(dossier, token, allowed_actions=allowed_actions)
 
+    _to_cache: List[Tuple[str, str, Dict[str, Any]]] = []
     pending_indices = [i for i, c in enumerate(cached_or_none) if c is None]
     if pending_indices:
         results = await asyncio.gather(*[_triage_one(dossiers[i]) for i in pending_indices], return_exceptions=True)
@@ -1463,7 +1483,11 @@ async def propose(body: Dict[str, Any], email: str, token: Optional[str]) -> Dic
             # decision -- it would replay forever on later Checks without ever
             # re-consulting the model. Only cache genuine model decisions.
             if not is_fallback:
-                store.put_cached_proposal(dossiers[i]["dossierId"], fingerprints[i], proposal)
+                _to_cache.append((dossiers[i]["dossierId"], fingerprints[i], proposal))
+        # ONE store write + ONE seed write for the whole batch (see
+        # put_cached_proposals): the per-dossier version was blocking I/O inside
+        # the event loop and blew the request deadline.
+        store.put_cached_proposals(_to_cache)
 
     proposals: List[Dict[str, Any]] = [
         {k: v for k, v in p.items() if k != "_fallback"} for p in cached_or_none
