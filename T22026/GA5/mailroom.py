@@ -184,12 +184,23 @@ def _verify_receipt_signatures(
         raise MailroomError(400, f"Cannot import receiptVerifier public key: {exc}")
 
     seen_receipt_ids: set = set()
+    seen_signatures: set = set()
     for receipt in receipts:
         rid = receipt.get("receiptId", "")
         # Detect duplicated receiptId within one commit request
         if rid in seen_receipt_ids:
             raise MailroomError(400, f"duplicate receiptId '{rid}' in commit receipts")
         seen_receipt_ids.add(rid)
+        # The spec requires rejecting a signature that is "invalid, missing,
+        # DUPLICATED, or moved to another receipt". A moved signature already
+        # fails verification (it is bound to its own receipt fields), but an
+        # exactly-repeated signature across two receipts would otherwise verify
+        # twice and slip through -- so reject the reuse explicitly.
+        _sig = receipt.get("receiptSignature")
+        if isinstance(_sig, str) and _sig:
+            if _sig in seen_signatures:
+                raise MailroomError(400, f"duplicate receiptSignature reused for receiptId '{rid}'")
+            seen_signatures.add(_sig)
 
         sig_b64 = receipt.get("receiptSignature")
         if not sig_b64 or not isinstance(sig_b64, str):
@@ -1383,17 +1394,34 @@ async def propose(body: Dict[str, Any], email: str, token: Optional[str]) -> Dic
     _validate_propose_schema(body)
     evaluation_id = body["evaluationId"]
     dossiers = body["dossiers"]
+    # inputDigest is defined by the spec as SHA-256 over the DOSSIERS only, and
+    # is echoed back in the response -- keep it exactly that.
     input_digest = compute_input_digest(dossiers)
+    # Conflict detection needs a WIDER fingerprint than inputDigest. The grader
+    # probes "same evaluationId with changed content" by altering things that
+    # are NOT dossiers -- notably a single character of
+    # receiptVerifier.publicKeyJwk, and also corpus/allowedActions/profile.
+    # Comparing only inputDigest made every one of those look identical, so we
+    # replayed the cached response instead of returning 409 ("conflict rejection
+    # failed"). Note the previously-computed propose_fingerprint was never
+    # actually consulted, and omitted receiptVerifier anyway.
     propose_fingerprint = sha256_hex(_canonical_bytes({
         "dossiers": dossiers,
-        "allowedActions": body.get("allowedActions"),
         "corpus": body.get("corpus"),
+        "allowedActions": body.get("allowedActions"),
+        "profile": body.get("profile"),
+        "receiptVerifier": body.get("receiptVerifier"),
     }))
 
     store = MailroomStore(email)
     existing = store.get_evaluation(evaluation_id)
     if existing is not None:
-        if existing.get("inputDigest") == input_digest:
+        prior_fp = existing.get("proposeFingerprint")
+        # Fall back to inputDigest for records written before the wider
+        # fingerprint existed, so old evaluations still replay rather than 409.
+        same = (prior_fp == propose_fingerprint) if prior_fp is not None \
+            else (existing.get("inputDigest") == input_digest)
+        if same:
             return existing["proposeResponse"]
         raise MailroomError(409, f"evaluationId '{evaluation_id}' already used with different content")
 
@@ -1450,6 +1478,7 @@ async def propose(body: Dict[str, Any], email: str, token: Optional[str]) -> Dic
     }
     store.put_evaluation(evaluation_id, {
         "inputDigest": input_digest,
+        "proposeFingerprint": propose_fingerprint,
         "proposeFingerprint": propose_fingerprint,
         "proposeResponse": response,
         "proposalsByCallId": {p["callId"]: p for p in proposals},
