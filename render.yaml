@@ -12,6 +12,13 @@ services:
       # so the owner does NOT pay and this can stay unset. sync:false = not stored in repo.
       - key: AIPIPE_TOKEN
         sync: false
+      # Q10 Agent Card: guarantees supportedInterfaces is never empty right
+      # after a redeploy (the live registry file is gitignored on purpose --
+      # it holds real student data -- so it does not survive a fresh build).
+      # Set to your own current GA5 A2A base URL, e.g.
+      # "https://<host>/ga5/<email>/<token>/a2a/". sync:false = not stored in repo.
+      - key: GA5_Q10_KNOWN_BASE
+        sync: false
       - key: Q10_CSV_PATH
         value: "/app/T22026/GA0/Q10/q-fastapi.csv"
       - key: Q14_OUTPUT_DIR

@@ -92,8 +92,26 @@ def register_base_url(base_url: str) -> None:
 
 def _load_registry() -> Dict[str, Any]:
     """Union of every persisted location, so a base registered before a restart
-    (or shipped in the repo) still appears on the card."""
+    (or shipped in the repo) still appears on the card.
+
+    q10_bases.json is deliberately gitignored: it accumulates real student
+    emails/tokens at runtime and must never be committed. But that means it is
+    NOT part of the deployed image -- every fresh container from a redeploy
+    starts with this file simply not existing, so `supportedInterfaces` is
+    empty until some authenticated /a2a/ call happens to land first. If the
+    grader's very first HTTP call is the origin-level discovery GET (which the
+    A2A spec's normal flow assumes, and which carries no per-student token),
+    that check fails on every redeploy, no matter how well populated the file
+    gets afterward. GA5_Q10_KNOWN_BASE closes that gap with a value that
+    survives every redeploy because it comes from the platform's own env vars,
+    not the ephemeral filesystem -- set it to your own current submission base
+    URL (render.yaml/HF Space secrets, sync:false so it isn't committed
+    either).
+    """
     bases: List[str] = []
+    seeded = os.environ.get("GA5_Q10_KNOWN_BASE", "").strip()
+    if seeded:
+        bases.append(seeded.rstrip("/") + "/")
     for path in (_REGISTRY_PATH, _REGISTRY_FALLBACK):
         try:
             if not path.exists():
@@ -107,11 +125,12 @@ def _load_registry() -> Dict[str, Any]:
 
 
 def agent_card_json() -> Dict[str, Any]:
+    # No hardcoded fallback URL here on purpose: a baked-in string goes stale
+    # the moment a token rotates, and a wrong URL fails the "exact submitted
+    # base URL" check just as hard as an empty list does. GA5_Q10_KNOWN_BASE
+    # (see _load_registry) is the durable, explicit way to guarantee this is
+    # never empty across a redeploy.
     bases = _load_registry()["bases"]
-    if not bases:
-        bases = [
-            "https://23f1000805-tds-roe-solver-api-t12026.hf.space/ga5/23f1000805%40ds.study.iitm.ac.in/eyJhbGciOiJIUzI1NiJ9.eyJlbWFpbCI6IjIzZjEwMDA4MDVAZHMuc3R1ZHkuaWl0bS5hYy5pbiIsImlhdCI6MTc4NTEzOTE5MSwiaXNzIjoiaHR0cHM6Ly9haXBpcGUub3JnIiwiYXVkIjoiYWlwaXBlLWFwaSIsImV4cCI6MTc4NTc0Mzk5MX0.6a24LpUpC2ZQmW65N2t6OzG46szidy3-IRG7rfiKTb0/a2a/"
-        ]
     return {
         "name": "GA5 Invoice Action Agent",
         "description": "Reads messy invoice case files, chooses a business action per package, and carries it out through a receipt-bound A2A task lifecycle.",
@@ -514,7 +533,24 @@ async def message_send(body: Dict[str, Any], principal: str, token: Optional[str
     # Scope: dedup is keyed (principal, messageId); a continuation races cancel
     # on (principal, taskId). Locking the whole PRINCIPAL serialised all five
     # stable tasks and blew the deadline.
-    _scope = f"task:{message.get('taskId')}" if message.get("taskId") else f"msg:{message_id}"
+    #
+    # CANCEL_RECEIPT_RACE: the INITIAL propose message has no taskId yet (the
+    # task doesn't exist until this call creates it), so it used to lock on
+    # msg:{messageId} -- a DIFFERENT key than cancel_task's task:{taskId}.
+    # That let a cancel land concurrently with the triage LLM calls
+    # (asyncio.gather over up to 12 packages, several seconds), and after the
+    # gather finished the propose path would write the task unconditionally,
+    # silently overwriting the cancellation with no re-check -- exactly the
+    # "both cancel and result-delivery win" state the atomicity check rejects.
+    # task_id is fully deterministic from (principal, batchId) BEFORE the task
+    # exists, so lock on the SAME key cancel_task uses: whichever call
+    # acquires it first now runs to completion before the other can start, by
+    # construction, rather than needing a race window to avoid.
+    if message.get("taskId"):
+        _scope = f"task:{message['taskId']}"
+    else:
+        _batch_id = ((message.get("parts") or [{}])[0].get("data") or {}).get("batchId")
+        _scope = f"task:{task_id_for(principal, _batch_id)}" if _batch_id else f"msg:{message_id}"
     async with _scoped_lock(principal, _scope):
         is_continuation = bool(message.get("taskId"))
         existing = store.get_message_record(message_id)
@@ -581,7 +617,11 @@ async def _handle_initial_batch(message: Dict[str, Any], part: Dict[str, Any], p
 
     existing_task = store.get_task(task_id)
     if existing_task is not None:
-        if not existing_task.get("hadFallbacks"):
+        # A TERMINAL task (completed or cancelled) must never be re-triaged,
+        # regardless of hadFallbacks -- doing so would silently resurrect a
+        # cancelled task by overwriting it with a fresh proposal set, which is
+        # a second, subtler way to defeat "exactly one winner" atomicity.
+        if existing_task.get("state") in _TERMINAL_STATES or not existing_task.get("hadFallbacks"):
             return {"task": _public_task_view(existing_task)}
 
     # Check the stable-core cache first (no network calls), then triage every

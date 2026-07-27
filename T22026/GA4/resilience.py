@@ -42,6 +42,14 @@ logger = logging.getLogger("resilience")
 # 2.0 re-expands in half the time while keeping the fast-down/slow-up shape.
 _INCREASE_GAIN = float(os.getenv("AIPIPE_AIMD_GAIN", "2.0"))
 
+# Hard ceiling on how long a caller waits for a concurrency slot before being
+# admitted anyway. This hub runs Q9 (55s/request, batches of up to 32 wide),
+# Q10 (45s/request, up to 16 wide) and Q11 (18s/request -- by far the
+# tightest) through the SAME shared limiter. Without this cap, a Q11 call
+# arriving while Q9's batch has the limiter saturated could queue for however
+# long Q9 takes, which is already longer than Q11's entire request budget.
+_LIMITER_MAX_WAIT = float(os.getenv("AIPIPE_LIMITER_MAX_WAIT", "4.0"))
+
 
 # ---------------------------------------------------------------------------
 # Jittered exponential backoff
@@ -276,21 +284,46 @@ class AdaptiveLimiter:
     class _Slot:
         def __init__(self, outer: "AdaptiveLimiter"):
             self.outer = outer
+            self._counted = False
 
         async def __aenter__(self):
             outer = self.outer
             cond = outer._condition()
+            deadline = time.monotonic() + _LIMITER_MAX_WAIT
             async with cond:
                 while outer._in_flight >= outer.limit:
-                    await cond.wait()
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        # Congestion control must never become an unbounded
+                        # queue. Q11's whole request budget is 18s; if the
+                        # limit shrank under Q9's 32-wide batch and stayed
+                        # low, a Q11 call could wait here indefinitely --
+                        # LONGER than its own httpx timeout would ever allow,
+                        # because the wait happens BEFORE that timeout even
+                        # starts. Every caller already has its own hard
+                        # timeout on the actual HTTP call; past this bound,
+                        # proceeding over-limit and letting THAT timeout
+                        # govern is strictly better than starving the caller
+                        # here where nothing bounds the wait at all.
+                        logger.warning(
+                            "limiter %s: %.1fs wait exceeded, admitting over limit (%d/%d)",
+                            outer.name, _LIMITER_MAX_WAIT, outer._in_flight, outer.limit,
+                        )
+                        break
+                    try:
+                        await asyncio.wait_for(cond.wait(), timeout=remaining)
+                    except asyncio.TimeoutError:
+                        break
                 outer._in_flight += 1
+                self._counted = True
             return outer
 
         async def __aexit__(self, *exc):
             outer = self.outer
             cond = outer._condition()
             async with cond:
-                outer._in_flight -= 1
+                if self._counted:
+                    outer._in_flight -= 1
                 cond.notify(1)
             return False
 

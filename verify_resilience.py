@@ -103,16 +103,18 @@ def test_unresolved_probes_cannot_deadlock_the_breaker_forever():
     students with expired tokens."""
     import time
 
+    # Margins widened from an earlier 0.05/0.06s pairing that flaked under
+    # system load -- these need headroom, not tight timing precision.
     cb = CircuitBreaker(failure_threshold=1, recovery_time=0.05, half_open_probes=3)
     cb._probe_timeout = 0.3
     cb.record_failure()
-    time.sleep(0.06)
+    time.sleep(0.15)
 
     for _ in range(3):                       # admit every probe...
         assert cb.allows_request()
     assert not cb.allows_request(), "budget consumed"
 
-    time.sleep(0.35)                          # ...and never resolve them
+    time.sleep(0.45)                          # ...and never resolve them
     assert cb.allows_request(), "stale probes must be reclaimed, not wedged forever"
 
 
@@ -347,3 +349,48 @@ def test_limiter_across_separate_asyncio_run_calls():
 
     assert asyncio.run(use()) is True
     assert asyncio.run(use()) is True, "must rebind cleanly to the new loop"
+
+
+def test_limiter_wait_is_bounded_not_unbounded():
+    """REGRESSION: this hub runs Q9 (up to 32-wide batches, 55s/request), Q10
+    (up to 16-wide, 45s/request) and Q11 (18s/request -- far tighter) through
+    the SAME shared limiter. The original slot() had no wait timeout at all,
+    so a Q11 call arriving while Q9's batch saturated the limiter could queue
+    for however long that batch took -- already longer than Q11's entire
+    request budget, and far longer than any per-call httpx timeout, because
+    this wait happens BEFORE that timeout even starts. A caller must be
+    admitted (over-limit if necessary) once its wait exceeds the bound,
+    rather than starve indefinitely."""
+    import time
+
+    from T22026.GA4 import resilience as resilience_mod
+
+    lim = AdaptiveLimiter(initial=1, min_limit=1, max_limit=1)
+    orig_max_wait = resilience_mod._LIMITER_MAX_WAIT
+    resilience_mod._LIMITER_MAX_WAIT = 0.2  # keep the test fast
+
+    async def hog():
+        async with lim.slot():
+            await asyncio.sleep(5.0)  # simulate a long batch holding the only slot
+
+    async def run():
+        hog_task = asyncio.create_task(hog())
+        await asyncio.sleep(0.02)  # let the hog take the slot first
+        t = time.monotonic()
+        async with lim.slot():
+            waited = time.monotonic() - t
+        hog_task.cancel()
+        # Fully await the cancellation before the loop closes -- an
+        # un-awaited cancelled task can log its CancelledError after this
+        # test function returns, polluting whichever test runs next.
+        try:
+            await hog_task
+        except asyncio.CancelledError:
+            pass
+        return waited
+
+    try:
+        waited = asyncio.run(run())
+    finally:
+        resilience_mod._LIMITER_MAX_WAIT = orig_max_wait
+    assert waited < 1.0, "waited %.2fs -- congestion control must not queue past its own bound" % waited

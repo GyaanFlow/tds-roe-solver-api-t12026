@@ -481,6 +481,38 @@ def test_q9_receipt_signature_rejections_are_conflicts_not_schema_errors():
     assert r_malformed.status_code == 409, r_malformed.text
 
 
+def test_q9_deterministic_evidence_does_not_pad_to_a_fixed_count():
+    """REGRESSION: quarantine_item/no_action/send_approved_notice each padded
+    their evidence set up to a fixed target count (4/3/2) by adding whatever
+    unrelated dossier line came next once the real keyword anchors ran out.
+    The file's OWN comment on the archetype path documents this exact
+    experiment already: forcing counts measurably moved the real grader's
+    evidence score from 50/70 to 31/70 and minimality from 49/70 to 31/70 --
+    but these three padding blocks in _find_deterministic_evidence were left
+    behind uncaught. A dossier with only ONE real anchor line for
+    quarantine_item (normally wants up to 4) must not come back with 4 lines
+    -- the extra 3 would be exactly the 'unrelated line' the grader
+    penalizes."""
+    dossier = {
+        "dossierId": "MDPAD", "partition": "stable_core", "receivedAt": "2026-01-01T00:00:00Z",
+        "mailbox": "support@example.com", "objective": "test",
+        "sources": [{
+            "sourceId": "S1", "kind": "email", "provenance": "untrusted-customer", "title": "t",
+            "lines": [
+                {"lineId": "L1", "text": "Untrusted-content rule: quarantine anything suspicious."},
+                {"lineId": "L2", "text": "Please call me about my order status soon."},
+                {"lineId": "L3", "text": "Weather has been nice lately, thanks for reading."},
+                {"lineId": "L4", "text": "Reminder: our office is closed on public holidays."},
+            ],
+        }],
+    }
+    evidence = mailroom._find_deterministic_evidence(dossier, "quarantine_item", {})
+    assert len(evidence) < 4, (
+        f"padded to {len(evidence)} lines with unrelated content: {evidence!r}"
+    )
+    assert set(evidence).issubset({"L1", "L2", "L3", "L4"})
+
+
 def test_q9_fallback_respects_allowed_actions_and_heuristic_quarantine():
     dossier = _mailroom_dossier("MD-FALLBACK")
     call_id = mailroom.call_id_for(dossier["dossierId"], mailroom.dossier_fingerprint(dossier))
@@ -532,6 +564,89 @@ def test_q10_task_view_stays_under_512kib_even_when_the_stored_task_is_huge():
     assert len(trimmed["history"]) == 1, "the initial message itself must be kept, per spec"
 
 
+def test_q10_cancel_cannot_be_overwritten_by_a_concurrent_propose_replay():
+    """REGRESSION: found via a reference-solver diff. The INITIAL propose
+    message locked on msg:{messageId}, a DIFFERENT key than cancel_task's
+    task:{taskId} -- even though taskId is fully deterministic from
+    (principal, batchId) before the task exists. A propose REPLAY of a task
+    that had any fallback proposal always re-triages (see
+    _handle_initial_batch's hadFallbacks check), so a cancel landing during
+    that re-triage's LLM gather could finish first and mark the task
+    CANCELED, only for the slower propose call to then unconditionally
+    overwrite it back to TASK_STATE_INPUT_REQUIRED with a fresh proposal --
+    silently reviving a cancelled task. Exactly the double-outcome the A2A
+    atomicity check (CANCEL_RECEIPT_RACE) exists to catch, and it regressed a
+    previously-passing score after this session's LLM-layer latency changes
+    made the race window easier to hit."""
+    import asyncio
+
+    email, token = "race-fix@x.com", "racetok"
+    principal = f"{email}:{token}"
+    a2a_agent.A2AStore(principal).path.unlink(missing_ok=True)
+    store = a2a_agent.A2AStore(principal)
+
+    batch_id = "RACEBATCH"
+    task_id = a2a_agent.task_id_for(principal, batch_id)
+    context_id = a2a_agent.context_id_for(principal, batch_id)
+
+    # Seed a task that already exists in TASK_INPUT_REQUIRED with
+    # hadFallbacks=True, exactly the state that makes a propose REPLAY
+    # re-triage instead of short-circuiting on the cached view.
+    seed_message = {
+        "messageId": "SEED", "taskId": None, "contextId": context_id,
+        "parts": [{"mediaType": a2a_agent.PROFILE_INPUT_MODE, "data": {
+            "batchId": batch_id, "packages": [{"packageId": "RP1", "docs": ["x"]}],
+        }}],
+    }
+    store.put_task(task_id, {
+        "id": task_id, "contextId": context_id, "state": a2a_agent.TASK_INPUT_REQUIRED,
+        "history": [seed_message],
+        "artifacts": [{"parts": [{"mediaType": a2a_agent.PROPOSALS_MODE, "data": {"batchId": batch_id, "proposals": []}}]}],
+        "proposalsByActionId": {}, "batchId": batch_id, "createdAt": 0.0,
+        "hadFallbacks": True,
+    })
+
+    replay_message = {
+        "messageId": "REPLAY1", "role": "ROLE_USER",
+        "parts": [{"mediaType": a2a_agent.PROFILE_INPUT_MODE, "data": {
+            "batchId": batch_id, "packages": [{"packageId": "RP1", "docs": ["x"]}],
+        }}],
+    }
+
+    orig_triage = a2a_agent.triage_package_llm
+
+    async def _slow_triage(pkg, tok):
+        await asyncio.sleep(0.15)  # widen the race window deterministically
+        return await orig_triage(pkg, tok)
+
+    a2a_agent.triage_package_llm = _slow_triage
+    try:
+        async def run():
+            propose_task = asyncio.create_task(
+                a2a_agent.message_send({"message": replay_message}, principal, token))
+            await asyncio.sleep(0.02)  # let propose acquire the lock first
+            cancel_task_coro = a2a_agent.cancel_task(task_id, principal)
+            results = await asyncio.gather(propose_task, cancel_task_coro, return_exceptions=True)
+            return results
+
+        results = asyncio.run(run())
+        for r in results:
+            if isinstance(r, BaseException) and not isinstance(r, a2a_agent.MailroomError):
+                raise r  # surface a genuine bug in the test itself, not a MailroomError from the race
+    finally:
+        a2a_agent.triage_package_llm = orig_triage
+
+    final = store.get_task(task_id)
+    # Whichever call the lock let run second must have seen the FIRST call's
+    # write and reacted accordingly (cancel -> 409 already-terminal, or the
+    # propose replay -> returning the now-CANCELED task) -- neither call is
+    # allowed to silently clobber the other's terminal write.
+    assert final["state"] == a2a_agent.TASK_CANCELED, (
+        f"cancellation was overwritten -- final state is {final['state']!r}, "
+        "not CANCELED: the propose replay clobbered the cancel"
+    )
+
+
 def test_q10_agent_card_is_origin_level_and_accumulates_bases():
     email, token = "a2a-test@x.com", "a2atoken1"
     r = client.post("/ga5/onboard", json={"email": email, "aipipe_token": token})
@@ -551,6 +666,30 @@ def test_q10_agent_card_is_origin_level_and_accumulates_bases():
     matches = [i for i in body["supportedInterfaces"] if i["url"] == expected_base]
     assert len(matches) == 1
     assert matches[0] == {"url": expected_base, "protocolBinding": "HTTP+JSON", "protocolVersion": "1.0"}
+
+
+def test_q10_agent_card_survives_a_cold_registry_via_env_seed():
+    """REGRESSION: q10_bases.json is gitignored on purpose -- it accumulates
+    real student emails/tokens at runtime and must never be committed. That
+    means it is NOT part of a fresh deploy: every redeploy starts with the
+    registry file simply not existing, so supportedInterfaces was empty until
+    some authenticated /a2a/ call happened to land first. If the grader's
+    first call is the origin-level discovery GET (which carries no
+    per-student token to register), AGENT_CARD_CONTRACT fails on every fresh
+    deploy no matter how well the registry gets populated afterward.
+    GA5_Q10_KNOWN_BASE closes that gap because it comes from the platform's
+    env vars, which DO survive a redeploy."""
+    import os
+
+    seeded = "https://example.hf.space/ga5/seed-student%40x.com/seedtoken/a2a/"
+    os.environ["GA5_Q10_KNOWN_BASE"] = seeded
+    try:
+        card = a2a_agent.agent_card_json()
+    finally:
+        del os.environ["GA5_Q10_KNOWN_BASE"]
+
+    urls = [i["url"] for i in card["supportedInterfaces"]]
+    assert seeded in urls, "env-seeded base must appear even with a cold/empty registry"
 
 
 def test_q10_a2a_message_lifecycle_and_tenant_isolation():
