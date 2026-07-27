@@ -7,16 +7,15 @@ endpoint itself works internally, or specs for the other 9 GA6 questions, see
 
 ---
 
-## Base URLs
+## Base URL
 
-| Host | Base URL |
-|---|---|
-| Render | `https://tds-roe-solver-api-t12026.onrender.com` |
-| Hugging Face Space | `https://23f1000805-tds-roe-solver-api-t12026.hf.space` |
+```
+https://tds-roe-solver-api-t12026.onrender.com
+```
 
-Both run the identical code from the same repo. Use whichever is already up for your use case, or
-call both and take the first to respond if you want redundancy — the response is deterministic for a
-given email at a given point in time, so hitting either is safe (see "Determinism" below).
+A Hugging Face Space mirror also runs the identical code from the same repo, if you'd rather point at
+that instead — swap in your own Space's URL. The response is deterministic for a given email at a
+given point in time, so either deployment is safe to use (see "Determinism" below).
 
 ---
 
