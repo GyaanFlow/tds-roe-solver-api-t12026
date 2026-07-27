@@ -346,10 +346,16 @@ def _safe_or_empty(s: Optional[str]) -> str:
 _STATUS_WORDS = ("shipped", "delivered", "pending", "approved", "in_transit", "delayed", "cancelled")
 
 
+# CRITICAL: Exam corpus uses Unicode typographic quotes U+201C (\u201c) and U+201D (\u201d)
+# around all quoted values. ASCII-only quote patterns fail to extract ANY field value.
+_TQ_OPEN = "[\"\u201c]"   # ASCII double-quote OR left typographic quote
+_TQ_CLOSE = "[\"\u201d]"  # ASCII double-quote OR right typographic quote
 _QUOTED_STATUS_RE = re.compile(
-    r"(?:public\s+status|status)\s+(?:is\s+)?(?:exactly\s+)?[\"“']([^\"”']{2,60})[\"”']", re.I
+    r"(?:public\s+status|status)\s+(?:is\s+)?(?:exactly\s+)?" + _TQ_OPEN + r"([^\"\u201d]{2,60})" + _TQ_CLOSE, re.I
 )
-_QUOTED_VALUE_RE = re.compile(r"exact\s+value\s+[\"“']([^\"”']{1,80})[\"”']", re.I)
+_QUOTED_VALUE_RE = re.compile(
+    r"exact\s+value\s+" + _TQ_OPEN + r"([^\"\u201d]{1,80})" + _TQ_CLOSE, re.I
+)
 
 
 def _verbatim_status(llm_status: Optional[str], text: str) -> Optional[str]:
