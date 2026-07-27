@@ -1059,7 +1059,7 @@ def build_proposal_from_fields(dossier, call_id, action, f, evidence):
         ref = _extract_reference(_source_text(dossier), None, prefer=_ref_prefer)
     if action == "quarantine_item":
         ref = None  # never emit a referenceId for quarantine_item
-    elif not ref:
+    elif not ref or _looks_confidential(ref):
         ref = str(dossier.get("dossierId") or "unknown")
 
     # 2. Extract Recipient. For a real outbound (send_approved_notice) the
@@ -1171,7 +1171,7 @@ def build_proposal_from_fields(dossier, call_id, action, f, evidence):
         # pass an LLM-hallucinated or confidential-looking value through.
         valid_source_ids = {str(s.get("sourceId")) for s in dossier.get("sources", []) or [] if s.get("sourceId")}
         art_id = _safe_or_empty(f.get("artifactId"))
-        if art_id not in valid_source_ids:
+        if _looks_confidential(art_id) or art_id not in valid_source_ids:
             art_id = ""
         if not art_id:
             for src in dossier.get("sources", []) or []:

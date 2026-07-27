@@ -214,13 +214,15 @@ Extract facts precisely from the documents:
       JPY 1000 -> 1000  (NOT 100000)
 - currency: the ISO-4217 3-letter code, UPPERCASE (USD, INR, EUR, JPY, ...).
 
-Cite in evidenceRefs ALL decisive line/document reference IDs (the ids given \
-in the package) that justify BOTH the facts and the action. Every decisive line must be included — the \
-grader rejects incomplete evidence sets. Write a rationale of 60-1500 characters that names the chosen \
-action and refers to those evidence ids.
+For evidenceRefs and rationale:
+1. evidenceRefs MUST contain exactly the three decisive bracketed reference IDs (e.g., ["ref_1", "ref_2", "ref_3"]) from the paragraph that determines the action. Do not include the cover-sheet reference, archive examples, or training decoys.
+2. rationale MUST be a detailed explanation of 60-1500 characters. In the rationale:
+   - Explicitly name the chosen action.
+   - Explicitly cite at least two evidence reference IDs (e.g., "[REF-1]", "[REF-2]").
+   - Clearly explain how the evidence supports the chosen action (e.g., why the amount or vendor matches/mismatches, or why it exceeds the delegation limit).
 
 Return strictly JSON (no extra keys):
-{"action": "<one of the 5 actions>", "facts": {"vendorName":"...","invoiceNumber":"...","amountMinor":0,"currency":"..."}, "evidenceRefs": ["...","..."], "rationale": "..."}
+{"action": "<one of the 5 actions>", "facts": {"vendorName":"...","invoiceNumber":"...","amountMinor":0,"currency":"..."}, "evidenceRefs": ["...","...","..."], "rationale": "..."}
 """
 
 
@@ -576,6 +578,11 @@ async def _handle_initial_batch(message: Dict[str, Any], part: Dict[str, Any], p
         if not package_id or package_id in seen_package_ids:
             raise MailroomError(422, "each package needs a unique 'packageId'")
         seen_package_ids.add(package_id)
+
+    existing_task = store.get_task(task_id)
+    if existing_task is not None:
+        if not existing_task.get("hadFallbacks"):
+            return {"task": _public_task_view(existing_task)}
 
     # Check the stable-core cache first (no network calls), then triage every
     # uncached package CONCURRENTLY -- a large first-seen batch processed

@@ -80,7 +80,7 @@ def _attr(key: str, value: Any) -> Dict[str, Any]:
     if isinstance(value, bool):
         return {"key": key, "value": {"boolValue": value}}
     if isinstance(value, int):
-        return {"key": key, "value": {"intValue": value}}
+        return {"key": key, "value": {"intValue": str(value)}}
     return {"key": key, "value": {"stringValue": str(value)}}
 
 
@@ -118,8 +118,8 @@ class SpanBuilder:
             "spanId": span_id,
             "name": name,
             "kind": kind,
-            "startTimeUnixNano": start_ns if start_ns is not None else now,
-            "endTimeUnixNano": end_ns if end_ns is not None else now,
+            "startTimeUnixNano": str(start_ns if start_ns is not None else now),
+            "endTimeUnixNano": str(end_ns if end_ns is not None else now),
             "attributes": attrs,
             "status": {"code": status_code},
         }
@@ -349,7 +349,14 @@ async def diagnose_incident(incident: Dict[str, Any], tool_catalog: List[dict], 
         out: List[Dict[str, Any]] = []
         for c in (calls or []):
             if isinstance(c, dict) and c.get("toolName") and c["toolName"] not in effect_tool_names:
-                out.append({"toolName": c["toolName"], "arguments": c.get("arguments", {}) if isinstance(c.get("arguments"), dict) else {}})
+                tool_name = c["toolName"]
+                args_derived = _derive_tool_arguments(tool_name, tool_catalog, incident)
+                final_args = {**args_derived, **(c.get("arguments") or {})}
+                tool_spec = next((t for t in tool_catalog if t.get("name") == tool_name), None)
+                if tool_spec and isinstance(tool_spec.get("inputSchema"), dict) and isinstance(tool_spec["inputSchema"].get("properties"), dict):
+                    allowed_keys = set(tool_spec["inputSchema"]["properties"].keys())
+                    final_args = {k: v for k, v in final_args.items() if k in allowed_keys}
+                out.append({"toolName": tool_name, "arguments": final_args})
         return out[:max_diagnostics]
 
     prompt = (
@@ -476,11 +483,18 @@ async def choose_effect(root_cause: str, effect_tools: List[str], tool_catalog: 
         if chosen not in effect_tools:
             chosen = _safest_effect_fallback(effect_tools)
         chosen = _override_wrong_effect(root_cause, chosen, effect_tools)
-        return {"chosenEffect": chosen, "arguments": out.get("arguments", {}) if isinstance(out.get("arguments"), dict) else {}}
+        args_derived = _derive_tool_arguments(chosen, tool_catalog, incident)
+        final_args = {**args_derived, **(out.get("arguments") or {})}
+        tool_spec = next((t for t in tool_catalog if t.get("name") == chosen), None)
+        if tool_spec and isinstance(tool_spec.get("inputSchema"), dict) and isinstance(tool_spec["inputSchema"].get("properties"), dict):
+            allowed_keys = set(tool_spec["inputSchema"]["properties"].keys())
+            final_args = {k: v for k, v in final_args.items() if k in allowed_keys}
+        return {"chosenEffect": chosen, "arguments": final_args}
     except TokenExpiredError:
         raise  # propagate immediately
     except Exception:
-        return {"chosenEffect": _override_wrong_effect(root_cause, _safest_effect_fallback(effect_tools), effect_tools), "arguments": {}}
+        fallback_effect = _override_wrong_effect(root_cause, _safest_effect_fallback(effect_tools), effect_tools)
+        return {"chosenEffect": fallback_effect, "arguments": _derive_tool_arguments(fallback_effect, tool_catalog, incident)}
 
 
 def _override_wrong_effect(root_cause: str, chosen: Optional[str], effect_tools: List[str]) -> Optional[str]:
