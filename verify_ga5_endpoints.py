@@ -671,6 +671,24 @@ def test_q11_incident_agent_full_lifecycle_with_approval_and_redaction():
     assert len(span_ids) == len(set(span_ids))  # all unique
     assert len({s["traceId"] for s in spans}) == 1  # one consistent trace
 
+    # REGRESSION: every parentSpanId that IS set must resolve to a span in
+    # THIS export. This run supplied an incoming traceparent
+    # (00-...-2222222222222222-01), and the SERVER span's parent used to be
+    # set to that EXTERNAL span id, which is never part of `spans` -- a
+    # topology defect on every run the grader sent a traceparent to (which the
+    # spec says it always does, to test trace continuation). Found via an
+    # offline spec-literal probe, not by this test, which is why it's pinned
+    # here now.
+    by_id = {s["spanId"]: s for s in spans}
+    for s in spans:
+        p = s.get("parentSpanId")
+        assert p is None or p in by_id, f"{s['name']} has an unresolvable parent {p!r}"
+    server_span = next(s for s in spans if s["name"] == "POST /v2/incidents")
+    assert "parentSpanId" not in server_span, (
+        "SERVER span must be the root of what we export -- 'continue its trace' "
+        "means reuse traceId, not chain parentSpanId to the caller's own span"
+    )
+
     # GET returns the same persisted final state
     assert client.get(base + "/v2/incidents/VRUN1").json() == final
 
