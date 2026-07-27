@@ -13,10 +13,6 @@ endpoint itself works internally, or specs for the other 9 GA6 questions, see
 https://tds-roe-solver-api-t12026.onrender.com
 ```
 
-A Hugging Face Space mirror also runs the identical code from the same repo, if you'd rather point at
-that instead — swap in your own Space's URL. The response is deterministic for a given email at a
-given point in time, so either deployment is safe to use (see "Determinism" below).
-
 ---
 
 ## Endpoint
