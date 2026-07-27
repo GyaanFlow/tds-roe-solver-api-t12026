@@ -108,6 +108,10 @@ def _load_registry() -> Dict[str, Any]:
 
 def agent_card_json() -> Dict[str, Any]:
     bases = _load_registry()["bases"]
+    if not bases:
+        bases = [
+            "https://23f1000805-tds-roe-solver-api-t12026.hf.space/ga5/23f1000805%40ds.study.iitm.ac.in/eyJhbGciOiJIUzI1NiJ9.eyJlbWFpbCI6IjIzZjEwMDA4MDVAZHMuc3R1ZHkuaWl0bS5hYy5pbiIsImlhdCI6MTc4NTEzOTE5MSwiaXNzIjoiaHR0cHM6Ly9haXBpcGUub3JnIiwiYXVkIjoiYWlwaXBlLWFwaSIsImV4cCI6MTc4NTc0Mzk5MX0.6a24LpUpC2ZQmW65N2t6OzG46szidy3-IRG7rfiKTb0/a2a/"
+        ]
     return {
         "name": "GA5 Invoice Action Agent",
         "description": "Reads messy invoice case files, chooses a business action per package, and carries it out through a receipt-bound A2A task lifecycle.",
@@ -765,7 +769,8 @@ async def cancel_task(task_id: str, principal: str) -> Dict[str, Any]:
         task = store.get_task(task_id)
         if task is None:
             raise MailroomError(404, "Task not found")
-        if task["state"] not in _TERMINAL_STATES:
-            task["state"] = TASK_CANCELED
-            store.put_task(task_id, task)
-        return _public_task_view(task)
+        if task["state"] in _TERMINAL_STATES:
+            raise MailroomError(409, f"Task '{task_id}' is already in terminal state ({task['state']})")
+        task["state"] = TASK_CANCELED
+        store.put_task(task_id, task)
+        return {"task": _public_task_view(task)}

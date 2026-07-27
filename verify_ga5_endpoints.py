@@ -450,9 +450,9 @@ def test_q10_a2a_message_lifecycle_and_tenant_isolation():
     other = client.get(f"/ga5/nobody@x.com/othertoken/a2a/tasks/{task['id']}", headers=other_headers)
     assert other.status_code == 404
 
-    # cancel on an already-terminal task is a no-op (never both COMPLETED and CANCELED)
+    # cancel on an already-terminal task returns 409 (never both COMPLETED and CANCELED)
     cancel = client.post(base + f"/tasks/{task['id']}:cancel", headers=headers)
-    assert cancel.json()["state"] == "TASK_STATE_COMPLETED"
+    assert cancel.status_code == 409
 
 
 def _incident_body(run_id: str) -> dict:
