@@ -30,4 +30,14 @@ ENV CORS_ALLOW_ORIGINS=*
 RUN mkdir -p /tmp/q14_output /tmp/q16_work /tmp/q19_work
 
 EXPOSE 7860
-CMD ["sh", "-c", "uvicorn hf_space.app:app --host 0.0.0.0 --port ${PORT:-7860}"]
+# --proxy-headers --forwarded-allow-ips='*': both Render and HF Spaces
+# terminate TLS at their edge and forward plain HTTP to this container, so
+# without this flag uvicorn reports every request's scheme as "http" no
+# matter how the caller actually connected. request.base_url (used to build
+# the Q10 Agent Card's supportedInterfaces, onboarding URLs, etc.) then comes
+# out as "http://...", which fails BOTH "must be public HTTPS" and "contains
+# the exact submitted base URL" (the student's real, https, URL never
+# matches). Trusting the edge's X-Forwarded-Proto is safe here because that
+# edge is the ONLY path into this container -- there is no untrusted proxy in
+# front of it to spoof the header.
+CMD ["sh", "-c", "uvicorn hf_space.app:app --host 0.0.0.0 --port ${PORT:-7860} --proxy-headers --forwarded-allow-ips='*'"]
