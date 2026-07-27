@@ -5,6 +5,11 @@ codebase, so you don't have to re-implement the seed derivation or scraper anywh
 endpoint itself works internally, or specs for the other 9 GA6 questions, see
 `GA6_IMPLEMENTATION_GUIDE.md` in this same folder.
 
+> **Fixed since the last version of this guide:** the seed derivation was using the wrong PRNG
+> algorithm (Alea instead of the real ARC4 default), which silently produced the wrong assigned
+> categories/thresholds/digest for every email. If you called this endpoint before and cached the
+> result, re-fetch it now — the digest for the same email has changed.
+
 ---
 
 ## Base URL
@@ -50,13 +55,13 @@ GET {base}/ga6/health   →  {"status": "ok"}
 ```json
 {
   "email": "test@example.com",
-  "assignedCategories": ["Adult Fiction", "Fantasy", "Food and Drink", "Horror", "Mystery"],
-  "minRating": 2,
-  "minPrice": 10,
-  "maxPrice": 32,
-  "minAvailability": 2,
-  "matchCount": 37,
-  "digest": "88aff6bb5c1d9e9b23480043e5e631f7b5f3a2525c265df1a7fee1c6c5fcceb5",
+  "assignedCategories": ["Academic", "Art", "Biography", "Humor", "Religion"],
+  "minRating": 3,
+  "minPrice": 21,
+  "maxPrice": 60,
+  "minAvailability": 8,
+  "matchCount": 9,
+  "digest": "2ba172846275719d729346b8d1e8603da1587ec5db4a76536f3563d303ca3ddc",
   "hint": "Submit only the 'digest' value (64 lowercase hex characters) to the exam question."
 }
 ```
