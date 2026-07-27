@@ -89,7 +89,7 @@ class ConditionalCORSMiddleware(CORSMiddleware):
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http":
             path = scope.get("path", "")
-            if path.startswith("/ga2") or path.startswith("/ga3") or path.startswith("/ga4") or path.startswith("/ga5"):
+            if path.startswith(("/ga2", "/ga3", "/ga4", "/ga5", "/ga6")):
                 await self.app(scope, receive, send)
                 return
         await super().__call__(scope, receive, send)
@@ -337,6 +337,19 @@ def home() -> str:
       </div>
     </div>
 
+    <!-- GA6 -->
+    <div class="hub-card ga5">
+      <div>
+        <div class="hub-meta c-ga5">Graded Assignment 6</div>
+        <div class="hub-title">GA6 Web Scraping Hub</div>
+        <div class="hub-desc">Q7 only: live scrape of books.toscrape.com, filtered to your seeded categories and price/rating/availability thresholds, returning the exact SHA-256 digest to submit. The other GA6 questions need your own live exam session or infrastructure and aren't API-solvable.</div>
+      </div>
+      <div class="btn-stack">
+        <a href="/ga6/" class="btn b-ga5">Open GA6 Dashboard</a>
+        <a href="/ga6/docs" class="btn btn-secondary">API Reference</a>
+      </div>
+    </div>
+
     <!-- GA4 -->
     <div class="hub-card ga4">
       <div>
@@ -423,3 +436,7 @@ app.mount("/ga4", ga4)
 # Mount GA5 Multi-Tenant Service Hub
 ga5 = load_app("ga5_app", BASE / "T22026" / "GA5" / "app.py")
 app.mount("/ga5", ga5)
+
+# Mount GA6 Multi-Tenant Service Hub (only Q7 -- see T22026/GA6/solvers.py)
+ga6 = load_app("ga6_app", BASE / "T22026" / "GA6" / "app.py")
+app.mount("/ga6", ga6)
