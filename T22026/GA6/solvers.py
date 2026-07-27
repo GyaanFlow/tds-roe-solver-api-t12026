@@ -97,87 +97,133 @@ CATEGORY_TABLE: List[Dict[str, str]] = [
     {"name": "Crime", "slug": "crime_51"},
 ]
 
-_UINT32_MOD = 2 ** 32
-
-
-def _to_uint32(x: float) -> int:
-    """JS `x >>> 0` (ToUint32), which the Mash hash relies on repeatedly."""
-    if x != x or x in (float("inf"), float("-inf")):  # NaN / +-Inf
-        return 0
-    import math
-    posint = math.floor(abs(x))
-    if x < 0:
-        posint = -posint
-    return posint % _UINT32_MOD
+# ---------------------------------------------------------------------------
+# seedrandom -- the npm package's DEFAULT export (David Bau's ARC4-based
+# Math.seedrandom), NOT Alea.
+#
+# CORRECTION, found by actually executing the exam bundle's own code (not by
+# re-reading it): an earlier version of this file used seedrandom's ALEA
+# algorithm here, based on a mistaken static-analysis inference (finding
+# "this.alea=" text elsewhere in the vendor bundle and assuming that's what
+# this call site used). That was wrong and shipped to production with wrong
+# digests for every student. The actual call resolves to the seedrandom
+# package's aggregate module object (`W = mainSeedrandomFn; W.alea = ...;
+# W.xor128 = ...`) via `.default`, and calling `.default` directly invokes
+# the MAIN function attached to that object -- the ARC4 default, exactly
+# like a plain `require("seedrandom")` -- not `.alea`.
+#
+# Verified two independent ways before trusting this:
+#   1. Ran the exam bundle's own minified code directly in Node (CDN imports
+#      stubbed out, since Q7's logic needs none of them) and compared its
+#      real output for several emails against this port.
+#   2. Ported this file line-for-line from node_modules/seedrandom/seedrandom.js
+#      (not from memory) and verified the raw PRNG output against the real
+#      npm package across 10 emails/seeds, including edge cases (empty
+#      string, very long string, spaces, mixed case) -- 0 mismatches.
+#
+# This is a faithful port of the no-options, string-seed calling path only
+# (matches exactly how the exam calls it: `seedrandom(stringSeed)`).
+# ---------------------------------------------------------------------------
+_ARC4_WIDTH = 256
+_ARC4_CHUNKS = 6
+_ARC4_DIGITS = 52
+_ARC4_MASK = _ARC4_WIDTH - 1
+_ARC4_STARTDENOM = float(_ARC4_WIDTH ** _ARC4_CHUNKS)
+_ARC4_SIGNIFICANCE = float(2 ** _ARC4_DIGITS)
+_ARC4_OVERFLOW = _ARC4_SIGNIFICANCE * 2
 
 
 def _to_int32(x: float) -> int:
-    """JS `x | 0` (ToInt32), used once per Alea.next() call."""
-    u = _to_uint32(x)
-    return u - _UINT32_MOD if u >= 2 ** 31 else u
+    xi = int(x) & 0xFFFFFFFF
+    return xi - 0x100000000 if xi >= 0x80000000 else xi
 
 
-class _Mash:
-    """Port of seedrandom's Johannes Baagøe Mash(), used to seed Alea's state.
-
-    `n` is deliberately instance state that persists and mutates across
-    calls -- alea() calls this SAME mash function six times in a row
-    (three times with ' ', three times with the real seed) and each call
-    continues from the last call's `n`, not a fresh one. Resetting `n`
-    per-call would silently produce a different, wrong PRNG stream.
-    """
-
-    def __init__(self) -> None:
-        self.n = 4022871197.0
-
-    def __call__(self, data: Any) -> float:
-        s = str(data)
-        n = self.n
-        for ch in s:
-            n += ord(ch)
-            r = 0.02519603282416938 * n
-            n = float(_to_uint32(r))
-            r -= n
-            r *= n
-            n = float(_to_uint32(r))
-            r -= n
-            n += r * 4294967296.0
-        self.n = n
-        return _to_uint32(n) * 2.3283064365386963e-10
+def _mixkey(seed: str, key: List[int]) -> None:
+    """seedrandom.js's mixkey(): `key[mask&j] = mask & ((smear ^= key[mask&j]*19)
+    + charCodeAt(j))`. In JS, reading an unset array slot gives `undefined`,
+    and `undefined * 19` is NaN -- which coerces to 0 under `^` (ToInt32). For
+    any seed under 256 chars (every realistic email), each index is touched
+    only once, so `smear` provably never becomes anything but 0 the whole way
+    through. Ported as the literal loop anyway so it stays correct even if
+    that assumption is ever violated (a 256+ character seed)."""
+    smear = 0
+    for j, ch in enumerate(seed):
+        idx = _ARC4_MASK & j
+        prev = key[idx] if idx < len(key) else None
+        term = float("nan") if prev is None else float(prev * 19)
+        term_i32 = 0 if term != term else _to_int32(term)  # NaN check
+        smear = _to_int32(smear) ^ term_i32
+        val = _ARC4_MASK & (smear + ord(ch))
+        if idx < len(key):
+            key[idx] = val
+        else:
+            key.append(val)
 
 
-class Alea:
-    """Port of seedrandom's alea PRNG. `next()` matches the JS `rng()` call."""
+class _ARC4:
+    def __init__(self, key: List[int]) -> None:
+        keylen = len(key)
+        if keylen == 0:
+            key = [0]
+            keylen = 1
+        s = list(range(_ARC4_WIDTH))
+        j = 0
+        for i in range(_ARC4_WIDTH):
+            t = s[i]
+            j = _ARC4_MASK & (j + key[i % keylen] + t)
+            s[i] = s[j]
+            s[j] = t
+        self.S = s
+        self.i = 0
+        self.j = 0
+        # RC4-drop[256]: the real source defines g() and immediately calls it
+        # with count=width (256), discarding the result, right after key
+        # scheduling -- `(me.g=function(count){...})(width)`. Skipping this
+        # silently desyncs every subsequent output from the real generator.
+        self.g(_ARC4_WIDTH)
+
+    def g(self, count: int) -> int:
+        s = self.S
+        i, j = self.i, self.j
+        r = 0
+        for _ in range(count):
+            i = _ARC4_MASK & (i + 1)
+            t = s[i]
+            j = _ARC4_MASK & (j + t)
+            s[i], s[j] = s[j], t
+            r = r * _ARC4_WIDTH + s[_ARC4_MASK & (s[i] + s[j])]
+        self.i, self.j = i, j
+        return r
+
+
+class SeedRandom:
+    """Callable PRNG matching `rng()` -> float in [0, 1), i.e. JS `seedrandom(seed)()`."""
 
     def __init__(self, seed: str) -> None:
-        mash = _Mash()
-        self.c = 1.0
-        self.s0 = mash(" ")
-        self.s1 = mash(" ")
-        self.s2 = mash(" ")
-        self.s0 -= mash(seed)
-        if self.s0 < 0:
-            self.s0 += 1
-        self.s1 -= mash(seed)
-        if self.s1 < 0:
-            self.s1 += 1
-        self.s2 -= mash(seed)
-        if self.s2 < 0:
-            self.s2 += 1
+        key: List[int] = []
+        _mixkey(seed, key)
+        self._arc4 = _ARC4(key)
 
     def next(self) -> float:
-        t = 2091639.0 * self.s0 + self.c * 2.3283064365386963e-10
-        self.s0 = self.s1
-        self.s1 = self.s2
-        self.c = _to_int32(t)
-        self.s2 = t - self.c
-        return self.s2
+        arc4 = self._arc4
+        n = float(arc4.g(_ARC4_CHUNKS))
+        d = _ARC4_STARTDENOM
+        x = 0
+        while n < _ARC4_SIGNIFICANCE:
+            n = (n + x) * _ARC4_WIDTH
+            d *= _ARC4_WIDTH
+            x = arc4.g(1)
+        while n >= _ARC4_OVERFLOW:
+            n /= 2
+            d /= 2
+            x >>= 1
+        return (n + x) / d
 
     def __call__(self) -> float:
         return self.next()
 
 
-def _shuffle(items: List[Dict[str, str]], rng: Alea) -> List[Dict[str, str]]:
+def _shuffle(items: List[Dict[str, str]], rng: SeedRandom) -> List[Dict[str, str]]:
     """Fisher-Yates, exactly as the exam bundle's own shuffle helper does it
     (descending index, `Math.floor(rng() * (i + 1))`)."""
     import math
@@ -189,11 +235,12 @@ def _shuffle(items: List[Dict[str, str]], rng: Alea) -> List[Dict[str, str]]:
 
 
 def derive_seed(email: str) -> Dict[str, Any]:
-    """Reproduce ft(email) from the exam bundle exactly: one Alea instance,
-    a shuffle (which consumes len(CATEGORY_TABLE)-1 draws), then four more
-    draws IN THIS ORDER -- minRating, minPrice, maxPrice, minAvailability.
-    Getting the draw order wrong desyncs every value after the first."""
-    rng = Alea(f"{email}#{QUESTION_ID}")
+    """Reproduce ft(email) from the exam bundle exactly: one seedrandom
+    instance, a shuffle (which consumes len(CATEGORY_TABLE)-1 draws), then
+    four more draws IN THIS ORDER -- minRating, minPrice, maxPrice,
+    minAvailability. Getting the draw order wrong desyncs every value after
+    the first."""
+    rng = SeedRandom(f"{email}#{QUESTION_ID}")
     shuffled = _shuffle(CATEGORY_TABLE, rng)
     picked = sorted(c["slug"] for c in shuffled[:CATEGORIES_TO_ASSIGN])
     import math

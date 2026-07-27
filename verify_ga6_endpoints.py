@@ -6,12 +6,25 @@ is served here. Q1 (rotated-image forensics), Q3 (DuckDB regression), Q8
 student's own live exam session, browser tab, or personal infrastructure --
 no hosted API can produce or verify them, so this hub does not attempt them.
 
-The seed-derivation port (T22026/GA6/solvers.py: Alea, _Mash, _shuffle,
-derive_seed) was cross-checked against the REAL npm `seedrandom/lib/alea`
-module for 18 different emails (3 by hand, 15 fuzzed) before being trusted --
-see the session notes. These tests re-pin those exact verified values as a
-permanent regression guard, since a wrong PRNG port would silently assign
-every student the wrong categories/thresholds without ever raising an error.
+The seed-derivation port (T22026/GA6/solvers.py: SeedRandom/_ARC4/_mixkey,
+_shuffle, derive_seed) uses the npm `seedrandom` package's DEFAULT export
+(David Bau's ARC4-based Math.seedrandom) -- NOT Alea. An earlier version of
+this file used Alea, based on a mistaken static-analysis inference (finding
+"this.alea=" text elsewhere in the exam bundle's vendor chunk and wrongly
+assuming that's what this call site resolved to); that shipped to production
+and gave every student the wrong assigned categories/thresholds/digest,
+silently -- no exception, just a plausible-looking wrong answer. Caught by
+actually executing the exam bundle's own minified code in Node (CDN imports
+stubbed, since this function needs none of them) and finding its real output
+didn't match this port's Alea-based values.
+
+The corrected ARC4 port was verified two ways before trusting it: ran the
+exam bundle's own code directly and compared output for 10 emails/edge cases,
+and separately ported seedrandom.js line-for-line and verified its raw PRNG
+output against the real npm package across empty/very-long/mixed-case/
+spaced seed strings. These tests re-pin those exact verified values as a
+permanent regression guard, since a wrong PRNG port fails silently, not
+loudly.
 
 Q7's own test makes a REAL network call to books.toscrape.com (there is
 nothing to solve without one -- the whole point of this endpoint is a live
@@ -42,61 +55,97 @@ def test_home_page():
 
 
 # ---------------------------------------------------------------------------
-# Seed derivation -- pinned against the REAL npm seedrandom/lib/alea module.
+# Seed derivation -- pinned against the REAL npm `seedrandom` default (ARC4)
+# export, and separately against the exam bundle's own executed code.
 # ---------------------------------------------------------------------------
-def test_seed_derivation_matches_the_real_npm_seedrandom_alea_module():
+def test_seed_derivation_matches_the_real_npm_seedrandom_default_arc4_export():
     cases = {
-        "23f1000805@ds.study.iitm.ac.in": {
-            "categories": ["cultural_49", "erotica_50", "nonfiction_13", "novels_46", "sports-and-games_17"],
-            "categoryNames": ["Cultural", "Erotica", "Nonfiction", "Novels", "Sports and Games"],
-            "minRating": 5, "minPrice": 28, "maxPrice": 58, "minAvailability": 11,
-        },
         "test@example.com": {
-            "categories": ["adult-fiction_29", "fantasy_19", "food-and-drink_33", "horror_31", "mystery_3"],
-            "categoryNames": ["Adult Fiction", "Fantasy", "Food and Drink", "Horror", "Mystery"],
-            "minRating": 2, "minPrice": 10, "maxPrice": 32, "minAvailability": 2,
+            "categories": ["academic_40", "art_25", "biography_36", "humor_30", "religion_12"],
+            "categoryNames": ["Academic", "Art", "Biography", "Humor", "Religion"],
+            "minRating": 3, "minPrice": 21, "maxPrice": 60, "minAvailability": 8,
+        },
+        "23f1000805@ds.study.iitm.ac.in": {
+            "categories": ["music_14", "poetry_23", "self-help_41", "sports-and-games_17", "suspense_44"],
+            "categoryNames": ["Music", "Poetry", "Self Help", "Sports and Games", "Suspense"],
+            "minRating": 3, "minPrice": 11, "maxPrice": 38, "minAvailability": 13,
         },
         "student@x.com": {
-            "categories": ["fiction_10", "humor_30", "novels_46", "parenting_28", "travel_2"],
-            "categoryNames": ["Fiction", "Humor", "Novels", "Parenting", "Travel"],
-            "minRating": 5, "minPrice": 11, "maxPrice": 40, "minAvailability": 7,
+            "categories": ["academic_40", "cultural_49", "novels_46", "politics_48", "romance_8"],
+            "categoryNames": ["Academic", "Cultural", "Novels", "Politics", "Romance"],
+            "minRating": 4, "minPrice": 15, "maxPrice": 46, "minAvailability": 6,
         },
-        # 5 more emails, cross-checked directly against `node -e
-        # "require('seedrandom/lib/alea')"` with each email passed as its own
-        # isolated argument (an earlier shell pipeline that piped a file
-        # through `mapfile`/`tr` produced silently corrupted values here once
-        # -- these are re-verified straight from a fresh, direct node
-        # invocation, not copied from that intermediate file).
+        # 7 more emails/edge cases, cross-checked directly against
+        # `node -e "require('seedrandom')(...)"` with each email passed as its
+        # own isolated argv entry (no file-piping -- an earlier round of this
+        # exact mistake, with the WRONG algorithm, silently corrupted values
+        # via a mapfile/tr shell pipeline; this time verified straight from
+        # direct node invocations only).
         "aji0@example.com": {
-            "categories": ["adult-fiction_29", "historical_42", "poetry_23", "short-stories_45", "womens-fiction_9"],
-            "categoryNames": ["Adult Fiction", "Historical", "Poetry", "Short Stories", "Womens Fiction"],
-            "minRating": 3, "minPrice": 36, "maxPrice": 54, "minAvailability": 12,
+            "categories": ["cultural_49", "erotica_50", "historical-fiction_4", "history_32", "paranormal_24"],
+            "categoryNames": ["Cultural", "Erotica", "Historical Fiction", "History", "Paranormal"],
+            "minRating": 3, "minPrice": 29, "maxPrice": 49, "minAvailability": 7,
         },
         "dpbhsahxthv@example.com": {
-            "categories": ["art_25", "food-and-drink_33", "health_47", "romance_8", "travel_2"],
-            "categoryNames": ["Art", "Food and Drink", "Health", "Romance", "Travel"],
-            "minRating": 3, "minPrice": 29, "maxPrice": 61, "minAvailability": 8,
+            "categories": ["default_15", "erotica_50", "historical_42", "self-help_41", "thriller_37"],
+            "categoryNames": ["Default", "Erotica", "Historical", "Self Help", "Thriller"],
+            "minRating": 4, "minPrice": 21, "maxPrice": 60, "minAvailability": 9,
         },
         "1fp@example.com": {
-            "categories": ["art_25", "classics_6", "fiction_10", "paranormal_24", "womens-fiction_9"],
-            "categoryNames": ["Art", "Classics", "Fiction", "Paranormal", "Womens Fiction"],
-            "minRating": 2, "minPrice": 36, "maxPrice": 56, "minAvailability": 8,
+            "categories": ["erotica_50", "horror_31", "parenting_28", "politics_48", "travel_2"],
+            "categoryNames": ["Erotica", "Horror", "Parenting", "Politics", "Travel"],
+            "minRating": 2, "minPrice": 37, "maxPrice": 60, "minAvailability": 8,
         },
         "ff0t0pvn9e@example.com": {
-            "categories": ["contemporary_38", "cultural_49", "erotica_50", "humor_30", "young-adult_21"],
-            "categoryNames": ["Contemporary", "Cultural", "Erotica", "Humor", "Young Adult"],
-            "minRating": 2, "minPrice": 15, "maxPrice": 40, "minAvailability": 4,
+            "categories": ["biography_36", "default_15", "health_47", "poetry_23", "thriller_37"],
+            "categoryNames": ["Biography", "Default", "Health", "Poetry", "Thriller"],
+            "minRating": 2, "minPrice": 34, "maxPrice": 52, "minAvailability": 9,
         },
         "4azytjxepq8@example.com": {
-            "categories": ["historical-fiction_4", "novels_46", "poetry_23", "romance_8", "womens-fiction_9"],
-            "categoryNames": ["Historical Fiction", "Novels", "Poetry", "Romance", "Womens Fiction"],
-            "minRating": 2, "minPrice": 39, "maxPrice": 77, "minAvailability": 9,
+            "categories": ["adult-fiction_29", "cultural_49", "music_14", "novels_46", "parenting_28"],
+            "categoryNames": ["Adult Fiction", "Cultural", "Music", "Novels", "Parenting"],
+            "minRating": 4, "minPrice": 19, "maxPrice": 54, "minAvailability": 5,
+        },
+        "x@y.com": {
+            "categories": ["classics_6", "cultural_49", "new-adult_20", "sequential-art_5", "thriller_37"],
+            "categoryNames": ["Classics", "Cultural", "New Adult", "Sequential Art", "Thriller"],
+            "minRating": 2, "minPrice": 29, "maxPrice": 59, "minAvailability": 14,
+        },
+        "a-very-long-email-address-for-testing@example-domain.co.in": {
+            "categories": ["childrens_11", "default_15", "sports-and-games_17", "travel_2", "young-adult_21"],
+            "categoryNames": ["Childrens", "Default", "Sports and Games", "Travel", "Young Adult"],
+            "minRating": 3, "minPrice": 26, "maxPrice": 52, "minAvailability": 6,
         },
     }
     for email, expected in cases.items():
         got = derive_seed(email)
         got_cmp = {k: got[k] for k in expected}
         assert got_cmp == expected, f"seed mismatch for {email}: expected {expected}, got {got_cmp}"
+
+
+def test_seedrandom_arc4_raw_output_matches_npm_across_edge_cases():
+    """Regression for the specific bug found: the ARC4 port initially omitted
+    RC4-drop[256] (the real source discards the first 256 generator outputs
+    immediately after key scheduling, `(me.g=function(){...})(width)`),
+    which silently desynced every subsequent value from the real generator's
+    internal i/j state without ever raising an error. Pins raw PRNG output
+    (not the higher-level derive_seed) against real `node -e
+    "require('seedrandom')(seed)"` output for seeds most likely to expose a
+    mixkey/ARC4 edge case: empty string, very long string, embedded space,
+    and mixed case."""
+    from T22026.GA6.solvers import SeedRandom
+
+    cases = {
+        "hello": [0.5463663768140734, 0.4397379377059223, 0.554769432473455],
+        "": [0.23144008215179881, 0.27404636548159655],
+        "test@example.com#q-scrape-books-server": [0.8205332964303583, 0.7656229521437286, 0.30121421344748867],
+        "with spaces @example.com#q-scrape-books-server": [0.9464034853778767, 0.546637207810008, 0.022664450835335165],
+        "UPPER@EXAMPLE.COM#q-scrape-books-server": [0.5148203109858379, 0.39620941419990185, 0.5788821211017916],
+    }
+    for seed, expected in cases.items():
+        rng = SeedRandom(seed)
+        got = [rng.next() for _ in expected]
+        assert got == expected, f"raw PRNG mismatch for seed {seed!r}: expected {expected}, got {got}"
 
 
 def test_derive_seed_is_deterministic_across_repeated_calls():
@@ -108,7 +157,7 @@ def test_derive_seed_is_deterministic_across_repeated_calls():
     assert a == b
     # A different email afterward must not have been affected by the first call.
     c = derive_seed("test@example.com")
-    assert c["categories"] == ["adult-fiction_29", "fantasy_19", "food-and-drink_33", "horror_31", "mystery_3"]
+    assert c["categories"] == ["academic_40", "art_25", "biography_36", "humor_30", "religion_12"]
 
 
 # ---------------------------------------------------------------------------
@@ -151,8 +200,8 @@ def test_q7_scrape_books_live_endpoint():
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["email"] == "test@example.com"
-    assert body["assignedCategories"] == ["Adult Fiction", "Fantasy", "Food and Drink", "Horror", "Mystery"]
-    assert body["minRating"] == 2 and body["minPrice"] == 10 and body["maxPrice"] == 32 and body["minAvailability"] == 2
+    assert body["assignedCategories"] == ["Academic", "Art", "Biography", "Humor", "Religion"]
+    assert body["minRating"] == 3 and body["minPrice"] == 21 and body["maxPrice"] == 60 and body["minAvailability"] == 8
     assert isinstance(body["matchCount"], int) and body["matchCount"] > 0
     digest = body["digest"]
     assert len(digest) == 64 and all(c in "0123456789abcdef" for c in digest)
