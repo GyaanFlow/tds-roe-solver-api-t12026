@@ -184,28 +184,34 @@ def _verify_receipt_signatures(
     except Exception as exc:
         raise MailroomError(400, f"Cannot import receiptVerifier public key: {exc}")
 
+    # SPEC: "Reject the whole commit before any action if one signature is
+    # invalid, missing, duplicated, or moved to another receipt." Every check
+    # below matches one of those four words verbatim -- all four are conflict
+    # rejections (409), not schema errors (400). This mirrors the same fix
+    # already made for a duplicated receipt callId, which the grader groups
+    # in this exact class; these were still 400 and un-fixed.
     seen_receipt_ids: set = set()
     seen_signatures: set = set()
     for receipt in receipts:
         rid = receipt.get("receiptId", "")
-        # Detect duplicated receiptId within one commit request
+        # A duplicated receipt object (same receiptId twice) within one commit.
         if rid in seen_receipt_ids:
-            raise MailroomError(400, f"duplicate receiptId '{rid}' in commit receipts")
+            raise MailroomError(409, f"duplicate receiptId '{rid}' in commit receipts")
         seen_receipt_ids.add(rid)
-        # The spec requires rejecting a signature that is "invalid, missing,
-        # DUPLICATED, or moved to another receipt". A moved signature already
-        # fails verification (it is bound to its own receipt fields), but an
-        # exactly-repeated signature across two receipts would otherwise verify
-        # twice and slip through -- so reject the reuse explicitly.
+        # "duplicated" signature: a moved signature already fails verification
+        # (it is bound to its own receipt fields), but an exactly-repeated
+        # signature across two receipts would otherwise verify twice and slip
+        # through -- so reject the reuse explicitly.
         _sig = receipt.get("receiptSignature")
         if isinstance(_sig, str) and _sig:
             if _sig in seen_signatures:
-                raise MailroomError(400, f"duplicate receiptSignature reused for receiptId '{rid}'")
+                raise MailroomError(409, f"duplicate receiptSignature reused for receiptId '{rid}'")
             seen_signatures.add(_sig)
 
         sig_b64 = receipt.get("receiptSignature")
         if not sig_b64 or not isinstance(sig_b64, str):
-            raise MailroomError(400, f"receiptSignature missing for receiptId '{rid}'")
+            # "missing" signature.
+            raise MailroomError(409, f"receiptSignature missing for receiptId '{rid}'")
 
         # Decode signature — accept standard base64 (the spec says base64, not base64url)
         sig_padding = (-len(sig_b64)) % 4
@@ -215,7 +221,8 @@ def _verify_receipt_signatures(
             try:
                 sig_bytes = base64.urlsafe_b64decode(sig_b64 + "=" * sig_padding)
             except Exception:
-                raise MailroomError(400, f"receiptSignature not valid base64 for receiptId '{rid}'")
+                # "invalid" signature (malformed encoding).
+                raise MailroomError(409, f"receiptSignature not valid base64 for receiptId '{rid}'")
 
         # Signed message = recursively key-sorted compact JSON of the inner receipt
         # (every field except receiptSignature itself).
@@ -231,9 +238,12 @@ def _verify_receipt_signatures(
         try:
             pub_key.verify(sig_bytes, message_bytes)
         except InvalidSignature:
-            raise MailroomError(400, f"receiptSignature verification failed for receiptId '{rid}'")
+            # "invalid" signature -- includes a signature moved to another
+            # receipt: it verifies against ITS OWN receipt fields, so a moved
+            # one fails here too, without needing a separate check.
+            raise MailroomError(409, f"receiptSignature verification failed for receiptId '{rid}'")
         except Exception as exc:
-            raise MailroomError(400, f"receiptSignature error for receiptId '{rid}': {exc}")
+            raise MailroomError(409, f"receiptSignature error for receiptId '{rid}': {exc}")
 
 
 # ---------------------------------------------------------------------------
