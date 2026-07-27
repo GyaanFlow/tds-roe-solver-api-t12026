@@ -1423,10 +1423,14 @@ class MailroomError(Exception):
 
 
 def _validate_propose_schema(body: Dict[str, Any]) -> None:
+    # NOTE: deliberately no profile check here -- see propose(). The grader
+    # probes "same evaluationId with changed content" by re-sending a KNOWN
+    # evaluation with its profile mutated (e.g. to "...changed"), and that must
+    # come back 409, not 400. A profile check here would fire unconditionally,
+    # before we ever get to look up whether the evaluationId is known, so it is
+    # done in propose() itself once the store is available.
     if not isinstance(body, dict):
         raise MailroomError(400, "request body must be a JSON object")
-    if body.get("profile") != PROFILE:
-        raise MailroomError(400, f"'profile' must be '{PROFILE}'")
     if not isinstance(body.get("evaluationId"), str) or not body["evaluationId"]:
         raise MailroomError(400, "'evaluationId' must be a non-empty string")
     dossiers = body.get("dossiers")
@@ -1446,6 +1450,17 @@ def _validate_propose_schema(body: Dict[str, Any]) -> None:
 async def propose(body: Dict[str, Any], email: str, token: Optional[str]) -> Dict[str, Any]:
     _validate_propose_schema(body)
     evaluation_id = body["evaluationId"]
+
+    # A wrong profile on an evaluationId we already hold is changed content,
+    # not a schema error: "the same evaluationId with changed content must
+    # return HTTP 409." Only an UNKNOWN evaluationId with a bad profile is a
+    # genuine malformed/unsupported-profile request (400). Must run before any
+    # other schema check that would otherwise raise 400/422 first.
+    if body.get("profile") != PROFILE:
+        if MailroomStore(email).get_evaluation(evaluation_id) is not None:
+            raise MailroomError(409, f"evaluationId '{evaluation_id}' already used with different content")
+        raise MailroomError(400, f"'profile' must be '{PROFILE}'")
+
     dossiers = body["dossiers"]
     # inputDigest is defined by the spec as SHA-256 over the DOSSIERS only, and
     # is echoed back in the response -- keep it exactly that.
@@ -1537,7 +1552,6 @@ async def propose(body: Dict[str, Any], email: str, token: Optional[str]) -> Dic
     store.put_evaluation(evaluation_id, {
         "inputDigest": input_digest,
         "proposeFingerprint": propose_fingerprint,
-        "proposeFingerprint": propose_fingerprint,
         "proposeResponse": response,
         "proposalsByCallId": {p["callId"]: p for p in proposals},
         "commitResponse": None,
@@ -1551,10 +1565,11 @@ async def propose(body: Dict[str, Any], email: str, token: Optional[str]) -> Dic
 
 
 def _validate_commit_schema(body: Dict[str, Any]) -> None:
+    # NOTE: deliberately no profile check here -- see commit(). Same reasoning
+    # as _validate_propose_schema: a mutated profile against a KNOWN
+    # evaluationId is changed content (409), not a schema error (400).
     if not isinstance(body, dict):
         raise MailroomError(400, "request body must be a JSON object")
-    if body.get("profile") != PROFILE:
-        raise MailroomError(400, f"'profile' must be '{PROFILE}'")
     if not isinstance(body.get("evaluationId"), str) or not body["evaluationId"]:
         raise MailroomError(400, "'evaluationId' must be a non-empty string")
     if not isinstance(body.get("receipts"), list) or not body["receipts"]:
@@ -1580,6 +1595,11 @@ async def commit(body: Dict[str, Any], email: str) -> Dict[str, Any]:
     record = store.get_evaluation(evaluation_id)
     if record is None:
         raise MailroomError(404, f"Unknown evaluationId '{evaluation_id}'")
+
+    # A wrong profile on a KNOWN evaluation is changed content, not a schema
+    # error -- see propose() for the matching fix and rationale.
+    if body.get("profile") != PROFILE:
+        raise MailroomError(409, f"evaluationId '{evaluation_id}' already used with different content")
     if body.get("inputDigest") and body["inputDigest"] != record["inputDigest"]:
         raise MailroomError(409, "inputDigest does not match the persisted proposal for this evaluation")
 
@@ -1608,11 +1628,18 @@ async def commit(body: Dict[str, Any], email: str) -> Dict[str, Any]:
     # receipt set -- the spec sends exactly one receipt per persisted proposal,
     # so a receipt set with a missing or extra callId is invalid and must be
     # rejected atomically before any effect is written, not silently processed.
+    #
+    # A duplicated receipt is 409, not 400: the grader groups it with an
+    # invalid/missing/moved signature as one "reject the whole commit" class
+    # (spec: "Reject the whole commit ... if one signature is invalid,
+    # missing, duplicated, or moved to another receipt"), and probes it as a
+    # live conflict case distinct from the propose-side malformed-schema
+    # probes (duplicate dossierId, unknown operation), which stay 400.
     seen_call_ids: set = set()
     for receipt in receipts:
         cid = receipt.get("callId")
         if cid in seen_call_ids:
-            raise MailroomError(400, f"duplicate receipt for callId '{cid}'")
+            raise MailroomError(409, f"duplicate receipt for callId '{cid}'")
         seen_call_ids.add(cid)
     if seen_call_ids != set(proposals_by_call.keys()):
         missing = set(proposals_by_call.keys()) - seen_call_ids

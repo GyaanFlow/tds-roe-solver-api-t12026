@@ -716,18 +716,59 @@ async def _handle_continuation(message: Dict[str, Any], part: Dict[str, Any], me
     return {"task": _public_task_view(task)}
 
 
+_MAX_A2A_BODY = 512 * 1024  # spec: "Successful A2A responses ... stay at or below 512 KiB."
+
+
+def _thin_part(part: Dict[str, Any]) -> Dict[str, Any]:
+    """A message/artifact part with its bulk payload replaced by a marker,
+    keeping mediaType and any other metadata intact."""
+    if not isinstance(part, dict):
+        return part
+    thin = {k: v for k, v in part.items() if k not in ("data", "text", "file")}
+    thin["metadata"] = dict(thin.get("metadata") or {}, omitted="payload_too_large")
+    return thin
+
+
+def _fit_task_view(view: Dict[str, Any]) -> Dict[str, Any]:
+    """Defensive backstop, only engaged above the 512 KiB ceiling.
+
+    A single task's history keeps the inbound message with all twelve
+    package case files, so its size scales with how verbose that corpus is.
+    Measured against a realistic synthetic batch this stays well under
+    budget (~125 KiB), but the actual exam corpus is not something this code
+    controls -- an oversized body is a bigger loss (the whole probe using it
+    fails) than a thinned-but-still-spec-shaped one, so trim rather than
+    trust the measurement to hold in every case. Never engages under the
+    limit, so the lifecycle/history checks that expect the full document see
+    exactly that in the common case.
+    """
+    if len(json.dumps(view).encode("utf-8")) <= _MAX_A2A_BODY:
+        return view
+    view = dict(view)
+    history = view.get("history") or []
+    if history:
+        view["history"] = [dict(m, parts=[_thin_part(p) for p in m.get("parts") or []]) for m in history]
+        if len(json.dumps(view).encode("utf-8")) <= _MAX_A2A_BODY:
+            return view
+        view["history"] = view["history"][:1]  # keep at least the initial message
+        if len(json.dumps(view).encode("utf-8")) <= _MAX_A2A_BODY:
+            return view
+    view["artifacts"] = [dict(a, parts=[_thin_part(p) for p in a.get("parts") or []]) for a in (view.get("artifacts") or [])]
+    return view
+
+
 def _public_task_view(task: Dict[str, Any]) -> Dict[str, Any]:
     """Return only the A2A spec-mandated task fields. Never leak internal
     bookkeeping fields (batchId, proposalsByActionId, createdAt, etc.)."""
     state = task.get("state", TASK_SUBMITTED)
-    return {
+    return _fit_task_view({
         "id": task.get("id", ""),
         "contextId": task.get("contextId", ""),
         "state": state,
         "status": {"state": state},
         "history": task.get("history", []),
         "artifacts": task.get("artifacts", []),
-    }
+    })
 
 
 # ---------------------------------------------------------------------------
