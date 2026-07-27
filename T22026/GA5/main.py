@@ -159,9 +159,9 @@ async def guardrail_endpoint(request: Request):
 async def skill_scan_endpoint(request: Request):
     async def _handle():
         body = await _read_json_body(request)
-        skill_text = body.get("skill")
+        skill_text = body.get("skill") or body.get("skill_text")
         if not isinstance(skill_text, str) or not skill_text.strip():
-            raise ValueError("'skill' must be a non-empty string")
+            raise ValueError("'skill' or 'skill_text' must be a non-empty string")
         if len(skill_text) > MAX_SKILL_TEXT_CHARS:
             raise ValueError(f"'skill' too long (max {MAX_SKILL_TEXT_CHARS} chars)")
 
