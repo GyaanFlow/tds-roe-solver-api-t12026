@@ -185,23 +185,78 @@ _DECOY_PHRASES = (
 _EV_LINE_RE = re.compile(r"^\[([a-zA-Z0-9_-]+)\]\s*(.*)$")
 
 
-def _causal_evidence_ids(transcript: str) -> List[str]:
-    """Evidence IDs whose line is a real observation rather than a planted
-    decoy, in transcript order. Selection is by ABSENCE of the decoy markers,
-    so it keeps working on a freshly-worded audit incident instead of being
-    keyed to any specific service or phrasing."""
-    out: List[str] = []
+def _causal_evidence_lines(transcript: str) -> List[Tuple[str, str]]:
+    """(evidenceId, observation text) for lines that are real observations
+    rather than planted decoys, in transcript order. Selection is by ABSENCE
+    of the decoy markers, so it keeps working on a freshly-worded audit
+    incident instead of being keyed to any specific service or phrasing."""
+    out: List[Tuple[str, str]] = []
     for raw in (transcript or "").splitlines():
         m = _EV_LINE_RE.match(raw.strip())
         if not m:
             continue
-        body = m.group(2).lower()
-        if _DECOY_TOKEN in body:
+        body = m.group(2)
+        low = body.lower()
+        if _DECOY_TOKEN in low:
             continue
-        if any(p in body for p in _DECOY_PHRASES):
+        if any(p in low for p in _DECOY_PHRASES):
             continue
-        out.append(m.group(1))
+        out.append((m.group(1), body))
     return out
+
+
+def _causal_evidence_ids(transcript: str) -> List[str]:
+    return [eid for eid, _text in _causal_evidence_lines(transcript)]
+
+
+# Root-cause disambiguation by synonym sets. Deliberately synonym-based rather
+# than exact-literal so a differently-worded audit incident still classifies.
+_CAUSE_SYNONYMS: Dict[str, Tuple[str, ...]] = {
+    "deployment_regression": ("release", "rollout", "deploy", "deployment", "regression",
+                              "holdback", "canary", "rolled out", "version bump", "began returning"),
+    "database_connection_exhaustion": ("connection pool", "pool", "connection", "database",
+                                       "db wait", "saturat", "max connections", "exhaust", "checkout"),
+    "dependency_certificate_expired": ("certificate", "notafter", "cert", "tls", "expired",
+                                       "handshake", "x509", "chain", "ca "),
+    "feature_flag_recursion": ("flag", "feature flag", "recursion", "recursive", "rule was edited",
+                               "toggle", "loop", "re-entr"),
+    "traffic_capacity_exhaustion": ("queue depth", "requests per second", "rps", "utilization",
+                                    "capacity", "throughput", "latency rise", "saturated cpu", "load"),
+    "secret_rotation_mismatch": ("secret", "vault", "rotation", "credential", "version 4",
+                                 "promoted", "revoked", "key rotation", "token mismatch"),
+}
+
+
+def _classify_root_cause(incident: Dict[str, Any]) -> Optional[str]:
+    """Pick the allowed root cause best supported by the incident's REAL
+    (non-decoy) evidence lines, scoring each candidate by how many of its
+    synonyms appear.
+
+    This is the no-model path. The previous fallback simply took
+    allowedRootCauses[0] -- a coin flip across 2-6 options, which meant a
+    quota-exhausted or unreachable AIPipe produced a near-worthless diagnosis
+    and dragged every downstream category (effect choice, evidence, receipts)
+    down with it. Falls back to None only when nothing scores, so the caller
+    keeps its old behaviour rather than being handed a worse guess."""
+    allowed = incident.get("allowedRootCauses") or []
+    allowed = [c for c in allowed if isinstance(c, str) and c]
+    if not allowed:
+        return None
+    causal = " ".join(text for _eid, text in _causal_evidence_lines(incident.get("transcript", "")))
+    haystack = (causal or str(incident.get("transcript", ""))).lower()
+    if not haystack.strip():
+        return None
+
+    best, best_score = None, 0
+    for cause in allowed:
+        # Synonyms for a known cause, plus the cause's own words (so an
+        # unrecognised cause name still gets a fair chance).
+        syns = list(_CAUSE_SYNONYMS.get(cause, ()))
+        syns += [w for w in cause.replace("_", " ").split() if len(w) > 3]
+        score = sum(1 for s in set(syns) if s and s in haystack)
+        if score > best_score:
+            best, best_score = cause, score
+    return best if best_score > 0 else None
 
 
 def _derive_tool_arguments(tool_name: str, tool_catalog: List[dict], incident: Dict[str, Any]) -> Dict[str, Any]:
@@ -448,7 +503,10 @@ async def diagnose_incident(incident: Dict[str, Any], tool_catalog: List[dict], 
     # All retries exhausted — use safe fallback (a genuine diagnostic tool only).
     # Tagged `_fallback` so create_incident can re-diagnose later instead of
     # persisting this degraded guess as the run's permanent answer.
-    fallback_cause = (incident.get("allowedRootCauses") or ["unknown"])[0]
+    # Classify deterministically from the real (non-decoy) evidence rather
+    # than taking allowedRootCauses[0], which was a coin flip across 2-6
+    # options whenever the model was unreachable.
+    fallback_cause = _classify_root_cause(incident) or (incident.get("allowedRootCauses") or ["unknown"])[0]
     # No LLM output at all -- let the shared normalizer pick real transcript IDs
     # so this path obeys the same 2..4 / no-duplicates / must-be-real contract.
     fallback_evidence = _normalize_evidence([], incident)

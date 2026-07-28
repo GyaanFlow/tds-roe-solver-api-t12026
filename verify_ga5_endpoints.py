@@ -1130,6 +1130,37 @@ def test_q11_evidence_padding_prefers_causal_lines_over_decoys():
     assert len(incident_agent._normalize_evidence([], {"transcript": only_decoys})) >= 1
 
 
+def test_q11_root_cause_fallback_is_classified_not_a_coin_flip():
+    """When AIPipe is unreachable or over quota the diagnosis previously fell
+    back to allowedRootCauses[0] -- a coin flip across 2-6 options, which then
+    dragged every downstream category (effect choice, evidence, receipts) down
+    with it. Classify from the REAL (non-decoy) evidence instead."""
+    inc = {
+        "allowedRootCauses": ["database_connection_exhaustion", "deployment_regression"],
+        "transcript": "\n".join([
+            "[ev_1] Correlation corr_1 unrelated pool note; retain this full sentence.",
+            "[ev_2] correlated sample: release r42 rolled out and began returning 500s.",
+            "[ev_3] incident-window record: the deployment canary shows the regression.",
+            # A decoy that mentions the COMPETING cause -- must not sway it.
+            "[ev_4] Correlation corr_2 database connection pool saturated elsewhere; not causal.",
+        ]),
+    }
+    assert incident_agent._classify_root_cause(inc) == "deployment_regression"
+    # ...and that is NOT what the old allowedRootCauses[0] fallback would give.
+    assert inc["allowedRootCauses"][0] == "database_connection_exhaustion"
+
+    # No usable signal -> None, so the caller keeps its previous behaviour
+    # rather than being handed a worse guess.
+    assert incident_agent._classify_root_cause(
+        {"allowedRootCauses": ["a", "b"], "transcript": ""}) is None
+    assert incident_agent._classify_root_cause(
+        {"allowedRootCauses": [], "transcript": "anything"}) is None
+    # Degenerate shapes must not raise.
+    assert incident_agent._classify_root_cause({}) is None
+    assert incident_agent._classify_root_cause(
+        {"allowedRootCauses": [None, 5, ""], "transcript": "x"}) is None
+
+
 def test_q11_no_action_is_overridden_when_an_escalation_tool_exists():
     """Spec (quoted verbatim from the exam JS): 'If the grader observes no
     valid action attempt in the current run, the score is zero.' A model that
