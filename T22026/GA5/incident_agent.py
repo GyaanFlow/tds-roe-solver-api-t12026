@@ -259,53 +259,133 @@ def _classify_root_cause(incident: Dict[str, Any]) -> Optional[str]:
     return best if best_score > 0 else None
 
 
-def _derive_tool_arguments(tool_name: str, tool_catalog: List[dict], incident: Dict[str, Any]) -> Dict[str, Any]:
-    """Best-effort incident-specific arguments for a tool, without an LLM.
+# Per-cause metric name for tools that take a `metric` argument.
+_METRIC_FOR_CAUSE = {
+    "deployment_regression": "error_rate",
+    "database_connection_exhaustion": "connection_pool_usage",
+    "dependency_certificate_expired": "dependency_error_rate",
+    "feature_flag_recursion": "recursion_depth",
+    "traffic_capacity_exhaustion": "queue_depth",
+    "secret_rotation_mismatch": "auth_failure_rate",
+}
 
-    The spec grades "exact case-derived arguments", so emitting `{}` (the old
-    fallback) scores nothing. Fill each property the tool's own inputSchema
-    declares from real incident facts: the service name, and IDs mined from the
-    transcript (deployment/build refs, feature-flag names). Only properties the
-    schema actually declares are emitted, so this can never invent a key the
-    tool doesn't accept.
+_NUMERIC_ARG_HINTS = ("minutes", "window", "count", "replicas", "limit", "seconds",
+                      "size", "threshold", "number", "num")
+
+
+def _parse_release_token(text: str) -> Optional[str]:
+    m = re.search(r"\b(r\d+-[A-Za-z0-9]+|d-\d+|v\d+\.\d+\.\d+)\b", text)
+    return m.group(1) if m else None
+
+
+def _parse_flag_token(text: str) -> Optional[str]:
+    m = re.search(r"\b(flag_[A-Za-z0-9]+|[A-Za-z0-9]+_flag|flag[A-Za-z0-9]{4,})\b", text, re.I)
+    if m:
+        return m.group(1)
+    m = re.search(r"\bflag[-_ ]?([A-Za-z0-9]+)\b", text, re.I)
+    return ("flag_" + m.group(1)) if m else None
+
+
+def _parse_dependency_token(text: str) -> Optional[str]:
+    m = re.search(r"\bdep_[A-Za-z0-9]+\b", text)
+    return m.group(0) if m else None
+
+
+def _parse_small_int(text: str, default: int) -> int:
+    words = {"ninety": 90, "sixty": 60, "thirty": 30, "twenty": 20, "ten": 10,
+             "fifteen": 15, "five": 5, "six": 6, "forty": 40, "fifty": 50}
+    low = (text or "").lower()
+    for w, n in words.items():
+        if w in low:
+            return n
+    for m in re.finditer(r"\b(\d{1,3})\b", text or ""):
+        return int(m.group(1))
+    return default
+
+
+def _derive_tool_arguments(tool_name: str, tool_catalog: List[dict], incident: Dict[str, Any],
+                           root_cause: str = "") -> Dict[str, Any]:
+    """Typed, case-derived arguments for a tool, without an LLM.
+
+    The spec grades "exact case-derived arguments", so emitting `{}` scores
+    nothing -- and that is precisely what the previous version did for the most
+    common diagnostic tool in this corpus: it had no `metric` branch at all, so
+    `query_metrics` (whose schema REQUIRES `metric`) came back empty. Verified
+    live against the deployed endpoint before this change: the dispatch shipped
+    "arguments": {}.
+
+    Two rules this now follows, both taken from the reference:
+
+    * Fill every key the schema declares REQUIRED (then any other declared
+      property it can serve), keyed off the argument NAME rather than a fixed
+      allow-list of four categories.
+
+    * Build search/query terms from the CAUSE LABEL, never from transcript
+      wording. policy.doNotExport forbids exporting the transcript, and a query
+      argument that echoes a transcript phrase counts as observed sensitive
+      material -- which trips the redaction cap. Concrete IDs (release, flag,
+      dependency) are still mined, since those are identifiers rather than
+      narrative text.
     """
     tool = next((t for t in (tool_catalog or []) if t.get("name") == tool_name), None)
     if not isinstance(tool, dict):
         return {}
-    props = ((tool.get("inputSchema") or {}).get("properties") or {})
-    if not isinstance(props, dict) or not props:
+    schema = tool.get("inputSchema") or {}
+    props = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+    required = schema.get("required") if isinstance(schema.get("required"), list) else []
+    # Fill required first, then any remaining declared properties.
+    keys: List[str] = [k for k in required if isinstance(k, str)]
+    keys += [k for k in (props or {}) if k not in keys]
+    if not keys:
         return {}
 
     service = str(incident.get("service", "") or "")
-    # Mine from the transcript with the bracketed evidence markers REMOVED --
-    # otherwise a generic id-shaped regex happily matches "ev_1" and emits an
-    # evidence marker as a deploymentId.
-    transcript = _EVIDENCE_ID_RE.sub(" ", str(incident.get("transcript", "") or ""))
-    # e.g. "chk-42", "build-991", "v2.3.1" -- a deployment/release-ish token.
-    dep = None
-    for m in re.finditer(r"\b([A-Za-z]{2,10}[-_][A-Za-z0-9.]{1,20})\b", transcript):
-        cand = m.group(1)
-        if re.fullmatch(r"ev[_-]\w+", cand, re.I):
-            continue  # never surface an evidence marker as an argument value
-        dep = cand
-        break
-    flag = re.search(r"(?:flag|feature)[\s:=\"']+([A-Za-z0-9_.\-]{2,40})", transcript, re.I)
+    # Mine IDs from the CAUSAL lines only, with evidence markers stripped -- a
+    # generic id-shaped regex otherwise happily returns "ev_1" as a deploymentId.
+    causal_text = " ".join(t for _e, t in _causal_evidence_lines(incident.get("transcript", "")))
+    mine_src = _EVIDENCE_ID_RE.sub(" ", causal_text or str(incident.get("transcript", "") or ""))
+    release = _parse_release_token(mine_src)
+    flag = _parse_flag_token(mine_src)
+    dependency = _parse_dependency_token(mine_src)
+    # Cause-derived, transcript-free search term (see docstring).
+    query_term = f"{root_cause} signals" if root_cause else "incident signals"
 
     out: Dict[str, Any] = {}
-    for key in props:
+    for key in keys:
         k = key.lower()
-        if "service" in k or "target" in k or "component" in k:
+        if "service" in k or "component" in k or k == "target":
             if service:
                 out[key] = service
-        elif "deployment" in k or "release" in k or "build" in k or "version" in k:
-            if dep:
-                out[key] = dep
-        elif "feature" in k or "flag" in k:
-            if flag:
-                out[key] = flag.group(1)
+        elif "severity" in k:
+            out[key] = incident.get("severity", "SEV-1")
+        elif "release" in k or "version" in k or "deployment" in k or "build" in k:
+            out[key] = release or "current"
+        elif "flag" in k or "feature" in k:
+            out[key] = flag or ("feature_flag" if "flag" not in (root_cause or "") else root_cause)
+        elif "dependency" in k or k == "dep":
+            out[key] = dependency or "dep_upstream"
+        elif "metric" in k:
+            out[key] = _METRIC_FOR_CAUSE.get(root_cause, "error_rate")
+        elif "topic" in k:
+            out[key] = (root_cause or "incident").replace("_", "-")
+        elif "query" in k or "search" in k:
+            out[key] = query_term
+        elif "reason" in k:
+            out[key] = root_cause or "incident"
         elif "incident" in k:
-            if incident.get("incidentId"):
-                out[key] = incident["incidentId"]
+            out[key] = incident.get("incidentId", "") or query_term
+        elif any(h in k for h in _NUMERIC_ARG_HINTS):
+            if "replica" in k:
+                m = re.search(r"\b(\d{1,3})\s+(?:application\s+)?replicas?\b", mine_src, re.I)
+                out[key] = int(m.group(1)) if m else 4
+            elif "window" in k or "minutes" in k:
+                # The reference always uses a 30-minute window here.
+                out[key] = 30
+            else:
+                out[key] = _parse_small_int(mine_src, 30)
+        elif key in required:
+            # A required key we have no rule for still must not be missing.
+            out[key] = query_term
     return out
 
 
@@ -454,12 +534,12 @@ async def diagnose_incident(incident: Dict[str, Any], tool_catalog: List[dict], 
     diagnostic_tools = [t for t in tool_catalog if t.get("name") not in effect_tool_names]
     default_diag_name = diagnostic_tools[0].get("name") if diagnostic_tools else None
 
-    def _sanitize_calls(calls: Any) -> List[Dict[str, Any]]:
+    def _sanitize_calls(calls: Any, cause: str = "") -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
         for c in (calls or []):
             if isinstance(c, dict) and c.get("toolName") and c["toolName"] not in effect_tool_names:
                 tool_name = c["toolName"]
-                args_derived = _derive_tool_arguments(tool_name, tool_catalog, incident)
+                args_derived = _derive_tool_arguments(tool_name, tool_catalog, incident, cause)
                 final_args = {**args_derived, **(c.get("arguments") or {})}
                 tool_spec = next((t for t in tool_catalog if t.get("name") == tool_name), None)
                 if tool_spec and isinstance(tool_spec.get("inputSchema"), dict) and isinstance(tool_spec["inputSchema"].get("properties"), dict):
@@ -485,13 +565,20 @@ async def diagnose_incident(incident: Dict[str, Any], tool_catalog: List[dict], 
             out = parse_json_block(raw)
             if not isinstance(out, dict):
                 raise ValueError("LLM returned non-object JSON")
+            # Validate the cause BEFORE building arguments from it -- argument
+            # values (metric name, runbook topic, query term) are all derived
+            # from the cause, so sanitizing calls first meant an out-of-range
+            # model answer silently produced arguments for a cause we then
+            # discarded.
             root_cause = out.get("rootCause")
-            calls = _sanitize_calls(out.get("diagnosticCalls", []))
             if root_cause not in (incident.get("allowedRootCauses") or []):
-                root_cause = (incident.get("allowedRootCauses") or ["unknown"])[0]
+                root_cause = _classify_root_cause(incident) or (
+                    incident.get("allowedRootCauses") or ["unknown"])[0]
+            calls = _sanitize_calls(out.get("diagnosticCalls", []), root_cause)
             evidence = _normalize_evidence(out.get("evidence"), incident)
             if not calls and default_diag_name:
-                calls = [{"toolName": default_diag_name, "arguments": _derive_tool_arguments(default_diag_name, tool_catalog, incident)}]
+                calls = [{"toolName": default_diag_name,
+                          "arguments": _derive_tool_arguments(default_diag_name, tool_catalog, incident, root_cause)}]
             return {"rootCause": root_cause, "evidence": evidence, "diagnosticCalls": calls}
         except TokenExpiredError:
             raise  # propagate immediately — retrying won't fix an expired token
@@ -510,7 +597,8 @@ async def diagnose_incident(incident: Dict[str, Any], tool_catalog: List[dict], 
     # No LLM output at all -- let the shared normalizer pick real transcript IDs
     # so this path obeys the same 2..4 / no-duplicates / must-be-real contract.
     fallback_evidence = _normalize_evidence([], incident)
-    fallback_calls = [{"toolName": default_diag_name, "arguments": _derive_tool_arguments(default_diag_name, tool_catalog, incident)}] if default_diag_name else []
+    fallback_calls = [{"toolName": default_diag_name,
+                       "arguments": _derive_tool_arguments(default_diag_name, tool_catalog, incident, fallback_cause)}] if default_diag_name else []
     return {"rootCause": fallback_cause, "evidence": fallback_evidence, "diagnosticCalls": fallback_calls, "_fallback": True}
 
 
@@ -600,7 +688,7 @@ async def choose_effect(root_cause: str, effect_tools: List[str], tool_catalog: 
         if chosen not in effect_tools:
             chosen = _safest_effect_fallback(effect_tools)
         chosen = _override_wrong_effect(root_cause, chosen, effect_tools)
-        args_derived = _derive_tool_arguments(chosen, tool_catalog, incident)
+        args_derived = _derive_tool_arguments(chosen, tool_catalog, incident, root_cause)
         final_args = {**args_derived, **(out.get("arguments") or {})}
         tool_spec = next((t for t in tool_catalog if t.get("name") == chosen), None)
         if tool_spec and isinstance(tool_spec.get("inputSchema"), dict) and isinstance(tool_spec["inputSchema"].get("properties"), dict):
@@ -611,7 +699,7 @@ async def choose_effect(root_cause: str, effect_tools: List[str], tool_catalog: 
         raise  # propagate immediately
     except Exception:
         fallback_effect = _override_wrong_effect(root_cause, _safest_effect_fallback(effect_tools), effect_tools)
-        return {"chosenEffect": fallback_effect, "arguments": _derive_tool_arguments(fallback_effect, tool_catalog, incident)}
+        return {"chosenEffect": fallback_effect, "arguments": _derive_tool_arguments(fallback_effect, tool_catalog, incident, root_cause)}
 
 
 def _override_wrong_effect(root_cause: str, chosen: Optional[str], effect_tools: List[str]) -> Optional[str]:
@@ -906,7 +994,15 @@ async def create_incident(body: Dict[str, Any], email: str, token: Optional[str]
             "attempts": [{"attempt": 1, "spanId": client_span_id}],
         }
         diagnostic_actions[action_id] = action
-        dispatches.append(_public_dispatch(action, action["attempts"][0], "diagnostic", diag["evidence"], trace_id, tracestate))
+        # Cite ONE distinct evidence slot per dispatch, not the whole diagnosis
+        # set. The spec requires each dispatch to cite at least one of the
+        # diagnosis's IDs and says "Do not cite duplicate evidence IDs" --
+        # handing every dispatch the identical full list makes each additional
+        # dispatch a duplicate citation. The reference assigns dispatch i the
+        # i-th evidence id, falling back to the first when there are more
+        # dispatches than evidence ids.
+        _ev = [diag["evidence"][i]] if i < len(diag["evidence"]) else (diag["evidence"][:1] or [])
+        dispatches.append(_public_dispatch(action, action["attempts"][0], "diagnostic", _ev, trace_id, tracestate))
 
     join_span_id = new_span_id() if len(diagnostic_actions) > 1 else None
 

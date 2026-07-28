@@ -1130,6 +1130,96 @@ def test_q11_evidence_padding_prefers_causal_lines_over_decoys():
     assert len(incident_agent._normalize_evidence([], {"transcript": only_decoys})) >= 1
 
 
+def test_q11_tool_arguments_are_filled_and_case_derived():
+    """REGRESSION, caught on the LIVE deployed endpoint: the dispatch shipped
+    `"arguments": {}`. The builder had no `metric` branch at all, so
+    query_metrics -- whose schema REQUIRES metric, and the most common
+    diagnostic tool in this corpus -- came back empty. The spec grades "exact
+    case-derived arguments", so empty args score nothing.
+
+    Also pins the redaction-safety rule: query/search terms are built from the
+    CAUSE LABEL, never from transcript wording. policy.doNotExport forbids
+    exporting the transcript, so a query argument echoing a transcript phrase
+    counts as observed sensitive material."""
+    catalog = [
+        {"name": "query_metrics", "inputSchema": {"type": "object", "properties": {
+            "metric": {"type": "string"}, "windowMinutes": {"type": "integer"},
+            "service": {"type": "string"}}, "required": ["metric"]}},
+        {"name": "query_logs", "inputSchema": {"type": "object", "properties": {
+            "query": {"type": "string"}, "windowMinutes": {"type": "integer"}},
+            "required": ["query", "windowMinutes"]}},
+        {"name": "read_runbook", "inputSchema": {"type": "object", "properties": {
+            "topic": {"type": "string"}}, "required": ["topic"]}},
+        {"name": "scale_service", "inputSchema": {"type": "object", "properties": {
+            "service": {"type": "string"}, "targetReplicas": {"type": "integer"}},
+            "required": ["service", "targetReplicas"]}},
+    ]
+    transcript = (
+        "[ev_1] correlated sample: release r42-abc rolled out and began returning "
+        "500s; scale to exactly 6 application replicas.\n"
+        "[ev_2] Correlation corr_9 unrelated capacity note; retain this full sentence.")
+    inc = {"service": "checkout-service", "severity": "SEV-1", "incidentId": "INC-1",
+           "transcript": transcript}
+    d = incident_agent._derive_tool_arguments
+
+    m = d("query_metrics", catalog, inc, "deployment_regression")
+    assert m["metric"] == "error_rate", m          # cause-derived, not empty
+    assert m["windowMinutes"] == 30, m
+    assert m["service"] == "checkout-service", m
+
+    logs = d("query_logs", catalog, inc, "deployment_regression")
+    assert logs["query"] == "deployment_regression signals", logs
+    # The query must NOT echo transcript wording (redaction cap).
+    for leak in ("r42-abc", "500s", "rolled out", "replicas"):
+        assert leak not in logs["query"], f"query leaked transcript text: {logs['query']}"
+    assert isinstance(logs["windowMinutes"], int), logs
+
+    assert d("read_runbook", catalog, inc, "deployment_regression")["topic"] == "deployment-regression"
+
+    # Numeric fields must be real ints mined from the case, never strings.
+    scale = d("scale_service", catalog, inc, "traffic_capacity_exhaustion")
+    assert scale["targetReplicas"] == 6, scale
+    assert isinstance(scale["targetReplicas"], int), scale
+
+    # Per-cause metric names differ.
+    assert d("query_metrics", catalog, inc, "traffic_capacity_exhaustion")["metric"] == "queue_depth"
+
+    # Every REQUIRED key must be present for every tool, under any cause.
+    for tool in catalog:
+        for cause in ("deployment_regression", "secret_rotation_mismatch", "", "made_up_cause"):
+            args = d(tool["name"], catalog, inc, cause)
+            for req in tool["inputSchema"]["required"]:
+                assert req in args and args[req] not in (None, ""), (
+                    f"{tool['name']} / {cause!r}: required {req!r} missing from {args}")
+
+
+def test_q11_each_dispatch_cites_one_distinct_evidence_slot():
+    """The spec says each dispatch must cite at least one of the diagnosis's
+    IDs AND 'Do not cite duplicate evidence IDs'. Handing every dispatch the
+    identical full evidence list makes each extra dispatch a duplicate
+    citation, so dispatch i cites evidence slot i."""
+    email, token = "q11-eslot@x.com", "tok"
+    incident_agent.IncidentStore(email).path.unlink(missing_ok=True)
+    base = f"/ga5/{email}/{token}"
+    body = _incident_body("ESLOT1")
+    # Two diagnostic tools available and a 2-line causal transcript.
+    body["incident"]["transcript"] = (
+        "[ev_a] correlated sample: release r7-xy rolled out and began returning errors.\n"
+        "[ev_b] incident-window record: the deployment canary shows the regression.\n"
+        "[ev_c] Correlation corr_1 unrelated; retain this full sentence.")
+    body["policy"]["maximumDiagnostics"] = 2
+    r = client.post(base + "/v2/incidents", json=body)
+    assert r.status_code == 200, r.text
+    dispatches = r.json()["dispatches"]
+    seen = []
+    for d in dispatches:
+        assert len(d["evidence"]) >= 1, d
+        assert len(d["evidence"]) == len(set(d["evidence"])), f"dup within dispatch: {d['evidence']}"
+        seen.extend(d["evidence"])
+    if len(dispatches) > 1:
+        assert len(seen) == len(set(seen)), f"dispatches cite duplicate evidence IDs: {seen}"
+
+
 def test_q11_root_cause_fallback_is_classified_not_a_coin_flip():
     """When AIPipe is unreachable or over quota the diagnosis previously fell
     back to allowedRootCauses[0] -- a coin flip across 2-6 options, which then
