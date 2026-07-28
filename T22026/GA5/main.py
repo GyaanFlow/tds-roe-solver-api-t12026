@@ -84,8 +84,12 @@ async def _run_solver(handler: Callable[[], Awaitable[T]], label: str, media_typ
         # Content-Type: application/json, which the A2A 1.0 spec treats as an
         # instant protocol failure. Every success response on those routes has
         # to be wrapped so the exact media type is set.
-        if media_type and isinstance(result, dict):
-            return JSONResponse(status_code=200, content=result, media_type=media_type)
+        if isinstance(result, dict):
+            hdrs = result.pop("_response_headers", None)
+            if media_type:
+                return JSONResponse(status_code=200, content=result, media_type=media_type, headers=hdrs)
+            if hdrs:
+                return JSONResponse(status_code=200, content=result, headers=hdrs)
         return result
     except TokenExpiredError as exc:
         elapsed = time.time() - start
@@ -311,6 +315,8 @@ def _check_a2a_auth(request: Request) -> None:
         a2a_agent.register_base_url(f"{prefix}/{tenant_token}/a2a/")
 
 
+@router.get("/.well-known/agent-card.json", include_in_schema=False)
+@router.get("/agent-card.json", include_in_schema=False)
 @router.get("/a2a/agent-card.json", include_in_schema=False)
 @router.get("/a2a/agent.json", include_in_schema=False)
 @router.get("/a2a/.well-known/agent-card.json", include_in_schema=False)
@@ -322,6 +328,7 @@ async def a2a_agent_card_endpoint(request: Request):
     )
 
 
+@router.post("/message:send")
 @router.post("/a2a/message:send")
 async def a2a_message_send(request: Request):
 
@@ -337,6 +344,7 @@ async def a2a_message_send(request: Request):
     return await _run_solver(_handle, "Q10/message:send", media_type="application/a2a+json")
 
 
+@router.get("/tasks/{task_id}")
 @router.get("/a2a/tasks/{task_id}")
 async def a2a_get_task(task_id: str, request: Request):
 
@@ -350,6 +358,7 @@ async def a2a_get_task(task_id: str, request: Request):
     return await _run_solver(_handle, "Q10/get-task", media_type="application/a2a+json")
 
 
+@router.get("/tasks")
 @router.get("/a2a/tasks")
 async def a2a_list_tasks(request: Request):
 
@@ -360,6 +369,7 @@ async def a2a_list_tasks(request: Request):
     return await _run_solver(_handle, "Q10/list-tasks", media_type="application/a2a+json")
 
 
+@router.post("/tasks/{task_id}:cancel")
 @router.post("/a2a/tasks/{task_id}:cancel")
 async def a2a_cancel_task(task_id: str, request: Request):
 

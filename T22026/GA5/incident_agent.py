@@ -734,6 +734,15 @@ def _validate_create_schema(body: Dict[str, Any]) -> None:
         raise MailroomError(422, "'policy' must be an object")
 
 
+def _with_headers(response: Dict[str, Any], run: Dict[str, Any]) -> Dict[str, Any]:
+    res = dict(response)
+    headers = {"traceparent": build_traceparent(run["traceId"], run["serverSpanId"])}
+    if run.get("incomingTracestate"):
+        headers["tracestate"] = run["incomingTracestate"]
+    res["_response_headers"] = headers
+    return res
+
+
 async def create_incident(body: Dict[str, Any], email: str, token: Optional[str], incoming_traceparent: Optional[str], incoming_tracestate: Optional[str] = None) -> Dict[str, Any]:
     if not isinstance(body, dict):
         raise MailroomError(400, "request body must be a JSON object")
@@ -748,13 +757,6 @@ async def create_incident(body: Dict[str, Any], email: str, token: Optional[str]
     existing = store.get(run_id)
     if existing is not None:
         if existing["contentFingerprint"] == fingerprint:
-            # Durable replay -- EXCEPT when the stored diagnosis was a degraded
-            # heuristic fallback (LLM quota/timeout) and the run never made any
-            # progress (still awaiting its first diagnostic outcome, no receipts
-            # exchanged). Replaying that forever is what froze the six stable
-            # incidents on a wrong root cause. Nothing was executed, so
-            # re-diagnosing costs no correctness -- it only upgrades a guess to a
-            # real answer once the model is reachable again.
             can_rediagnose = (
                 existing.get("diagnosisFallback")
                 and existing.get("state") == "WAITING_DIAGNOSTICS"
@@ -762,7 +764,7 @@ async def create_incident(body: Dict[str, Any], email: str, token: Optional[str]
                 and token
             )
             if not can_rediagnose:
-                return existing["lastResponse"]
+                return _with_headers(existing["lastResponse"], existing)
         else:
             raise MailroomError(409, f"runId '{run_id}' already used with different content")
 
@@ -774,8 +776,6 @@ async def create_incident(body: Dict[str, Any], email: str, token: Optional[str]
     except Exception:
         max_diag = 3
     max_diag = max(1, min(3, max_diag))
-    # Effect/destructive tools must never be dispatched as diagnostics (unapproved
-    # destructive call = 0.5/4 cap). Pass their names so diagnosis excludes them.
     effect_tool_names = set(policy.get("effectTools") or []) | set(policy.get("approvalRequiredFor") or [])
     diag = await diagnose_incident(incident, tool_catalog, max_diag, token, effect_tool_names=effect_tool_names)
 
@@ -813,8 +813,6 @@ async def create_incident(body: Dict[str, Any], email: str, token: Optional[str]
 
     run = {
         "runId": run_id, "profile": PROFILE, "contentFingerprint": fingerprint,
-        # Records that this run's diagnosis came from the heuristic fallback, so a
-        # later create_incident can upgrade it once the model is reachable again.
         "diagnosisFallback": bool(diag.get("_fallback")),
         "agentName": body.get("agentName", "incident-response"), "publicMarker": body.get("publicMarker", ""),
         "incident": incident,
@@ -832,10 +830,6 @@ async def create_incident(body: Dict[str, Any], email: str, token: Optional[str]
         "lastResponse": response,
         "createdAt": time.time(),
     }
-    # CRITICAL: never persist the 'sensitive' field in the run object — its values
-    # (accessToken, privateNote) must never appear in any GET response, receipt
-    # log, action log, OTLP trace, or error message. The LLM only receives the
-    # transcript (not the sensitive dict). Storing it would be a leak vector.
     sensitive_vals = []
     if isinstance(body.get("sensitive"), dict):
         for k, v in body["sensitive"].items():
@@ -844,7 +838,7 @@ async def create_incident(body: Dict[str, Any], email: str, token: Optional[str]
     run["_sensitive_values"] = sensitive_vals
     run["lastResponse"] = _sanitize_response(response, sensitive_vals)
     store.put(run_id, run)
-    return run["lastResponse"]
+    return _with_headers(run["lastResponse"], run)
 
 
 # ---------------------------------------------------------------------------
@@ -871,7 +865,7 @@ async def submit_receipts(run_id: str, body: Dict[str, Any], email: str, token: 
     prior_fp = run["receiptFingerprints"].get(receipt_id)
     if prior_fp is not None:
         if prior_fp == receipt_fp:
-            return run["lastResponse"]
+            return _with_headers(run["lastResponse"], run)
         raise MailroomError(409, f"receiptId '{receipt_id}' already used with different content")
 
     if run["state"] in ("COMPLETED", "FAILED"):
@@ -887,7 +881,7 @@ async def submit_receipts(run_id: str, body: Dict[str, Any], email: str, token: 
     run["receiptFingerprints"][receipt_id] = receipt_fp
     run["lastResponse"] = response
     store.put(run_id, run)
-    return response
+    return _with_headers(response, run)
 
 
 async def _handle_outcomes(run: Dict[str, Any], body: Dict[str, Any], token: Optional[str]) -> Dict[str, Any]:
@@ -1091,4 +1085,4 @@ def get_incident(run_id: str, email: str) -> Dict[str, Any]:
     if run is None:
         raise MailroomError(404, f"Unknown runId '{run_id}'")
     sensitive = run.get("_sensitive_values") or []
-    return _sanitize_response(run["lastResponse"], sensitive)
+    return _with_headers(_sanitize_response(run["lastResponse"], sensitive), run)

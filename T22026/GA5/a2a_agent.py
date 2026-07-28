@@ -131,6 +131,18 @@ def agent_card_json() -> Dict[str, Any]:
     # (see _load_registry) is the durable, explicit way to guarantee this is
     # never empty across a redeploy.
     bases = _load_registry()["bases"]
+    supported = []
+    seen_urls = set()
+    for base in bases:
+        if base not in seen_urls:
+            supported.append({"url": base, "protocolBinding": "HTTP+JSON", "protocolVersion": "1.0"})
+            seen_urls.add(base)
+        if base.endswith("/a2a/"):
+            bare_base = base[:-4]
+            if bare_base not in seen_urls:
+                supported.append({"url": bare_base, "protocolBinding": "HTTP+JSON", "protocolVersion": "1.0"})
+                seen_urls.add(bare_base)
+
     return {
         "name": "GA5 Invoice Action Agent",
         "description": "Reads messy invoice case files, chooses a business action per package, and carries it out through a receipt-bound A2A task lifecycle.",
@@ -142,9 +154,7 @@ def agent_card_json() -> Dict[str, Any]:
             "description": "Triages invoice claim batches into settle/approve/hold/reject-duplicate/exception actions with cited evidence.",
             "tags": ["invoice", "triage", "a2a", "finance"],
         }],
-        "supportedInterfaces": [
-            {"url": base, "protocolBinding": "HTTP+JSON", "protocolVersion": "1.0"} for base in bases
-        ],
+        "supportedInterfaces": supported,
         "defaultInputModes": [PROFILE_INPUT_MODE],
         "defaultOutputModes": [PROPOSALS_MODE, RECEIPTS_MODE],
     }
