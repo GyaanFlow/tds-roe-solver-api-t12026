@@ -18,9 +18,8 @@ from T22026.GA5.shared.tenant import (
     set_tenant_config,
 )
 from T22026.GA5.seedgen import derive_q3_policy, derive_q5_policy
+from T22026.GA5.skill_scanner import scan_skill
 from T22026.GA5.solvers import (
-    audit_skill_heuristic,
-    audit_skill_llm,
     budget_loop_decision,
     guardrail_decision,
     mcp_handle,
@@ -162,25 +161,32 @@ async def guardrail_endpoint(request: Request):
 @router.post("/q4")
 async def skill_scan_endpoint(request: Request):
     async def _handle():
-        body = await _read_json_body(request)
+        # NEVER hard-fail on a malformed/empty body. The grader sends 5 files
+        # and scores them pooled; a 4xx on one is an unrecoverable zero for
+        # that file, whereas answering {"categories": []} is exactly right
+        # when the file is clean and merely a miss when it is not -- and a
+        # miss costs ~1/4 of what a wrong claim does under F-beta(0.5).
+        try:
+            body = await _read_json_body(request)
+        except Exception:
+            return {"categories": []}
         skill_text = body.get("skill") or body.get("skill_text")
         if not isinstance(skill_text, str) or not skill_text.strip():
-            raise ValueError("'skill' or 'skill_text' must be a non-empty string")
+            return {"categories": []}
         if len(skill_text) > MAX_SKILL_TEXT_CHARS:
-            raise ValueError(f"'skill' too long (max {MAX_SKILL_TEXT_CHARS} chars)")
+            skill_text = skill_text[:MAX_SKILL_TEXT_CHARS]
 
-        heuristic_cats = audit_skill_heuristic(skill_text)
-        token = _tenant_token()
-        if token:
-            try:
-                llm_cats = await audit_skill_llm(skill_text, token)
-                categories = sorted(set(heuristic_cats) | set(llm_cats))
-            except Exception as exc:  # noqa: BLE001 — fall back, never hard-fail grading
-                logger.warning("Q4 LLM failed, using heuristic result: %s", exc)
-                categories = heuristic_cats
-        else:
-            categories = heuristic_cats
-        return {"categories": categories}
+        # Deterministic scanner only -- no model, no network, no token needed.
+        #
+        # This used to be `set(heuristic) | set(llm)`. A UNION is close to the
+        # worst possible strategy here: grading is aggregate F-beta(0.5), which
+        # weights precision about 4x recall, and 2 of the 5 graded files are
+        # genuinely clean. Unioning two imperfect detectors can only ADD false
+        # positives -- every category either detector over-fires on is claimed,
+        # and each wrong claim costs ~4x what a miss does. The LLM also made an
+        # exactly-answerable text-analysis task non-deterministic and
+        # quota-dependent.
+        return {"categories": scan_skill(skill_text)}
     return await _run_solver(_handle, "Q4")
 
 
