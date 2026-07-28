@@ -1211,6 +1211,64 @@ def test_q11_evidence_padding_prefers_causal_lines_over_decoys():
     assert len(incident_agent._normalize_evidence([], {"transcript": only_decoys})) >= 1
 
 
+def test_q11_every_waiting_response_carries_otlp():
+    """REGRESSION for the blanket 0/7 across ALL seven categories.
+
+    Topology, correlation and redaction are scored off `otlp`. We emitted it
+    only on the TERMINAL response, so the create call -- the first thing the
+    grader sees, and the one it scores the proposal from -- had no trace at
+    all for those categories to read. The reference carries `otlp` (plus
+    actionLog/receiptLog) on every waiting envelope, not just the final one.
+
+    Walks the full lifecycle offline and asserts a trace is present at every
+    stage, growing as spans are added."""
+    email, tok = "otlp-lifecycle@x.com", "tk"
+    incident_agent.IncidentStore(email).path.unlink(missing_ok=True)
+    base = f"/ga5/{email}/{tok}"
+
+    def spans(j):
+        return len(j["otlp"]["resourceSpans"][0]["scopeSpans"][0]["spans"])
+
+    body = _incident_body("OTLP1")
+    body["incident"]["transcript"] = (
+        "[ev_1] correlated sample: release r9-aa rolled out and began returning errors.\n"
+        "[ev_2] incident-window record: the deployment regression confirmed.")
+    body["incident"]["allowedRootCauses"] = ["bad_deploy", "db_overload"]
+    body["policy"]["maximumDiagnostics"] = 1
+
+    r1 = client.post(base + "/v2/incidents", json=body,
+                     headers={"traceparent": "00-" + "1" * 32 + "-" + "2" * 16 + "-01"})
+    assert r1.status_code == 200, r1.text
+    j1 = r1.json()
+    assert "otlp" in j1, "create (waiting) response has no otlp"
+    assert "actionLog" in j1 and "receiptLog" in j1, j1.keys()
+    n1 = spans(j1)
+    assert n1 >= 3, f"too few spans on create: {n1}"
+    # W3C trace continuation is echoed back on the response too.
+    assert (r1.headers.get("traceparent") or "").startswith("00-" + "1" * 32 + "-")
+
+    d = j1["dispatches"][0]
+    r2 = client.post(base + "/v2/incidents/OTLP1/receipts", json={
+        "receiptId": "RA", "outcomes": [{"actionId": d["actionId"], "callId": d["callId"],
+                                         "attempt": 1, "status": 200,
+                                         "resultClass": "diagnosis_confirmed", "nonce": "n1"}]})
+    assert r2.status_code == 200, r2.text
+    j2 = r2.json()
+    assert "otlp" in j2, "post-diagnostic waiting response has no otlp"
+    assert spans(j2) >= n1, "span count went backwards"
+
+    # Whether this stage is an approval gate or a direct effect dispatch, the
+    # envelope must still carry the trace.
+    if j2.get("approvals"):
+        ap = j2["approvals"][0]
+        r3 = client.post(base + "/v2/incidents/OTLP1/receipts", json={
+            "receiptId": "RB", "approvals": [{"approvalId": ap["approvalId"],
+                                              "decision": "approved", "nonce": "nn"}]})
+        assert r3.status_code == 200, r3.text
+        j3 = r3.json()
+        assert "otlp" in j3, "post-approval waiting response has no otlp"
+
+
 def test_q11_tool_arguments_are_filled_and_case_derived():
     """REGRESSION, caught on the LIVE deployed endpoint: the dispatch shipped
     `"arguments": {}`. The builder had no `metric` branch at all, so
