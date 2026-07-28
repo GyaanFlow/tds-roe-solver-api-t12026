@@ -1661,6 +1661,47 @@ class MailroomStore:
             data["evaluations"][evaluation_id] = record
             self._save(data)
 
+    # ---- cross-evaluation receipt bindings -------------------------------
+    # Spec: "A receipt is scoped to its evaluation, proposal digest, and call
+    # ID. Never invent, TRANSFER, or accept a receipt from another proposal."
+    # Detecting a transferred receipt needs state that outlives a single
+    # commit: which evaluation first issued a given receiptId, and which
+    # receipt a given (evaluation, callId) was already committed with.
+    def check_and_bind_receipts(self, evaluation_id: str, receipts: List[Dict[str, Any]]) -> None:
+        """Reject reused/transferred receipts, then record the bindings. Both
+        halves happen under ONE lock so two concurrent commits cannot each see
+        an unbound receipt and both accept it."""
+        with self._lock:
+            data = self._load()
+            by_receipt: Dict[str, str] = data.setdefault("receiptOwners", {})
+            by_call: Dict[str, str] = data.setdefault("callBindings", {})
+
+            for r in receipts:
+                rid = str(r.get("receiptId") or "").strip()
+                cid = str(r.get("callId") or "").strip()
+                prior_eval = by_receipt.get(rid)
+                if prior_eval is not None and prior_eval != evaluation_id:
+                    raise MailroomError(
+                        409,
+                        f"receiptId '{rid}' was issued for evaluation '{prior_eval}', "
+                        f"not '{evaluation_id}'")
+                bound_rid = by_call.get(f"{evaluation_id}|{cid}")
+                if bound_rid is not None and bound_rid != rid:
+                    raise MailroomError(
+                        409,
+                        f"callId '{cid}' was already committed with receipt "
+                        f"'{bound_rid}', not '{rid}'")
+
+            # Only persist once EVERY receipt in the batch passed -- a commit
+            # is all-or-nothing, so a batch that is about to be rejected must
+            # not leave half its bindings behind.
+            for r in receipts:
+                rid = str(r.get("receiptId") or "").strip()
+                cid = str(r.get("callId") or "").strip()
+                by_receipt.setdefault(rid, evaluation_id)
+                by_call.setdefault(f"{evaluation_id}|{cid}", rid)
+            self._save(data)
+
 
 # ---------------------------------------------------------------------------
 # Errors surfaced as specific HTTP statuses by main.py
@@ -1952,7 +1993,10 @@ async def commit(body: Dict[str, Any], email: str) -> Dict[str, Any]:
         extra = seen_call_ids - set(proposals_by_call.keys())
         raise MailroomError(400, f"receipt set does not exactly match the persisted proposals (missing={sorted(missing)}, extra={sorted(extra)})")
 
-    outcomes: List[Dict[str, Any]] = []
+    # VERIFY EVERY BINDING BEFORE BUILDING ANY OUTCOME.
+    # Spec: "verify every signature and binding atomically before writing any
+    # effect." This used to be interleaved with outcome construction, so a
+    # batch whose Nth receipt was bad had already had outcomes 1..N-1 built.
     for receipt in receipts:
         persisted = proposals_by_call.get(receipt["callId"])
         if (
@@ -1962,6 +2006,19 @@ async def commit(body: Dict[str, Any], email: str) -> Dict[str, Any]:
             or compute_proposal_digest(persisted) != receipt["proposalDigest"]
         ):
             raise MailroomError(400, f"receipt for callId '{receipt.get('callId')}' does not match the persisted proposal")
+
+    # CROSS-EVALUATION REUSE. Everything above only proves a receipt is
+    # self-consistent WITHIN this request. The spec also forbids TRANSFERRING
+    # a receipt between proposals ("Never invent, transfer, or accept a
+    # receipt from another proposal"), which needs state outliving this
+    # commit: a receiptId first issued under a different evaluationId, or a
+    # (evaluation, callId) already committed with a different receipt, is a
+    # transferred receipt no matter how well-formed it looks. Runs last so a
+    # rejected batch leaves no bindings behind.
+    store.check_and_bind_receipts(evaluation_id, receipts)
+
+    outcomes: List[Dict[str, Any]] = []
+    for receipt in receipts:
         status = "executed" if receipt.get("accepted") else "rejected"
         outcomes.append({
             "dossierId": receipt["dossierId"],

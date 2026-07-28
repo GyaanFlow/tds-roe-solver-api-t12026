@@ -725,6 +725,87 @@ def test_q9_structural_signature_gate_rejects_forged_receipts_without_a_verifier
     assert ok.status_code == 200, ok.text
 
 
+def test_q9_rejects_a_receipt_transferred_from_another_evaluation():
+    """REGRESSION for 'invalid-receipt rejection failed'.
+
+    Spec: 'A receipt is scoped to its evaluation, proposal digest, and call ID.
+    Never invent, TRANSFER, or accept a receipt from another proposal.'
+
+    Every other check only proves a receipt is self-consistent WITHIN one
+    request -- a receiptId minted for evaluation A, replayed against
+    evaluation B with B's own correct proposalDigest, passes all of them. It
+    is still a transferred receipt. Catching it needs binding state that
+    outlives a single commit."""
+    email = "xfer-regression@x.com"
+    mailroom.MailroomStore(email).path.unlink(missing_ok=True)
+    tb = f"/ga5/{email}/tok"
+    sig = base64.b64encode(b"\x33" * 64).decode()
+
+    def dossier(i):
+        return {"dossierId": f"D{i}", "mailbox": "orders", "sources": [
+            {"sourceId": "sp", "kind": "policy", "provenance": "signed_internal", "lines": [
+                {"lineId": "ln_pol0",
+                 "text": "A verified carrier event may update only the named case field."}]},
+            {"sourceId": "se", "kind": "event", "provenance": "signed_internal", "lines": [
+                {"lineId": "ln_car",
+                 "text": f'Event EVT-E{i} authorizes case CASE-C{i} to change '
+                         f'delivery_window to the exact value "09:00-11:00 UTC".'}]}]}
+
+    def propose(ev, i):
+        return client.post(tb + "/mailroom", json={
+            "profile": mailroom.PROFILE, "operation": "propose", "evaluationId": ev,
+            "allowedActions": list(mailroom.ALLOWED_ACTIONS), "dossiers": [dossier(i)]}).json()
+
+    a, b = propose("XA", 1), propose("XB", 2)
+    pa, pb = a["proposals"][0], b["proposals"][0]
+
+    def commit(ev, prop, receipt_id, digest_src):
+        return client.post(tb + "/mailroom", json={
+            "profile": mailroom.PROFILE, "operation": "commit", "evaluationId": ev,
+            "inputDigest": (a if ev == "XA" else b)["inputDigest"],
+            "receipts": [{"dossierId": prop["dossierId"], "callId": prop["callId"],
+                          "action": prop["action"], "accepted": True,
+                          "proposalDigest": mailroom.compute_proposal_digest(digest_src),
+                          "receiptId": receipt_id, "receiptSignature": sig}]})
+
+    assert commit("XA", pa, "RX1", pa).status_code == 200
+
+    # Same receiptId, different evaluation, and B's OWN correct digest -- so
+    # every within-request check passes. Must still be rejected.
+    assert commit("XB", pb, "RX1", pb).status_code == 409
+
+    # And a previously-committed callId may not be re-bound to a new receipt.
+    assert commit("XA", pa, "RX9", pa).status_code == 409
+
+
+def test_q10_agent_card_is_primed_by_non_a2a_tenant_traffic():
+    """REGRESSION for AGENT_CARD_CONTRACT failing after a redeploy.
+
+    The card must advertise the EXACT submitted base URL, which embeds the
+    student's token. The registry file is gitignored (it holds real tokens),
+    so it is absent from every fresh build -- meaning a redeploy or a token
+    rotation leaves the card empty until some /a2a/ call lands. If the grader
+    fetches the origin-level card before its first /a2a/ call, that is an
+    automatic failure. Registering from ANY tenant-scoped GA5 route means the
+    Q9/Q11 traffic for the same email+token primes it first."""
+    import T22026.GA5.a2a_agent as a2a_mod
+
+    for p in (a2a_mod._REGISTRY_PATH, a2a_mod._REGISTRY_FALLBACK):
+        try:
+            p.unlink()
+        except Exception:
+            pass
+
+    email, token = "coldstart@x.com", "freshtoken999"
+    assert client.get("/.well-known/agent-card.json").json()["supportedInterfaces"] == []
+
+    # A Q9 call -- NOT an /a2a/ route, and deliberately one that FAILS.
+    client.post(f"/ga5/{email}/{token}/mailroom", json={"operation": "bogus"})
+
+    urls = [i["url"] for i in client.get("/.well-known/agent-card.json").json()["supportedInterfaces"]]
+    assert f"http://testserver/ga5/{quote(email, safe='')}/{token}/a2a/" in urls, urls
+
+
 def test_q9_deterministic_evidence_does_not_pad_to_a_fixed_count():
     """REGRESSION: quarantine_item/no_action/send_approved_notice each padded
     their evidence set up to a fixed target count (4/3/2) by adding whatever

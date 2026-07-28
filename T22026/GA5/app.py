@@ -56,6 +56,33 @@ async def _inject_tenant(request: Request, call_next):
 
     token_cv = current_email.set(email)
     token_tok = current_token.set(req_token)
+
+    # Register this tenant's A2A base URL on ANY tenant-scoped GA5 request,
+    # not just /a2a/ ones.
+    #
+    # The Q10 Agent Card must advertise the EXACT submitted base URL, which
+    # embeds the student's token -- so a new token, or a redeploy (the
+    # registry file is gitignored because it holds real student tokens, and
+    # therefore is absent from every fresh build), leaves the card empty until
+    # some /a2a/ call happens to land first. If the grader fetches
+    # {origin}/.well-known/agent-card.json before its first /a2a/ call, that is
+    # an automatic AGENT_CARD_CONTRACT failure -- observed exactly that way
+    # after a redeploy + token rotation.
+    #
+    # Registering from every tenant route means the Q9 (/mailroom) and Q11
+    # (/v2/incidents) traffic the grader sends for the same email+token also
+    # primes the card, so discovery is far less likely to be the first hit.
+    # Best-effort only: never let this break the actual request.
+    try:
+        _tenant_tok = request.scope.get("tenant_token")
+        if _tenant_tok and request.scope.get("tenant_email"):
+            from T22026.GA5 import a2a_agent as _a2a
+            from T22026.GA5.shared.tenant import build_solver_url_prefix as _prefix
+            _base = str(request.base_url).rstrip("/")
+            _a2a.register_base_url(f"{_prefix(_base, email)}/{_tenant_tok}/a2a/")
+    except Exception:  # noqa: BLE001 -- registration must never break a request
+        pass
+
     try:
         response = await call_next(request)
         for key, value in _CORS_HEADERS.items():
