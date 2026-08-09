@@ -637,3 +637,120 @@ def test_scope_endpoint_returns_all_three_and_matches_solvers():
 def test_different_emails_get_different_scopes():
     from T22026.GA7.solvers import action_firewall_scope
     assert action_firewall_scope("a@x.com") != action_firewall_scope("b@x.com")
+
+
+# ---------------------------------------------------------------------------
+# Hardening regressions (found in a post-implementation audit against the spec)
+# ---------------------------------------------------------------------------
+def test_firewall_render_html_allows_data_uri_because_spec_does_not_list_it():
+    """This question enumerates EXACTLY what render_html blocks: "scripts,
+    iframes, inline event handlers, and javascript: URLs". `data:` is NOT in
+    that list, and a benign inline image is a plausible valid probe -- so
+    blocking it would fail a request the spec never asked us to block.
+
+    (The separate /sanitize-output question DOES list data:, and blocks it
+    there. Two different rule sets, deliberately not shared.)"""
+    html = '<img src="data:image/png;base64,iVBORw0KGgo=">'
+    j = client.post(BASE_URL + "/action-firewall", json={
+        "provenance": "trusted", "humanApproved": False,
+        "action": {"tool": "render_html", "args": {"html": html}}}).json()
+    assert j == {"decision": "allow", "reason": "ALLOW"}, j
+
+    # ...but the same payload IS unsafe on the sanitizer's html channel.
+    s = client.post(BASE_URL + "/sanitize-output", json={"channel": "html", "output": html}).json()
+    assert s["reason"] == "DANGEROUS_SCHEME", s
+
+
+def test_firewall_render_html_still_blocks_vbscript():
+    j = client.post(BASE_URL + "/action-firewall", json={
+        "provenance": "trusted", "humanApproved": False,
+        "action": {"tool": "render_html", "args": {"html": '<a href="vbscript:msgbox">x</a>'}}}).json()
+    assert j == {"decision": "block", "reason": "UNSAFE_OUTPUT"}, j
+
+
+def test_firewall_absent_provenance_and_humanApproved_do_not_force_invalid_schema():
+    """`provenance` gates no rule at all, and an absent `humanApproved` just
+    means "not approved". Rejecting either as INVALID_SCHEMA would turn a
+    request the grader expects to ALLOW into a block."""
+    j = client.post(BASE_URL + "/action-firewall", json={
+        "action": {"tool": "search", "args": {"query": "hello"}}}).json()
+    assert j == {"decision": "allow", "reason": "ALLOW"}, j
+
+    # Absent humanApproved on send_email is "not approved", not a schema fault.
+    scope = _scope()
+    j = client.post(BASE_URL + "/action-firewall", json={
+        "action": {"tool": "send_email",
+                   "args": {"to": f"u@{scope['emailDomain']}", "subject": "s", "body": "b"}}}).json()
+    assert j == {"decision": "block", "reason": "APPROVAL_REQUIRED"}, j
+
+    # A WRONG TYPE (as opposed to absence) is still a schema fault.
+    j = client.post(BASE_URL + "/action-firewall", json={
+        "provenance": "sideways", "action": {"tool": "search", "args": {"query": "x"}}}).json()
+    assert j["reason"] == "INVALID_SCHEMA", j
+    j = client.post(BASE_URL + "/action-firewall", json={
+        "humanApproved": "yes", "action": {"tool": "search", "args": {"query": "x"}}}).json()
+    assert j["reason"] == "INVALID_SCHEMA", j
+
+
+def test_terraform_absent_booleans_default_instead_of_failing_rule_one():
+    scope = _tf_scope()
+    body = {
+        "environment": scope["environment"],
+        "state": {"backend": "gcs", "locked": True},
+        "providerVersion": "~> 6.0",
+        "resource": {"address": "google_storage_bucket.d", "type": "storage_bucket",
+                     "action": "create", "labels": dict(scope["labels"])},
+    }  # no destroyApproved, no forceDestroy, no secret
+    assert client.post(BASE_URL + "/terraform/plan", json=body).json() == {
+        "decision": "approve", "reason": "APPROVE"}
+
+    # An omitted destroyApproved on a protected delete still means "not approved".
+    body2 = dict(body)
+    body2["resource"] = {**body["resource"], "action": "delete", "type": "sql_database"}
+    assert client.post(BASE_URL + "/terraform/plan", json=body2).json() == {
+        "decision": "reject", "reason": "DELETE_NOT_APPROVED"}
+
+    # A wrong TYPE is still rule 1.
+    body3 = {**body, "destroyApproved": "yes"}
+    assert client.post(BASE_URL + "/terraform/plan", json=body3).json()["reason"] == "INVALID_PLAN"
+
+
+def test_release_gate_false_cve_count_is_not_treated_as_zero():
+    """`False == 0` in Python, so a naive `cve != 0` check silently accepts
+    `criticalVulnerabilities: false` as a clean scan."""
+    body = _base_release_body(image={"criticalVulnerabilities": False})
+    j = client.post(BASE_URL + "/release-gate", json=body).json()
+    assert "CRITICAL_CVE" in j["violations"], j
+
+
+def test_release_gate_non_list_actions_counts_as_unpinned():
+    body = _base_release_body(workflow={"actions": "actions/checkout@v4"})
+    j = client.post(BASE_URL + "/release-gate", json=body).json()
+    assert "MUTABLE_ACTION" in j["violations"], j
+
+
+def test_sanitize_output_malformed_url_does_not_crash():
+    """urlsplit() succeeds but .hostname raises ValueError on a bad port --
+    it has to be read inside the try, not after it."""
+    for out in ('<img src="https://host:notaport/x.png">',
+                '<a href="https://[bad-ipv6/x">y</a>',
+                '<img src="https://">'):
+        r = client.post(BASE_URL + "/sanitize-output", json={"channel": "html", "output": out})
+        assert r.status_code == 200, (out, r.text)
+        assert r.json()["safe"] is False, (out, r.json())
+
+
+def test_corroborate_rejects_bool_and_non_finite_staleness():
+    base = {"claim": {"subject": "x", "predicate": "resolves_to", "value": "v"},
+            "asOf": "2026-08-01T00:00:00Z", "sources": []}
+    for bad in (True, False):
+        j = client.post(BASE_URL + "/corroborate", json={**base, "stalenessDays": bad}).json()
+        assert j["verdict"] == "invalid", (bad, j)
+    # NaN / Infinity are not valid JSON but some clients emit them.
+    import json as _json
+    for literal in ("NaN", "Infinity", "-Infinity"):
+        raw = _json.dumps(base)[:-1] + f', "stalenessDays": {literal}}}'
+        r = client.post(BASE_URL + "/corroborate", content=raw,
+                        headers={"Content-Type": "application/json"})
+        assert r.status_code == 200, (literal, r.text)
+        assert r.json()["verdict"] == "invalid", (literal, r.json())

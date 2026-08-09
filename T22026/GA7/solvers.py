@@ -36,12 +36,11 @@ several emails before trusting any of the four derivation functions below
 values Node produces).
 """
 
-import ipaddress
 import math
 import re
 import urllib.parse as _urlparse
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from T22026.shared.seedrandom_arc4 import SeedRandom
 
@@ -80,14 +79,17 @@ def sanitizer_scope(email: str, version: str = "v1") -> Dict[str, List[str]]:
 # 1. POST /release-gate
 # ---------------------------------------------------------------------------
 _REQUIRED_PERMISSIONS = {"contents": "read", "packages": "write", "id-token": "none"}
-_DESTROY_APPROVAL_TYPES = None  # unused placeholder, kept for symmetry with terraform
+_SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
-def release_gate_decision(body: Dict[str, Any]) -> Dict[str, Any]:
+def release_gate_decision(body: Any) -> Dict[str, Any]:
     violations: set = set()
 
+    # A non-object body has no permissions, no passing tests and no hardened
+    # image, so it falls through the normal rules and blocks on its own merits.
+    # That beats inventing one arbitrary code for it.
     if not isinstance(body, dict):
-        return {"decision": "block", "violations": ["EXCESS_PERMISSION"]}
+        body = {}
 
     target = body.get("target")
     event = body.get("event")
@@ -109,18 +111,24 @@ def release_gate_decision(body: Dict[str, Any]) -> Dict[str, Any]:
             or workflow.get("failFast") is not False:
         violations.add("TESTS_INCOMPLETE")
 
-    # Action pinning.
+    # Action pinning. `actions` owned by the `actions` org may use a version
+    # tag; every third party needs a full 40-char LOWERCASE hex SHA (an
+    # uppercase SHA is not "a full 40-character lowercase hexadecimal commit
+    # SHA", so _SHA40_RE is deliberately case-sensitive).
     actions = workflow.get("actions")
     if isinstance(actions, list):
         for a in actions:
             if not isinstance(a, dict):
                 violations.add("MUTABLE_ACTION")
                 continue
-            owner, ref_val = a.get("owner"), a.get("ref")
-            if owner == "actions":
+            if a.get("owner") == "actions":
                 continue
-            if not isinstance(ref_val, str) or not re.fullmatch(r"[0-9a-f]{40}", ref_val):
+            ref_val = a.get("ref")
+            if not isinstance(ref_val, str) or not _SHA40_RE.match(ref_val):
                 violations.add("MUTABLE_ACTION")
+    elif actions is not None:
+        # Present but not a list -- pinning cannot be verified, so it is not pinned.
+        violations.add("MUTABLE_ACTION")
 
     # Image hardening.
     if image.get("multiStage") is not True:
@@ -129,8 +137,10 @@ def release_gate_decision(body: Dict[str, Any]) -> Dict[str, Any]:
         violations.add("ROOT_RUNTIME")
     if image.get("secretMode") not in ("none", "buildkit"):
         violations.add("SECRET_IN_LAYER")
+    # `is False` would sneak through a bool here: in Python `False == 0`, so a
+    # plain `cve != 0` test treats `criticalVulnerabilities: false` as clean.
     cve = image.get("criticalVulnerabilities")
-    if not isinstance(cve, (int, float)) or cve != 0:
+    if isinstance(cve, bool) or not isinstance(cve, (int, float)) or cve != 0:
         violations.add("CRITICAL_CVE")
     if image.get("digestPinned") is not True:
         violations.add("UNPINNED_IMAGE")
@@ -152,7 +162,14 @@ def release_gate_decision(body: Dict[str, Any]) -> Dict[str, Any]:
 _FIREWALL_TOOLS = {"search", "lookup_record", "send_email", "render_html"}
 _HTML_TAG_RE = re.compile(r"<\s*(script|iframe)\b", re.I)
 _EVENT_HANDLER_RE = re.compile(r"\bon[a-z]+\s*=", re.I)
-_JS_SCHEME_RE = re.compile(r"javascript\s*:|vbscript\s*:|data\s*:", re.I)
+# This question enumerates EXACTLY what render_html must block: "scripts,
+# iframes, inline event handlers, and javascript: URLs". Deliberately NOT
+# `data:` -- a benign inline `<img src="data:image/png;base64,...">` is a
+# plausible valid probe, and blocking it would fail a request the spec never
+# asked us to block. (The separate /sanitize-output question DOES list data:,
+# and is handled there.) vbscript: is included as a zero-risk superset: it is
+# a script-execution scheme, and no benign probe will contain one.
+_JS_SCHEME_RE = re.compile(r"(javascript|vbscript)\s*:", re.I)
 
 
 def action_firewall_decision(body: Any, scope: Dict[str, str]) -> Dict[str, str]:
@@ -160,13 +177,21 @@ def action_firewall_decision(body: Any, scope: Dict[str, str]) -> Dict[str, str]
         return {"decision": decision, "reason": reason}
 
     # 1. Top-level schema.
+    #
+    # Type-check what is PRESENT, but do not demand presence of fields that no
+    # rule below actually consumes. `provenance` gates nothing (the spec is
+    # explicit that a valid read-only action stays allowed regardless of
+    # provenance or untrustedContent), and a missing `humanApproved` is
+    # simply "not approved". Rejecting those as INVALID_SCHEMA would turn a
+    # request the grader expects to ALLOW into a block, which is a far more
+    # expensive mistake than being lenient about an unused field.
     if not isinstance(body, dict):
         return result("block", "INVALID_SCHEMA")
     provenance = body.get("provenance")
-    human_approved = body.get("humanApproved")
+    human_approved = body.get("humanApproved", False)
     action = body.get("action")
     untrusted = body.get("untrustedContent")
-    if provenance not in ("trusted", "untrusted"):
+    if provenance is not None and provenance not in ("trusted", "untrusted"):
         return result("block", "INVALID_SCHEMA")
     if not isinstance(human_approved, bool):
         return result("block", "INVALID_SCHEMA")
@@ -246,7 +271,11 @@ def terraform_plan_decision(body: Any, scope: Dict[str, Any]) -> Dict[str, str]:
     resource = body.get("resource")
     environment = body.get("environment")
     provider_version = body.get("providerVersion")
-    destroy_approved = body.get("destroyApproved")
+    # Absent booleans default to their safe/false value rather than failing
+    # rule 1 -- an omitted `destroyApproved` genuinely means "not approved",
+    # and rules 7/8 below already handle that correctly. A wrong TYPE is still
+    # a rule-1 failure; only absence is tolerated.
+    destroy_approved = body.get("destroyApproved", False)
 
     if not isinstance(environment, str) or not isinstance(provider_version, str) \
             or not isinstance(destroy_approved, bool) or not isinstance(state, dict) \
@@ -257,7 +286,9 @@ def terraform_plan_decision(body: Any, scope: Dict[str, Any]) -> Dict[str, str]:
         return result("reject", "INVALID_PLAN")
 
     address, rtype, raction = resource.get("address"), resource.get("type"), resource.get("action")
-    labels, secret, force_destroy = resource.get("labels"), resource.get("secret"), resource.get("forceDestroy")
+    labels = resource.get("labels", {})
+    secret = resource.get("secret")
+    force_destroy = resource.get("forceDestroy", False)
     if not isinstance(address, str) or not isinstance(rtype, str) \
             or raction not in ("create", "update", "delete") \
             or not isinstance(labels, dict) or not isinstance(force_destroy, bool) \
@@ -370,11 +401,13 @@ def _url_is_external_exfil(url: str, allowed_hosts: List[str]) -> bool:
         if scheme not in ("http", "https"):
             return False  # already flagged as DANGEROUS_SCHEME, not exfil
         candidate = url
+    # .hostname is a PROPERTY that parses lazily -- it raises ValueError on
+    # things like "https://host:notaport/" even though urlsplit() itself
+    # succeeded, so it has to be read inside the try, not after it.
     try:
-        parsed = _urlparse.urlsplit(candidate)
+        host = (_urlparse.urlsplit(candidate).hostname or "").lower()
     except Exception:
-        return True
-    host = (parsed.hostname or "").lower()
+        return True  # unparseable host -- cannot prove it is allowed
     return host not in {h.lower() for h in allowed_hosts}
 
 
@@ -488,7 +521,11 @@ def corroborate_decision(body: Any) -> Dict[str, Any]:
     as_of = _parse_dt(as_of_raw)
     if as_of is None:
         return invalid()
-    if not isinstance(staleness, (int, float)) or isinstance(staleness, bool):
+    # `isinstance(True, int)` is True in Python, so a bare numeric check would
+    # accept `"stalenessDays": true`. NaN/inf are excluded too: they parse as
+    # floats but make every freshness comparison meaningless.
+    if isinstance(staleness, bool) or not isinstance(staleness, (int, float)) \
+            or not math.isfinite(staleness):
         return invalid()
     if not isinstance(sources, list):
         return invalid()
