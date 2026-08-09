@@ -160,8 +160,8 @@ def release_gate_decision(body: Any) -> Dict[str, Any]:
 # 2. POST /action-firewall
 # ---------------------------------------------------------------------------
 _FIREWALL_TOOLS = {"search", "lookup_record", "send_email", "render_html"}
-_HTML_TAG_RE = re.compile(r"<\s*(script|iframe)\b", re.I)
-_EVENT_HANDLER_RE = re.compile(r"\bon[a-z]+\s*=", re.I)
+_HTML_TAG_RE = re.compile(r"<\s*/?\s*(script|iframe)\b", re.I)
+_EVENT_HANDLER_RE = re.compile(r"\bon[a-z0-9_\-]+\s*=", re.I)
 # This question enumerates EXACTLY what render_html must block: "scripts,
 # iframes, inline event handlers, and javascript: URLs". Deliberately NOT
 # `data:` -- a benign inline `<img src="data:image/png;base64,...">` is a
@@ -552,7 +552,8 @@ def corroborate_decision(body: Any) -> Dict[str, Any]:
         observed = _parse_dt(s.get("observedAt"))
         if observed is None:
             return False
-        return (as_of - observed).total_seconds() <= float(staleness) * 86400.0
+        sec = (as_of - observed).total_seconds()
+        return 0.0 <= sec <= float(staleness) * 86400.0
 
     # 2. Contradicted: fresh + authoritative + value differs.
     contradicting = [
@@ -560,7 +561,7 @@ def corroborate_decision(body: Any) -> Dict[str, Any]:
         if s.get("authoritative") is True and is_fresh(s) and s.get("value") != claim_value
     ]
     if contradicting:
-        ids = sorted(s["id"] for s in contradicting)
+        ids = sorted(list(set(s["id"] for s in contradicting)))
         return {"verdict": "contradicted", "confidence": "low", "corroboratingSources": ids}
 
     # 3. Supported: fresh + matching value, one representative per origin
