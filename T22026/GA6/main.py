@@ -38,10 +38,14 @@ async def _run_solver(handler: Callable[[], Awaitable[T]], label: str, email: st
         })
 
 
+@router.get("/scrape-books")
+@router.get("/q7/scrape-books")
+@router.get("/q7")
 @router.get("/{email}/scrape-books")
 @router.get("/{email}/q7/scrape-books")
 @router.get("/{email}/q7")
-async def scrape_books_endpoint(email: str, request: Request):
+async def scrape_books_endpoint(request: Request, email: str | None = None):
+    email = email or request.scope.get("tenant_email") or "student@example.com"
     async def _handle():
         seed = derive_seed(email)
         rows = await scrape_books(seed)

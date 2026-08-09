@@ -60,7 +60,7 @@ class MultiTenantASGIMiddleware:
                     "solve", "health", "onboard", "status", "config", "docs", "redoc", "cache-stats",
                     "answer-image", "extract", "dynamic-extract", "answer-audio", "rank",
                     "grounded-answer", "vector-search", "extract-graph", "graph-query", "community-summary",
-                    "proration", "guardrail", "skill-scan", "budget-guard", "mcp", "guardrail-redteam", "mailroom", "a2a", "v2",
+                    "proration", "guardrail", "skill-scan", "budget-guard", "mcp", "guardrail-redteam", "mailroom", "a2a", "v2", "scrape-books",
                     "release-gate", "action-firewall", "terraform", "sanitize-output", "corroborate"
                 }
                 if parts and (parts[0].startswith("sess_") or parts[0] not in known_prefixes):
