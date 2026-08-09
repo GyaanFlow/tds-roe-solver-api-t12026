@@ -217,6 +217,21 @@ def test_q7_percent_encoded_email_matches_plain_email():
     assert r1.json()["digest"] == r2.json()["digest"]
 
 
+@pytest.mark.parametrize("path", [
+    "/ga6/test@example.com/scrape-books",
+    "/ga6/test@example.com/q7",
+    "/ga6/test@example.com/q7/scrape-books",
+])
+def test_q7_aliases_are_json_routes(path):
+    r = client.get(path, headers={"Accept": "application/json"})
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].lower().startswith("application/json")
+    body = r.json()
+    assert set(("email", "assignedCategories", "minRating", "minPrice",
+                "maxPrice", "minAvailability", "matchCount", "digest")) <= body.keys()
+    assert not r.text.lstrip().lower().startswith("<!doctype")
+
+
 if __name__ == "__main__":
     import sys
 

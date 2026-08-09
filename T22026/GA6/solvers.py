@@ -27,17 +27,14 @@ import httpx
 # ---------------------------------------------------------------------------
 # Seed derivation -- ported from the exam's own ft(email) function.
 #
-# The exam bundle imports seedrandom's ALEA algorithm directly (confirmed by
-# reading the bundled vendor code: the module's own export is `this.alea=`
-# the alea factory function itself, not the whole seedrandom package), seeded
+# The exam bundle uses seedrandom's default ARC4 algorithm (not Alea), seeded
 # with the literal string "{email}#q-scrape-books-server". Every derived
 # value (Fisher-Yates category shuffle, then four Math.floor(rng()*N) draws
 # in order) depends on the exact sequence of PRNG calls, so this port must
 # match the JS algorithm bit-for-bit, not just "look similar".
 #
-# Cross-checked against the REAL npm `seedrandom/lib/alea` module (not just
-# this port) for multiple emails before trusting it -- see the session notes;
-# this is not a guess, it is a verified reimplementation.
+# Cross-checked against the default npm `seedrandom` module for multiple
+# emails; this is a verified reimplementation.
 # ---------------------------------------------------------------------------
 QUESTION_ID = "q-scrape-books-server"
 CATEGORIES_TO_ASSIGN = 5
@@ -388,10 +385,9 @@ async def scrape_books(seed: Dict[str, Any]) -> List[Dict[str, Any]]:
             continue
         if b["availability"] < seed["minAvailability"]:
             continue
-        value_score = float(
-            (Decimal(str(b["rating"])) / Decimal(str(b["price"])))
-            .quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
-        )
+        value_score = (
+            Decimal(str(b["rating"])) / Decimal(str(b["price"]))
+        ).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
         kept.append({**b, "value_score": value_score})
 
     kept.sort(key=lambda r: (-r["value_score"], r["id"]))
@@ -423,7 +419,15 @@ def canonical_json(rows: List[Dict[str, Any]]) -> str:
 def _escape(s: str) -> str:
     """Minimal JSON string escaping for values embedded via %-formatting
     (titles can contain quotes/backslashes; ids never do)."""
-    return s.replace("\\", "\\\\").replace('"', '\\"')
+    return (
+        s.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\b", "\\b")
+        .replace("\f", "\\f")
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\t", "\\t")
+    )
 
 
 def digest_of(rows: List[Dict[str, Any]]) -> str:
