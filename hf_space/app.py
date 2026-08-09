@@ -350,6 +350,19 @@ def home() -> str:
       </div>
     </div>
 
+    <!-- GA7 -->
+    <div class="hub-card ga5">
+      <div>
+        <div class="hub-meta c-ga5">Graded Assignment 7</div>
+        <div class="hub-title">GA7 DevSecOps/AppSec/OSINT Policy Hub</div>
+        <div class="hub-desc">5 deterministic policy endpoints, seeded per student email: CI/CD release gate, LLM action firewall, Terraform plan guard, LLM output sanitizer, and OSINT corroboration engine. No LLM calls -- pure rule engines. The other 5 GA7 questions are answered directly in the exam page from client-side data and need no API.</div>
+      </div>
+      <div class="btn-stack">
+        <a href="/ga7/" class="btn b-ga5">Open GA7 Dashboard</a>
+        <a href="/ga7/docs" class="btn btn-secondary">API Reference</a>
+      </div>
+    </div>
+
     <!-- GA4 -->
     <div class="hub-card ga4">
       <div>
@@ -440,3 +453,7 @@ app.mount("/ga5", ga5)
 # Mount GA6 Multi-Tenant Service Hub (only Q7 -- see T22026/GA6/solvers.py)
 ga6 = load_app("ga6_app", BASE / "T22026" / "GA6" / "app.py")
 app.mount("/ga6", ga6)
+
+# Mount GA7 Multi-Tenant Service Hub (5 deterministic policy endpoints)
+ga7 = load_app("ga7_app", BASE / "T22026" / "GA7" / "app.py")
+app.mount("/ga7", ga7)
