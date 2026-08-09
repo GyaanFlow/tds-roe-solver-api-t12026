@@ -331,8 +331,8 @@ def terraform_plan_decision(body: Any, scope: Dict[str, Any]) -> Dict[str, str]:
 # 4. POST /sanitize-output
 # ---------------------------------------------------------------------------
 _CHANNELS = {"html", "markdown", "url", "sql", "shell"}
-_SANITIZE_TAG_RE = re.compile(r"<\s*(script|iframe|object|embed)\b", re.I)
-_SANITIZE_EVENT_RE = re.compile(r"\bon[a-z]+\s*=", re.I)
+_SANITIZE_TAG_RE = re.compile(r"<\s*/?\s*(script|iframe|object|embed)\b", re.I)
+_SANITIZE_EVENT_RE = re.compile(r"\bon[a-z0-9_\-]+\s*=", re.I)
 _SANITIZE_SCHEME_TEXT_RE = re.compile(r"(javascript|data|vbscript)\s*:", re.I)
 _SANITIZE_SQL_RE = re.compile(r"['\";]|--|/\*|\bunion\b|\bor\s+1\s*=\s*1\b", re.I)
 _SANITIZE_SHELL_RE = re.compile(r"[;&|`<>]|\$\(|\$\{")
@@ -367,21 +367,34 @@ def _extract_urls(channel: str, output: str) -> List[str]:
     if channel == "html":
         urls = []
         for m in _HTML_URL_ATTR_RE.finditer(output):
-            urls.append(m.group(1) if m.group(1) is not None else m.group(2))
+            val = m.group(1) if m.group(1) is not None else m.group(2)
+            if val:
+                urls.append(val.strip())
         return urls
     if channel == "markdown":
-        return [m.group(1) for m in _MD_URL_RE.finditer(output)]
+        urls = []
+        for m in _MD_URL_RE.finditer(output):
+            raw = m.group(1).strip()
+            if raw:
+                target = raw.split()[0].strip("<>\"'")
+                if target:
+                    urls.append(target)
+        return urls
     if channel == "url":
-        return [output.strip()]
+        u = output.strip()
+        return [u] if u else []
     return []
 
 
 def _url_is_dangerous_scheme(url: str) -> bool:
     if not url:
         return False
-    if url.startswith("//"):
+    u = url.strip()
+    if not u:
+        return False
+    if u.startswith("//"):
         return False  # protocol-relative resolves to https, not dangerous by itself
-    m = re.match(r"^([a-zA-Z][a-zA-Z0-9+.\-]*):", url)
+    m = re.match(r"^([a-zA-Z][a-zA-Z0-9+.\-]*):", u)
     if not m:
         return False  # relative reference
     scheme = m.group(1).lower()
@@ -391,24 +404,26 @@ def _url_is_dangerous_scheme(url: str) -> bool:
 def _url_is_external_exfil(url: str, allowed_hosts: List[str]) -> bool:
     if not url:
         return False
-    if url.startswith("//"):
-        candidate = "https:" + url
+    u = url.strip()
+    if not u:
+        return False
+    if u.startswith("//"):
+        candidate = "https:" + u
     else:
-        m = re.match(r"^([a-zA-Z][a-zA-Z0-9+.\-]*):", url)
+        m = re.match(r"^([a-zA-Z][a-zA-Z0-9+.\-]*):", u)
         if not m:
             return False  # relative reference -- fine
         scheme = m.group(1).lower()
         if scheme not in ("http", "https"):
             return False  # already flagged as DANGEROUS_SCHEME, not exfil
-        candidate = url
-    # .hostname is a PROPERTY that parses lazily -- it raises ValueError on
-    # things like "https://host:notaport/" even though urlsplit() itself
-    # succeeded, so it has to be read inside the try, not after it.
+        candidate = u
     try:
         host = (_urlparse.urlsplit(candidate).hostname or "").lower()
     except Exception:
         return True  # unparseable host -- cannot prove it is allowed
-    return host not in {h.lower() for h in allowed_hosts}
+    if not host:
+        return True  # absolute URL (or //) with missing/empty hostname is exfil/unsafe
+    return host not in {h.lower().strip() for h in allowed_hosts if h}
 
 
 def _channel_violation(channel: str, output: str, allowed_hosts: List[str]) -> Optional[str]:
