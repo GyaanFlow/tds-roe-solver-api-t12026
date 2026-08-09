@@ -47,7 +47,7 @@ class MultiTenantASGIMiddleware:
             from urllib.parse import unquote
             raw_path = scope.get("path", "")
             path = unquote(raw_path)
-            match = re.match(r"^/(ga2|ga3|ga4|ga5)/([^/]+@[^/]+)(/.*)?$", path)
+            match = re.match(r"^/(ga2|ga3|ga4|ga5|ga6|ga7)/([^/]+@[^/]+)(/.*)?$", path)
             if match:
                 ga_version = match.group(1)
                 email = match.group(2).strip()
@@ -60,7 +60,8 @@ class MultiTenantASGIMiddleware:
                     "solve", "health", "onboard", "status", "config", "docs", "redoc", "cache-stats",
                     "answer-image", "extract", "dynamic-extract", "answer-audio", "rank",
                     "grounded-answer", "vector-search", "extract-graph", "graph-query", "community-summary",
-                    "proration", "guardrail", "skill-scan", "budget-guard", "mcp", "guardrail-redteam", "mailroom", "a2a", "v2"
+                    "proration", "guardrail", "skill-scan", "budget-guard", "mcp", "guardrail-redteam", "mailroom", "a2a", "v2",
+                    "release-gate", "action-firewall", "terraform", "sanitize-output", "corroborate"
                 }
                 if parts and (parts[0].startswith("sess_") or parts[0] not in known_prefixes):
                     possible_session_or_token = parts[0]
