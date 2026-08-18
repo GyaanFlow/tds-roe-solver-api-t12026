@@ -21,7 +21,7 @@ import json
 import math
 import re
 import unicodedata
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple, Set
 
 from T22026.shared.seedrandom_arc4 import SeedRandom
@@ -100,9 +100,8 @@ def parse_rfc3339_timestamp(ts: Any) -> Optional[Tuple[datetime, str]]:
 
         # Validate calendar via standard datetime
         dt_local = datetime(y, mo, d, h, mi, s, ms * 1000, tzinfo=timezone.utc)
-        # Convert to true UTC
-        utc_ts = dt_local.timestamp() - (offset_mins * 60)
-        dt_utc = datetime.fromtimestamp(utc_ts, tz=timezone.utc)
+        # Convert to true UTC via pure timedelta arithmetic
+        dt_utc = dt_local - timedelta(minutes=offset_mins)
 
         # Format as YYYY-MM-DDTHH:mm:ss.sssZ
         norm_str = f"{dt_utc.year:04d}-{dt_utc.month:02d}-{dt_utc.day:02d}T{dt_utc.hour:02d}:{dt_utc.minute:02d}:{dt_utc.second:02d}.{int(dt_utc.microsecond / 1000):03d}Z"
