@@ -47,7 +47,7 @@ class MultiTenantASGIMiddleware:
             from urllib.parse import unquote
             raw_path = scope.get("path", "")
             path = unquote(raw_path)
-            match = re.match(r"^/(ga2|ga3|ga4|ga5|ga6|ga7)/([^/]+@[^/]+)(/.*)?$", path)
+            match = re.match(r"^/(ga2|ga3|ga4|ga5|ga6|ga7|ga8)/([^/]+@[^/]+)(/.*)?$", path)
             if match:
                 ga_version = match.group(1)
                 email = match.group(2).strip()
@@ -61,7 +61,8 @@ class MultiTenantASGIMiddleware:
                     "answer-image", "extract", "dynamic-extract", "answer-audio", "rank",
                     "grounded-answer", "vector-search", "extract-graph", "graph-query", "community-summary",
                     "proration", "guardrail", "skill-scan", "budget-guard", "mcp", "guardrail-redteam", "mailroom", "a2a", "v2", "scrape-books",
-                    "release-gate", "action-firewall", "terraform", "sanitize-output", "corroborate"
+                    "release-gate", "action-firewall", "terraform", "sanitize-output", "corroborate",
+                    "build-corpus", "bqml", "promote", "adapt", "quantize", "pipeline", "verify-bundle"
                 }
                 if parts and (parts[0].startswith("sess_") or parts[0] not in known_prefixes):
                     possible_session_or_token = parts[0]
@@ -90,7 +91,7 @@ class ConditionalCORSMiddleware(CORSMiddleware):
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http":
             path = scope.get("path", "")
-            if path.startswith(("/ga2", "/ga3", "/ga4", "/ga5", "/ga6")):
+            if path.startswith(("/ga2", "/ga3", "/ga4", "/ga5", "/ga6", "/ga7", "/ga8")):
                 await self.app(scope, receive, send)
                 return
         await super().__call__(scope, receive, send)
@@ -351,6 +352,19 @@ def home() -> str:
       </div>
     </div>
 
+    <!-- GA8 -->
+    <div class="hub-card ga5">
+      <div>
+        <div class="hub-meta c-ga5">Graded Assignment 8</div>
+        <div class="hub-title">GA8 MLOps & LLM Systems Hub</div>
+        <div class="hub-desc">10 MLOps & LLM systems solvers: 7 deterministic policy endpoints (Corpus Builder, BQML Gate, MLflow Promotion, PEFT Adapt/Repair, Quantize Gate, Content Pipeline, Model Bundle Verifier) + automated calculators for Q8, Q9, Q10.</div>
+      </div>
+      <div class="btn-stack">
+        <a href="/ga8/" class="btn b-ga5">Open GA8 Dashboard</a>
+        <a href="/ga8/docs" class="btn btn-secondary">API Reference</a>
+      </div>
+    </div>
+
     <!-- GA7 -->
     <div class="hub-card ga5">
       <div>
@@ -458,3 +472,8 @@ app.mount("/ga6", ga6)
 # Mount GA7 Multi-Tenant Service Hub (5 deterministic policy endpoints)
 ga7 = load_app("ga7_app", BASE / "T22026" / "GA7" / "app.py")
 app.mount("/ga7", ga7)
+
+# Mount GA8 Multi-Tenant Service Hub (MLOps, PEFT, Quantization, Model Registry & Pipelines)
+ga8 = load_app("ga8_app", BASE / "T22026" / "GA8" / "app.py")
+app.mount("/ga8", ga8)
+
