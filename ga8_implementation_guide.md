@@ -217,16 +217,102 @@ Stateful two-phase gate:
 
 ### Q5 — `POST /quantize` (Quantized Model Admission Gate)
 
-#### Phase 1: `"freeze"`
-- Computes inventory SHA-256 and bytes for each file in candidate packages.
-- Binds `packageDigest = sha256(compact_json(inventory))`.
-- Enforces calibration & tokenizer digests and `loadable: true` $\to$ status `"frozen"`.
+Stateful two-phase gate:
 
-#### Phase 2: `"select"`
-- Verifies candidate inventory matches stored freeze record (else `INVALID_MANIFEST` / `INVALID_LINEAGE`).
-- Computes candidate aggregate and slice accuracies on test rows.
-- Checks `totalBytes <= maxBytes` and `latencyMs <= maxLatencyMs`.
-- Ranks admitted candidates by `bytes asc -> latencyMs asc -> candidateOrder index`.
+#### 5.1 Phase 1: `"freeze"`
+- **Global Validation**: Returns HTTP 400 `{"error": "INVALID_INPUT"}` if `body` is not an object, `phase != "freeze"`, `freezeId` is not string/empty/>128 chars, `calibrationDigest` or `tokenizerDigest` is empty/non-string, `candidates` is empty/non-array, or `allowedUnsupportedReasons` (if present) is not a unique non-empty string array.
+- **Inventory & Digest**: For each file in `candidate.files`, compute exact UTF-8 byte length and lowercase SHA-256. Sort inventory alphabetically by `name`. Compute `packageDigest = SHA-256(UTF8(compact_json(inventory)))`. If `files` is invalid/empty, inventory is `[]`, totalBytes is `null`, packageDigest is `null`, and `INVALID_INPUT` is added.
+- **Candidate Status Precedence**:
+  - If `unsupportedReason` present: if not in `allowedUnsupportedReasons` $\to$ `UNALLOWED_UNSUPPORTED_REASON`.
+  - Else (standard loadable candidate): if not loadable $\to$ `NOT_LOADABLE`; if calibration digest mismatch $\to$ `CALIBRATION_MISMATCH`; if tokenizer digest mismatch $\to$ `TOKENIZER_MISMATCH`.
+  - If name is duplicate, non-string, or empty $\to$ `INVALID_INPUT`.
+  - Status resolution: `status = "invalid"` if reasons exist, else `"unsupported"` if `unsupportedReason` present, else `"frozen"`.
+- **Idempotency**: Store complete response under `(tenant, freezeId)`. Identical input returns 200 with stored response; different input with same ID returns HTTP 409 `{"error": "FREEZE_ID_CONFLICT"}`.
+
+#### 5.2 Phase 2: `"select"`
+- **Global Validation**: Requires string `freezeId`, array `candidates`, object `policy`, array `rows`.
+- **Lineage Verification**: Re-reads `stored_freeze` from `(tenant, freezeId)`. Verifies supplied candidate array exactly equals stored candidates (else `INVALID_LINEAGE`).
+- **Manifest Verification**: Recomputes inventory byte sum and package digest; if mismatched with candidate claims $\to$ `INVALID_MANIFEST`.
+- **Admissibility Checks**:
+  - Candidate status must be `"frozen"` (else `NOT_FROZEN`).
+  - Predictions must be binary `0` or `1` in every row for that candidate (else `INVALID_PREDICTIONS`).
+  - Aggregate accuracy $\ge \text{policy.aggregateFloor}$ (else `AGGREGATE_FLOOR`).
+  - All `policy.requiredSlices` present and $\ge \text{floor}$ (else `MISSING_SLICE:<slice>` or `SLICE_FLOOR:<slice>`).
+  - Hardware constraints: `totalBytes <= policy.maxBytes` (else `SIZE_LIMIT`); `latencyMs <= policy.maxLatencyMs` (else `LATENCY_LIMIT`).
+- **Winner Selection**: Admitted candidates ranked by:
+  $$\text{Sort key}: (\text{totalBytes ascending}, \text{latencyMs ascending}, \text{policy.candidateOrder index})$$
+  - `selected`: Name of the winner (or `null` if none admitted).
+  - `packageManifest`: The **exact recorded object from stored freeze** for the winner (or `null` if none admitted).
+  - `results`: Ordered by `policy.candidateOrder` (fallback: UTF-8 name).
+
+#### Request Schema (Freeze)
+```json
+{
+  "phase": "freeze",
+  "freezeId": "f1",
+  "calibrationDigest": "cal_1",
+  "tokenizerDigest": "tok_1",
+  "allowedUnsupportedReasons": ["REASON_A"],
+  "candidates": [{
+    "name": "int8",
+    "files": { "model.safetensors": "content..." },
+    "loadable": true,
+    "calibrationDigest": "cal_1",
+    "tokenizerDigest": "tok_1"
+  }]
+}
+```
+
+#### Response Schema (Freeze — HTTP 200)
+```json
+{
+  "freezeId": "f1",
+  "candidates": [{
+    "name": "int8",
+    "status": "frozen",
+    "inventory": [{ "name": "model.safetensors", "bytes": 10, "sha256": "4a1803..." }],
+    "totalBytes": 10,
+    "packageDigest": "a982cf...",
+    "reasonCodes": []
+  }]
+}
+```
+
+#### Request Schema (Select)
+```json
+{
+  "phase": "select",
+  "freezeId": "f1",
+  "candidates": [ ... ],
+  "policy": {
+    "maxBytes": 1000000,
+    "aggregateFloor": 0.80,
+    "requiredSlices": { "critical": 0.75 },
+    "maxLatencyMs": 100,
+    "candidateOrder": ["int4", "int8"]
+  },
+  "latencies": { "int4": 40, "int8": 60 },
+  "rows": [{ "label": 1, "slice": "critical", "predictions": { "int4": 1, "int8": 1 } }]
+}
+```
+
+#### Response Schema (Select — HTTP 200)
+```json
+{
+  "freezeId": "f1",
+  "selected": "int8",
+  "results": [{
+    "name": "int8",
+    "aggregate": 0.90,
+    "slices": { "critical": 0.85 },
+    "totalBytes": 10,
+    "latencyMs": 60,
+    "admitted": true,
+    "reasonCodes": []
+  }],
+  "packageManifest": { ... }
+}
+```
 
 ---
 
