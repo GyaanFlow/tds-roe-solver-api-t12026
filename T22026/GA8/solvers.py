@@ -190,9 +190,9 @@ def build_corpus_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
         if not isinstance(uri, str) or not _GS_URI_RE.match(uri):
             obj_reasons.add("URI_INVALID")
 
-        # Generation checks (independent evaluations per spec)
-        gen_valid = isinstance(generation, str) and generation.isdigit() and len(generation) > 0
-        fetch_valid = isinstance(fetched_generation, str) and fetched_generation.isdigit() and len(fetched_generation) > 0
+        # Generation checks (independent evaluations per spec); JS \d is ASCII-only
+        gen_valid = isinstance(generation, str) and bool(re.match(r"^[0-9]+$", generation))
+        fetch_valid = isinstance(fetched_generation, str) and bool(re.match(r"^[0-9]+$", fetched_generation))
         if not gen_valid or not fetch_valid:
             obj_reasons.add("GENERATION_INVALID")
         if generation != fetched_generation:
@@ -493,7 +493,7 @@ def bqml_decision(body: Any, store: Optional[BQMLStore] = None, tenant: str = ""
         rows = body.get("rows")
         trials = body.get("trials")
 
-        input_canonical = json.dumps(body, sort_keys=True, separators=(",", ":"))
+        input_canonical = json.dumps(body, separators=(",", ":"), ensure_ascii=False)
 
         # Replay / conflict check
         if isinstance(run_id, str) and st.check_conflict(tenant, run_id, input_canonical):
@@ -895,6 +895,11 @@ def promote_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
 
     for v_obj in versions:
         if not isinstance(v_obj, dict):
+            existing = failed_gates.get("invalid")
+            if existing is None:
+                failed_gates["invalid"] = ["INVALID_VERSION"]
+            elif "INVALID_VERSION" not in existing:
+                failed_gates["invalid"] = sorted(existing + ["INVALID_VERSION"], key=lambda s: s.encode("utf-8"))
             continue
         v_id = v_obj.get("version")
         v_key = str(v_id) if v_id is not None else "invalid"
@@ -904,7 +909,8 @@ def promote_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
             v_reasons.add("INVALID_POLICY")
 
         # Version string check: must be canonical positive safe integer string
-        if not (isinstance(v_id, str) and v_id.isdigit() and str(int(v_id)) == v_id
+        if not (isinstance(v_id, str) and bool(re.match(r"^[0-9]+$", v_id))
+                and str(int(v_id)) == v_id
                 and 0 < int(v_id) <= _MAX_SAFE_INTEGER):
             v_reasons.add("INVALID_VERSION")
         if isinstance(v_id, str) and version_counts.get(v_id, 0) > 1:
@@ -933,7 +939,7 @@ def promote_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
                 created_dt = created_parsed[0]
                 if created_dt > as_of_dt:
                     v_reasons.add("FUTURE_EVALUATION")
-                elif (as_of_dt.timestamp() - created_dt.timestamp()) > p_max_age:
+                elif is_valid_policy and (as_of_dt.timestamp() - created_dt.timestamp()) > p_max_age:
                     v_reasons.add("STALE_EVALUATION")
 
             # Check finite numbers
@@ -1079,23 +1085,23 @@ def adapt_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
         is_valid_policy = (
             isinstance(min_quality, (int, float))
             and not isinstance(min_quality, bool)
+            and math.isfinite(min_quality)
             and 0.0 <= min_quality <= 1.0
             and isinstance(freshness_req, bool)
             and isinstance(max_lat, (int, float))
             and not isinstance(max_lat, bool)
+            and math.isfinite(max_lat)
             and max_lat >= 0
             and isinstance(max_mem, (int, float))
             and not isinstance(max_mem, bool)
+            and math.isfinite(max_mem)
             and max_mem >= 0
-            and isinstance(max_labeled, int)
-            and not isinstance(max_labeled, bool)
-            and max_labeled >= 0
+            and _is_safe_integer(max_labeled)
             and isinstance(max_cost, (int, float))
             and not isinstance(max_cost, bool)
+            and math.isfinite(max_cost)
             and max_cost >= 0
-            and isinstance(horizon, int)
-            and not isinstance(horizon, bool)
-            and horizon >= 0
+            and _is_safe_integer(horizon)
         )
 
         cand_map: Dict[str, Dict[str, Any]] = {}
@@ -1132,29 +1138,35 @@ def adapt_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
                 not isinstance(avail, bool)
                 or not isinstance(quality, (int, float))
                 or isinstance(quality, bool)
+                or not math.isfinite(quality)
                 or not (0.0 <= quality <= 1.0)
                 or not isinstance(freshness, bool)
                 or not isinstance(lat, (int, float))
                 or isinstance(lat, bool)
+                or not math.isfinite(lat)
                 or lat < 0
                 or not isinstance(mem, (int, float))
                 or isinstance(mem, bool)
+                or not math.isfinite(mem)
                 or mem < 0
-                or not isinstance(labeled, int)
-                or isinstance(labeled, bool)
-                or labeled < 0
+                or not _is_safe_integer(labeled)
                 or not isinstance(one_time, (int, float))
                 or isinstance(one_time, bool)
+                or not math.isfinite(one_time)
                 or one_time < 0
                 or not isinstance(recurring, (int, float))
                 or isinstance(recurring, bool)
+                or not math.isfinite(recurring)
                 or recurring < 0
             ):
                 c_reasons.add("INVALID_INPUT")
                 total_costs[name] = None
             else:
-                tot_cost = round(float(one_time) + float(horizon) * float(recurring), 12)
-                total_costs[name] = tot_cost
+                if is_valid_policy:
+                    tot_cost = round(float(one_time) + float(horizon) * float(recurring), 12)
+                    total_costs[name] = tot_cost
+                else:
+                    total_costs[name] = None
 
                 if not avail:
                     c_reasons.add("UNAVAILABLE")
@@ -1291,6 +1303,8 @@ def adapt_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
         if not params_valid or len(trainable_params) == 0:
             reasons.add("INVALID_PARAMETER")
             peft_config_pass = False
+            trainable_params = []
+            trainable_count = 0
         else:
             trainable_params = sorted(trainable_params, key=lambda s: s.encode("utf-8"))
 
@@ -1300,7 +1314,9 @@ def adapt_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
 
         # Artifact files
         expected_artifacts = ["adapter_config.json", "adapter_model.safetensors"]
-        if not isinstance(artifact_files, list) or sorted(artifact_files) != sorted(expected_artifacts):
+        if not isinstance(artifact_files, list) or any(
+            not isinstance(f, str) for f in artifact_files
+        ) or sorted(artifact_files) != sorted(expected_artifacts):
             reasons.add("ADAPTER_FILE_SET")
         if isinstance(artifact_files, list) and any(
             isinstance(f, str) and (f in ("model.safetensors", "pytorch_model.bin") or f.endswith((".bin", ".pt", ".pth", ".pkl", ".pickle")))
@@ -1477,18 +1493,39 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
         allowed_unsupported = body.get("allowedUnsupportedReasons")
         candidates = body.get("candidates")
 
-        # Per exam specification line 538:
+        # Per exam specification:
         # "Unknown or missing phase, an empty/non-array freeze candidate list,
         # or a select request without array candidates and rows plus an object policy
         # returns HTTP 400 with exactly {"error":"INVALID_INPUT"}."
         if not isinstance(candidates, list) or len(candidates) == 0:
             return 400, {"error": "INVALID_INPUT"}
 
-        freeze_id_str = str(freeze_id) if isinstance(freeze_id, str) else ""
-        calib_dig_str = str(calib_dig) if isinstance(calib_dig, str) else ""
-        tok_dig_str = str(tok_dig) if isinstance(tok_dig, str) else ""
+        # Global freeze-boundary validation: freezeId and digest contracts are
+        # request-level; violations reject the whole request without reserving the ID.
+        # allowedUnsupportedReasons is optional; if provided it must be a list of
+        # non-empty unique strings.
+        if (
+            not isinstance(freeze_id, str)
+            or not freeze_id
+            or len(freeze_id) > 128
+            or not isinstance(calib_dig, str)
+            or not calib_dig
+            or not isinstance(tok_dig, str)
+            or not tok_dig
+        ):
+            return 400, {"error": "INVALID_INPUT"}
+        if allowed_unsupported is not None and (
+            not isinstance(allowed_unsupported, list)
+            or not all(isinstance(r, str) and r for r in allowed_unsupported)
+            or len(set(allowed_unsupported)) != len(allowed_unsupported)
+        ):
+            return 400, {"error": "INVALID_INPUT"}
 
-        input_canonical = json.dumps(body, sort_keys=True, separators=(",", ":"))
+        freeze_id_str = freeze_id
+        calib_dig_str = calib_dig
+        tok_dig_str = tok_dig
+
+        input_canonical = json.dumps(body, separators=(",", ":"), ensure_ascii=False)
 
         # Replay / conflict check for valid freezeId
         if freeze_id_str and 1 <= len(freeze_id_str) <= 128:
@@ -1567,7 +1604,7 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
                 if unsupp_reason not in allowed_unsupported_set:
                     reasons.add("UNALLOWED_UNSUPPORTED_REASON")
             else:
-                if loadable is not True:
+                if not loadable:
                     reasons.add("NOT_LOADABLE")
                 if c_calib != calib_dig_str or not calib_dig_str:
                     reasons.add("CALIBRATION_MISMATCH")
@@ -1575,9 +1612,6 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
                     reasons.add("TOKENIZER_MISMATCH")
 
             if is_name_dup or not isinstance(c_name, str) or not c_name:
-                reasons.add("INVALID_INPUT")
-
-            if not freeze_id_str or len(freeze_id_str) > 128:
                 reasons.add("INVALID_INPUT")
 
             # Final status: reasons > unsupported > frozen
@@ -1880,7 +1914,7 @@ def pipeline_decision(body: Any, store: Optional[PipelineStore] = None, tenant: 
     if not req_input_keys.issubset(set(inputs.keys())) or any(not isinstance(inputs[k], str) or not inputs[k] for k in req_input_keys):
         return 400, {"error": "INVALID_REQUEST"}
 
-    input_canon = json.dumps(inputs, sort_keys=True, separators=(",", ":"))
+    input_canon = json.dumps(inputs, separators=(",", ":"), ensure_ascii=False)
     session = st.get_session(tenant, session_id)
     next_revision = session["revision"]
     next_inputs = session["inputs"]
@@ -1956,12 +1990,18 @@ def pipeline_decision(body: Any, store: Optional[PipelineStore] = None, tenant: 
             or not ev_id
             or not _is_safe_integer(ev_rev, minimum=1)
             or ev_node not in _DAG_NODES
-            or not _is_safe_integer(ev_att, minimum=1)
-            or ev_status not in ("started", "succeeded", "retryable_failed", "terminal_failed")
             or not isinstance(ev_key, str)
             or set(ev.keys()) != {"eventId", "revision", "node", "attempt", "status", "key", "artifactDigest", "receiptId"}
         ):
             return 409, {"error": "INVALID_EVENT"}
+
+        # Invalid status or attempt is ignored (not a structural event error)
+        if (
+            ev_status not in ("started", "succeeded", "retryable_failed", "terminal_failed")
+            or not _is_safe_integer(ev_att, minimum=1)
+        ):
+            ignored_event_ids.append(ev_id)
+            continue
 
         ev_canon = json.dumps(ev, sort_keys=True, separators=(",", ":"))
         if ev_id in seen_events:
@@ -2028,19 +2068,15 @@ def pipeline_decision(body: Any, store: Optional[PipelineStore] = None, tenant: 
                 node_state[ev_node] = {"status": "started", "attempt": ev_att, "key": ev_key, "eventId": ev_id}
                 seen_events[ev_id] = ev_canon
                 accepted_event_ids.append(ev_id)
-            elif ev_att <= curr_state["attempt"]:
+            elif ev_att < curr_state["attempt"]:
                 ignored_event_ids.append(ev_id)
             else:
                 return 409, {"error": "STATUS_CONFLICT"}
         elif curr_state["status"] == "succeeded":
             curr_key = curr_state.get("key")
-            if ev_status == "succeeded":
-                if curr_key and curr_key in cache and ev_art != cache[curr_key]["artifactDigest"]:
-                    return 409, {"error": "EVIDENCE_CONFLICT"}
-                else:
-                    ignored_event_ids.append(ev_id)
-            else:
-                return 409, {"error": "STATUS_CONFLICT"}
+            if ev_status == "succeeded" and curr_key and curr_key in cache and ev_art != cache[curr_key]["artifactDigest"]:
+                return 409, {"error": "EVIDENCE_CONFLICT"}
+            return 409, {"error": "STATUS_CONFLICT"}
         elif curr_state["status"] == "terminal_failed":
             return 409, {"error": "STATUS_CONFLICT"}
 
@@ -2390,7 +2426,7 @@ _Q8_RANKS = [4, 8, 16, 32]
 
 def solve_q8_lora(email: str) -> Dict[str, Any]:
     """Q8 Generator & Solver: Calculate trainable parameter count and adapter bytes."""
-    seed_str = f"{email.strip().lower()}#q-lora-quant-budget-server"
+    seed_str = f"{email}#q-lora-quant-budget-server"
     rng = SeedRandom(seed_str)
 
     hidden_size = _Q8_HIDDEN_SIZES[math.floor(rng() * len(_Q8_HIDDEN_SIZES))]
@@ -2489,6 +2525,8 @@ def solve_q9_mlflow(email: str, version: str = "") -> Dict[str, Any]:
         opt_cfg["eps"] = 1e-8
         opt_cfg["momentum"] = round(0.8 + 0.1 * rng(), 2) if rng() > 0.5 else 0
 
+    torch_seed = 10000 + math.floor(rng() * 89999)
+
     init_schemes = ["kaiming_uniform", "xavier_normal", "custom_seeded"]
     scheme = init_schemes[math.floor(rng() * len(init_schemes))]
     init_W = []
@@ -2568,7 +2606,7 @@ def solve_q9_mlflow(email: str, version: str = "") -> Dict[str, Any]:
                 g = grad_W[k] + weight_decay * W[k]
                 v_W[k] = momentum * v_W[k] + g
                 W[k] -= lr_i * v_W[k]
-            g_b = grad_b
+            g_b = grad_b + weight_decay * b
             v_b = momentum * v_b + g_b
             b -= lr_i * v_b
         elif opt_name == "AdamW":
@@ -2585,6 +2623,7 @@ def solve_q9_mlflow(email: str, version: str = "") -> Dict[str, Any]:
                 v_hat = v_sq_W[k] / (1 - beta2 ** t_step)
                 W[k] -= lr_i * m_hat / (math.sqrt(v_hat) + eps)
 
+            b -= lr_i * weight_decay * b
             m_b = beta1 * m_b + (1 - beta1) * grad_b
             v_sq_b = beta2 * v_sq_b + (1 - beta2) * (grad_b ** 2)
             m_b_hat = m_b / (1 - beta1 ** t_step)
@@ -2602,12 +2641,13 @@ def solve_q9_mlflow(email: str, version: str = "") -> Dict[str, Any]:
                     W[k] -= lr_i * v_W[k]
                 else:
                     W[k] -= lr_i * g / (math.sqrt(v_sq_W[k]) + eps)
-            v_sq_b = alpha * v_sq_b + (1 - alpha) * (grad_b ** 2)
+            g_b = grad_b + weight_decay * b
+            v_sq_b = alpha * v_sq_b + (1 - alpha) * (g_b ** 2)
             if momentum > 0:
-                v_b = momentum * v_b + grad_b / (math.sqrt(v_sq_b) + eps)
+                v_b = momentum * v_b + g_b / (math.sqrt(v_sq_b) + eps)
                 b -= lr_i * v_b
             else:
-                b -= lr_i * grad_b / (math.sqrt(v_sq_b) + eps)
+                b -= lr_i * g_b / (math.sqrt(v_sq_b) + eps)
 
     final_loss = round(step_losses[-1], 5)
     mean_last_10 = round(sum(step_losses[-10:]) / 10.0, 5)
