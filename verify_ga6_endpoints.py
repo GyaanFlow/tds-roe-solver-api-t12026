@@ -33,7 +33,7 @@ if that site is briefly unreachable.
 """
 
 from decimal import ROUND_HALF_UP, Decimal
-
+import pytest
 from fastapi.testclient import TestClient
 
 from hf_space.app import app
