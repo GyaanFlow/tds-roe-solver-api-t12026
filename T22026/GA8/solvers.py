@@ -173,7 +173,7 @@ def build_corpus_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
 
     for obj in objects:
         if not isinstance(obj, dict):
-            rejected_objects.append({"uri": None, "reasonCodes": ["SCHEMA_INVALID"]})
+            rejected_objects.append({"uri": None, "reasonCodes": ["CRC32C_INVALID", "GENERATION_INVALID", "SCHEMA_INVALID", "URI_INVALID"]})
             continue
 
         uri = obj.get("uri")
@@ -604,9 +604,11 @@ def bqml_decision(body: Any, store: Optional[BQMLStore] = None, tenant: str = ""
             retained_rows.append(sorted_grp[0])
 
         # Feature eligibility:
-        common_features = set(retained_rows[0]["features"].keys())
-        for r in retained_rows[1:]:
-            common_features &= set(r["features"].keys())
+        common_features = set()
+        if retained_rows:
+            common_features = set(retained_rows[0]["features"].keys())
+            for r in retained_rows[1:]:
+                common_features &= set(r["features"].keys())
 
         forbidden_set = set(forbidden)
         eligible_features = set()
@@ -2052,7 +2054,7 @@ def pipeline_decision(body: Any, store: Optional[PipelineStore] = None, tenant: 
                 node_state[ev_node] = {"status": "started", "attempt": ev_att, "key": ev_key, "eventId": ev_id}
                 seen_events[ev_id] = ev_canon
                 accepted_event_ids.append(ev_id)
-            elif ev_att < curr_state["attempt"]:
+            elif ev_att <= curr_state["attempt"]:
                 ignored_event_ids.append(ev_id)
             else:
                 return 409, {"error": "STATUS_CONFLICT"}
