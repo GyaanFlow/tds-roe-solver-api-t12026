@@ -108,7 +108,7 @@ def parse_rfc3339_timestamp(ts: Any) -> Optional[Tuple[datetime, str]]:
 # ===========================================================================
 # 1. POST /build-corpus
 # ===========================================================================
-_GS_URI_RE = re.compile(r"^gs://([^/]+)/([^/]+)$")
+_GS_URI_RE = re.compile(r"^gs://([^/]+)/(.+)$")
 _WORD_RE = re.compile(r"[^\W_]+", re.UNICODE)
 
 
@@ -939,6 +939,10 @@ def promote_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
 
             if isinstance(acc, (int, float)) and not isinstance(acc, bool) and not (0.0 <= acc <= 1.0):
                 v_reasons.add("METRIC_RANGE")
+            if isinstance(lat, (int, float)) and not isinstance(lat, bool) and lat < 0:
+                v_reasons.add("METRIC_RANGE")
+            if isinstance(sz, (int, float)) and not isinstance(sz, bool) and (sz < 0 or (isinstance(sz, float) and not sz.is_integer())):
+                v_reasons.add("METRIC_RANGE")
 
             # Digest matching
             if artifact_digest != e_art_digest or not artifact_digest:
@@ -1287,10 +1291,12 @@ def adapt_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
         expected_artifacts = ["adapter_config.json", "adapter_model.safetensors"]
         if not isinstance(artifact_files, list) or sorted(artifact_files) != sorted(expected_artifacts):
             reasons.add("ADAPTER_FILE_SET")
-            if isinstance(artifact_files, list) and any(
-                f.endswith((".bin", ".pt", "pytorch_model.bin", "model.safetensors")) for f in artifact_files
-            ):
-                reasons.add("FULL_MODEL_ARTIFACT")
+        if isinstance(artifact_files, list) and any(
+            isinstance(f, str) and (f in ("model.safetensors", "pytorch_model.bin") or f.endswith((".bin", ".pt", ".pth", ".pkl", ".pickle")))
+            and f != "adapter_model.safetensors" and not f.startswith("adapter_")
+            for f in artifact_files
+        ):
+            reasons.add("FULL_MODEL_ARTIFACT")
 
         # Always return the expected canonical sorted adapter file list
         sorted_adapter_files = sorted(expected_artifacts, key=lambda s: s.encode("utf-8"))
@@ -1460,21 +1466,9 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
         if not (
             isinstance(freeze_id, str)
             and 1 <= len(freeze_id) <= 128
-            and isinstance(calib_dig, str)
-            and bool(calib_dig)
-            and isinstance(tok_dig, str)
-            and bool(tok_dig)
-            and isinstance(allowed_unsupported, list)
-            and all(isinstance(x, str) and bool(x) for x in allowed_unsupported)
-            and len(set(allowed_unsupported)) == len(allowed_unsupported)
             and isinstance(candidates, list)
             and len(candidates) > 0
-            and all(isinstance(c, dict) and isinstance(c.get("name"), str) and bool(c.get("name")) for c in candidates)
         ):
-            return 400, {"error": "INVALID_INPUT"}
-
-        cand_names_list = [c["name"] for c in candidates]
-        if len(set(cand_names_list)) != len(cand_names_list):
             return 400, {"error": "INVALID_INPUT"}
 
         if st.check_conflict(tenant, freeze_id, input_canonical):
@@ -1482,17 +1476,26 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
         if st.get_freeze(tenant, freeze_id) is not None:
             return 200, st.get_freeze(tenant, freeze_id)  # type: ignore
 
-        allowed_unsupported_set = set(allowed_unsupported)
+        allowed_unsupported_list = allowed_unsupported if isinstance(allowed_unsupported, list) else []
+        allowed_unsupported_set = set(allowed_unsupported_list)
         frozen_candidates = []
 
         seen_cand_names = set()
         for cand in candidates:
             if not isinstance(cand, dict):
+                frozen_candidates.append({
+                    "name": "invalid",
+                    "status": "invalid",
+                    "inventory": [],
+                    "totalBytes": None,
+                    "packageDigest": None,
+                    "reasonCodes": ["INVALID_INPUT"],
+                })
                 continue
             c_name = cand.get("name")
-            if not isinstance(c_name, str) or not c_name or c_name in seen_cand_names:
-                continue
-            seen_cand_names.add(c_name)
+            c_name_str = str(c_name) if isinstance(c_name, str) and c_name else "invalid"
+            is_name_dup = c_name_str in seen_cand_names
+            seen_cand_names.add(c_name_str)
 
             files = cand.get("files")
             loadable = cand.get("loadable")
@@ -1546,6 +1549,9 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
                 if c_tok != tok_dig:
                     reasons.add("TOKENIZER_MISMATCH")
 
+            if is_name_dup or not isinstance(c_name, str) or not c_name or not isinstance(calib_dig, str) or not calib_dig or not isinstance(tok_dig, str) or not tok_dig:
+                reasons.add("INVALID_INPUT")
+
             # Final status: reasons > unsupported > frozen
             if reasons:
                 status = "invalid"
@@ -1556,7 +1562,7 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
 
             sorted_codes = sorted(list(reasons), key=lambda s: s.encode("utf-8"))
             frozen_candidates.append({
-                "name": c_name,
+                "name": c_name_str,
                 "status": status,
                 "inventory": inventory,
                 "totalBytes": total_bytes,
@@ -1979,8 +1985,11 @@ def pipeline_decision(body: Any, store: Optional[PipelineStore] = None, tenant: 
                 return 409, {"error": "STATUS_CONFLICT"}
         elif curr_state["status"] == "succeeded":
             curr_key = curr_state.get("key")
-            if ev_status == "succeeded" and curr_key and curr_key in cache and ev_art != cache[curr_key]["artifactDigest"]:
-                return 409, {"error": "EVIDENCE_CONFLICT"}
+            if ev_status == "succeeded":
+                if curr_key and curr_key in cache and ev_art != cache[curr_key]["artifactDigest"]:
+                    return 409, {"error": "EVIDENCE_CONFLICT"}
+                else:
+                    ignored_event_ids.append(ev_id)
             else:
                 return 409, {"error": "STATUS_CONFLICT"}
         elif curr_state["status"] == "terminal_failed":
@@ -2152,10 +2161,10 @@ def verify_bundle_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
 
     recomputed_inventory = []
     for f_name, f_content in files.items():
-        if f_name == "inventory.json":
-            continue
         if not isinstance(f_content, str):
             violations.add(f"INVALID_FILE:{f_name}")
+            continue
+        if f_name == "inventory.json":
             continue
         raw_b = f_content.encode("utf-8")
         recomputed_inventory.append({
