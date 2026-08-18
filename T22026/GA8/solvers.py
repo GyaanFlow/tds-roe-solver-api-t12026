@@ -763,7 +763,7 @@ def bqml_decision(body: Any, store: Optional[BQMLStore] = None, tenant: str = ""
                 lbl = r.get("label")
                 pred = r.get("prediction")
                 sl = r.get("slice")
-                if lbl not in (0, 1) or pred not in (0, 1) or not isinstance(sl, str) or not sl:
+                if isinstance(lbl, bool) or lbl not in (0, 1) or isinstance(pred, bool) or pred not in (0, 1) or not isinstance(sl, str) or not sl:
                     valid_rows = False
                     break
 
@@ -940,7 +940,7 @@ def promote_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
                 created_dt = created_parsed[0]
                 if created_dt > as_of_dt:
                     v_reasons.add("FUTURE_EVALUATION")
-                elif is_valid_policy and (as_of_dt.timestamp() - created_dt.timestamp()) > p_max_age:
+                elif is_valid_policy and created_dt < as_of_dt - timedelta(seconds=p_max_age):
                     v_reasons.add("STALE_EVALUATION")
 
             # Check finite numbers
