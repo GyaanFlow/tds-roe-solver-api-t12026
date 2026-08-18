@@ -1476,43 +1476,34 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
         allowed_unsupported = body.get("allowedUnsupportedReasons")
         candidates = body.get("candidates")
 
-        input_canonical = json.dumps(body, sort_keys=True, separators=(",", ":"))
-
-        # Global input validation per spec:
-        # freezeId is non-empty and at most 128 characters. Digests are non-empty strings.
-        # candidates is a non-empty array.
-        if not (
-            isinstance(freeze_id, str)
-            and 1 <= len(freeze_id) <= 128
-            and isinstance(calib_dig, str)
-            and len(calib_dig) > 0
-            and isinstance(tok_dig, str)
-            and len(tok_dig) > 0
-            and isinstance(candidates, list)
-            and len(candidates) > 0
-        ):
+        # Per exam specification line 538:
+        # "Unknown or missing phase, an empty/non-array freeze candidate list,
+        # or a select request without array candidates and rows plus an object policy
+        # returns HTTP 400 with exactly {"error":"INVALID_INPUT"}."
+        if not isinstance(candidates, list) or len(candidates) == 0:
             return 400, {"error": "INVALID_INPUT"}
 
-        # allowedUnsupportedReasons is optional in JSON; if provided it must be a list of non-empty unique strings
-        if allowed_unsupported is not None:
-            if not isinstance(allowed_unsupported, list):
-                return 400, {"error": "INVALID_INPUT"}
-            if not all(isinstance(r, str) and len(r) > 0 for r in allowed_unsupported):
-                return 400, {"error": "INVALID_INPUT"}
-            if len(set(allowed_unsupported)) != len(allowed_unsupported):
-                return 400, {"error": "INVALID_INPUT"}
-            allowed_unsupported_set = set(allowed_unsupported)
+        freeze_id_str = str(freeze_id) if isinstance(freeze_id, str) else ""
+        calib_dig_str = str(calib_dig) if isinstance(calib_dig, str) else ""
+        tok_dig_str = str(tok_dig) if isinstance(tok_dig, str) else ""
+
+        input_canonical = json.dumps(body, sort_keys=True, separators=(",", ":"))
+
+        # Replay / conflict check for valid freezeId
+        if freeze_id_str and 1 <= len(freeze_id_str) <= 128:
+            if st.check_conflict(tenant, freeze_id_str, input_canonical):
+                return 409, {"error": "FREEZE_ID_CONFLICT"}
+            if st.get_freeze(tenant, freeze_id_str) is not None:
+                return 200, st.get_freeze(tenant, freeze_id_str)  # type: ignore
+
+        if isinstance(allowed_unsupported, list):
+            allowed_unsupported_set = {str(r) for r in allowed_unsupported if isinstance(r, str) and r}
         else:
             allowed_unsupported_set = set()
 
-        if st.check_conflict(tenant, freeze_id, input_canonical):
-            return 409, {"error": "FREEZE_ID_CONFLICT"}
-        if st.get_freeze(tenant, freeze_id) is not None:
-            return 200, st.get_freeze(tenant, freeze_id)  # type: ignore
-
         frozen_candidates = []
-
         seen_cand_names = set()
+
         for cand in candidates:
             if not isinstance(cand, dict):
                 frozen_candidates.append({
@@ -1524,6 +1515,7 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
                     "reasonCodes": ["INVALID_INPUT"],
                 })
                 continue
+
             c_name = cand.get("name")
             c_name_str = str(c_name) if isinstance(c_name, str) and c_name else "invalid"
             is_name_dup = c_name_str in seen_cand_names
@@ -1576,12 +1568,15 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
             else:
                 if loadable is not True:
                     reasons.add("NOT_LOADABLE")
-                if c_calib != calib_dig:
+                if c_calib != calib_dig_str or not calib_dig_str:
                     reasons.add("CALIBRATION_MISMATCH")
-                if c_tok != tok_dig:
+                if c_tok != tok_dig_str or not tok_dig_str:
                     reasons.add("TOKENIZER_MISMATCH")
 
             if is_name_dup or not isinstance(c_name, str) or not c_name:
+                reasons.add("INVALID_INPUT")
+
+            if not freeze_id_str or len(freeze_id_str) > 128:
                 reasons.add("INVALID_INPUT")
 
             # Final status: reasons > unsupported > frozen
@@ -1605,10 +1600,11 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
         frozen_candidates = sorted(frozen_candidates, key=lambda c: c["name"].encode("utf-8"))
 
         resp = {
-            "freezeId": freeze_id,
+            "freezeId": freeze_id_str,
             "candidates": frozen_candidates,
         }
-        st.record_freeze(tenant, freeze_id, input_canonical, resp)
+        if freeze_id_str and 1 <= len(freeze_id_str) <= 128:
+            st.record_freeze(tenant, freeze_id_str, input_canonical, resp)
         return 200, resp
 
     else:
@@ -1619,13 +1615,17 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
         latencies = body.get("latencies")
         rows = body.get("rows")
 
+        # Per exam specification line 538:
+        # "a select request without array candidates and rows plus an object policy
+        # returns HTTP 400 with exactly {"error":"INVALID_INPUT"}."
         if not (
-            isinstance(freeze_id, str)
-            and isinstance(candidates, list)
-            and isinstance(policy, dict)
+            isinstance(candidates, list)
             and isinstance(rows, list)
+            and isinstance(policy, dict)
         ):
             return 400, {"error": "INVALID_INPUT"}
+
+        freeze_id_str = str(freeze_id) if isinstance(freeze_id, str) else ""
 
         max_bytes = policy.get("maxBytes")
         agg_floor = policy.get("aggregateFloor")
@@ -1654,9 +1654,8 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
             and isinstance(latencies, dict)
         )
 
-        stored_freeze = st.get_freeze(tenant, freeze_id)
+        stored_freeze = st.get_freeze(tenant, freeze_id_str) if freeze_id_str else None
         if stored_freeze is not None and isinstance(candidates, list):
-            # Compare by name-sorted candidate list for order-independence
             stored_by_name = {c["name"]: c for c in stored_freeze["candidates"] if isinstance(c, dict) and "name" in c}
             input_by_name = {c["name"]: c for c in candidates if isinstance(c, dict) and "name" in c}
             is_lineage_valid = (len(input_by_name) == len(candidates)
@@ -1664,6 +1663,7 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
                 all(json.dumps(stored_by_name[n], sort_keys=True) == json.dumps(input_by_name[n], sort_keys=True)
                     for n in stored_by_name))
         else:
+            stored_by_name = {}
             is_lineage_valid = False
 
         results = []
@@ -1685,6 +1685,8 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
                 reasons.add("INVALID_POLICY")
             if not is_lineage_valid:
                 reasons.add("INVALID_LINEAGE")
+            if stored_freeze is None:
+                reasons.add("NOT_FROZEN")
 
             if cand.get("status") != "frozen":
                 reasons.add("NOT_FROZEN")
@@ -1694,7 +1696,6 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
             c_pkg_dig = None
             if isinstance(inv, list):
                 try:
-                    # Re-normalize with exact key order name,bytes,sha256 before hashing
                     norm_inv = [{"name": item["name"], "bytes": item["bytes"], "sha256": item["sha256"]} for item in inv]
                     norm_inv = sorted(norm_inv, key=lambda x: x["name"].encode("utf-8"))
                     c_total_bytes = sum(item["bytes"] for item in norm_inv)
@@ -1703,10 +1704,13 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
                 except Exception:
                     pass
 
-            if c_pkg_dig != cand.get("packageDigest") or c_total_bytes != cand.get("totalBytes"):
+            manifest_valid = True
+            if c_pkg_dig != cand.get("packageDigest") or c_total_bytes != cand.get("totalBytes") or c_pkg_dig is None:
                 reasons.add("INVALID_MANIFEST")
+                manifest_valid = False
 
             c_lat = latencies.get(c_name) if isinstance(latencies, dict) else None
+            lat_valid = True
             if not (
                 isinstance(c_lat, (int, float))
                 and not isinstance(c_lat, bool)
@@ -1715,11 +1719,12 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
                 and c_lat >= 0
             ):
                 reasons.add("INVALID_POLICY")
+                lat_valid = False
                 c_lat = None
 
-            if is_valid_policy and c_total_bytes is not None and c_total_bytes > max_bytes:
+            if is_valid_policy and c_total_bytes is not None and max_bytes is not None and c_total_bytes > max_bytes:
                 reasons.add("SIZE_LIMIT")
-            if is_valid_policy and c_lat is not None and c_lat > max_lat:
+            if is_valid_policy and c_lat is not None and max_lat is not None and c_lat > max_lat:
                 reasons.add("LATENCY_LIMIT")
 
             rows_valid = len(rows) > 0
@@ -1740,21 +1745,23 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
                     break
 
             c_agg = None
-            c_slices: Dict[str, float] = {}
+            c_slices: Dict[str, Any] = {}
 
             if not rows_valid:
                 reasons.add("INVALID_PREDICTIONS")
+                if is_valid_policy and isinstance(req_slices, dict):
+                    c_slices = {s_name: None for s_name in req_slices}
             else:
                 corr = sum(1 for r in rows if r["label"] == r["predictions"].get(c_name))
                 c_agg = round(corr / len(rows), 12)
-                if is_valid_policy and c_agg < agg_floor:
+                if is_valid_policy and agg_floor is not None and c_agg < agg_floor:
                     reasons.add("AGGREGATE_FLOOR")
 
                 sl_map: Dict[str, List[Dict[str, Any]]] = {}
                 for r in rows:
                     sl_map.setdefault(r["slice"], []).append(r)
 
-                if is_valid_policy:
+                if is_valid_policy and isinstance(req_slices, dict):
                     for sl_name, sl_fl in req_slices.items():
                         if sl_name not in sl_map:
                             reasons.add(f"MISSING_SLICE:{sl_name}")
@@ -1766,15 +1773,15 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
                             if sl_acc < sl_fl:
                                 reasons.add(f"SLICE_FLOOR:{sl_name}")
 
-            admitted = len(reasons) == 0
+            admitted = len(reasons) == 0 and cand.get("status") == "frozen"
             sorted_codes = sorted(list(reasons), key=lambda s: s.encode("utf-8"))
 
             res_item = {
                 "name": c_name,
                 "aggregate": c_agg,
                 "slices": c_slices,
-                "totalBytes": c_total_bytes,
-                "latencyMs": c_lat,
+                "totalBytes": c_total_bytes if manifest_valid else None,
+                "latencyMs": c_lat if lat_valid else None,
                 "admitted": admitted,
                 "reasonCodes": sorted_codes,
             }
@@ -1801,14 +1808,13 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
 
             sorted_admitted = sorted(admitted_candidates, key=_winner_sort_key)
             selected_winner = sorted_admitted[0][0]
-            # Return exactly the recorded winner object from store per spec
             if stored_freeze is not None:
                 winner_manifest = stored_by_name.get(selected_winner)
             else:
                 winner_manifest = sorted_admitted[0][3]
 
         return 200, {
-            "freezeId": freeze_id,
+            "freezeId": freeze_id_str,
             "selected": selected_winner,
             "results": results,
             "packageManifest": winner_manifest,
