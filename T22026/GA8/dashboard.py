@@ -448,9 +448,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         const res = await fetch(`${ORIGIN}/ga8/${enc}/solve/q8`);
         const json = await res.json();
         showResult('res-q8', {
-          "Trainable Parameters": json.trainable_params,
-          "Adapter Safetensors Bytes": json.adapter_file_size_bytes,
-          "Layers": json.layers ? json.layers.length : 0
+          "trainable_params": json.trainable_params,
+          "adapter_file_size_bytes": json.adapter_file_size_bytes
         }, !res.ok);
       } catch (e) {
         showResult('res-q8', { error: e.message }, true);
@@ -466,9 +465,9 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         const res = await fetch(`${ORIGIN}/ga8/${enc}/solve/q9`);
         const json = await res.json();
         showResult('res-q9', {
-          "Final Loss": json.final_loss,
-          "Mean Last 10 Loss": json.mean_last_10_loss,
-          "MLflow Run ID": json.run_id
+          "final_loss": json.final_loss,
+          "run_id": json.run_id,
+          "mean_last_10_loss": json.mean_last_10_loss
         }, !res.ok);
       } catch (e) {
         showResult('res-q9', { error: e.message }, true);
@@ -483,11 +482,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         const enc = encEmail();
         const res = await fetch(`${ORIGIN}/ga8/${enc}/solve/q10`);
         const json = await res.json();
-        showResult('res-q10', {
-          "Energy (kWh)": json.energy_kWh,
-          "CO2 (kg)": json.co2_kg,
-          "YAML Frontmatter": json.yaml_frontmatter
-        }, !res.ok);
+        showResult('res-q10', json.yaml_frontmatter, !res.ok);
       } catch (e) {
         showResult('res-q10', { error: e.message }, true);
       } finally {
