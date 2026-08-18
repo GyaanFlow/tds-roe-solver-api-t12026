@@ -108,7 +108,7 @@ def parse_rfc3339_timestamp(ts: Any) -> Optional[Tuple[datetime, str]]:
 # ===========================================================================
 # 1. POST /build-corpus
 # ===========================================================================
-_GS_URI_RE = re.compile(r"^gs://([^/]+)/([^/]+)$")
+_GS_URI_RE = re.compile(r"^gs://([^/]+)/(.+)$")
 _WORD_RE = re.compile(r"[^\W_]+", re.UNICODE)
 
 
@@ -676,12 +676,14 @@ def bqml_decision(body: Any, store: Optional[BQMLStore] = None, tenant: str = ""
         selected_trial_id = None
         if not succeeded_trials and "INVALID_INPUT" not in reasons:
             reasons.add("NO_SUCCESSFUL_TRIAL")
-        elif succeeded_trials and not reasons:
+        elif succeeded_trials:
+            # Always select best trial (even with TRIAL_LIMIT_EXCEEDED etc.)
             sorted_trials = sorted(succeeded_trials, key=lambda x: (-x["evalMetric"], x["trialId"]))
             selected_trial_id = sorted_trials[0]["trialId"]
 
         final_reasons = sorted(list(reasons), key=lambda s: s.encode("utf-8"))
-        if final_reasons:
+        # Only null out selectedTrialId on hard input failures
+        if "INVALID_INPUT" in reasons or "NO_SUCCESSFUL_TRIAL" in reasons:
             selected_trial_id = None
 
         resp = {
@@ -690,7 +692,7 @@ def bqml_decision(body: Any, store: Optional[BQMLStore] = None, tenant: str = ""
             "trainRowIds": train_ids,
             "evalRowIds": eval_ids,
             "featureNames": sorted_features,
-            "datasetDigest": dataset_digest if not ("INVALID_INPUT" in reasons) else None,
+            "datasetDigest": dataset_digest if "INVALID_INPUT" not in reasons else None,
             "reasonCodes": final_reasons,
         }
         st.record_selection(tenant, run_id, input_canonical, resp)
@@ -943,28 +945,29 @@ def promote_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
             if p_schema_digest != e_schema_digest:
                 v_reasons.add("SCHEMA_MISMATCH")
 
-            # Accuracy, latency, size limits
-            if isinstance(acc, (int, float)) and acc < p_acc_floor:
-                v_reasons.add("ACCURACY_FLOOR")
-            if isinstance(lat, (int, float)) and lat > p_max_lat:
-                v_reasons.add("LATENCY_LIMIT")
-            if isinstance(sz, int) and not isinstance(sz, bool) and sz > p_max_size:
-                v_reasons.add("SIZE_LIMIT")
+            # Accuracy, latency, size limits (only if policy is valid)
+            if is_valid_policy:
+                if isinstance(acc, (int, float)) and not isinstance(acc, bool) and acc < p_acc_floor:
+                    v_reasons.add("ACCURACY_FLOOR")
+                if isinstance(lat, (int, float)) and not isinstance(lat, bool) and lat > p_max_lat:
+                    v_reasons.add("LATENCY_LIMIT")
+                if isinstance(sz, (int, float)) and not isinstance(sz, bool) and sz > p_max_size:
+                    v_reasons.add("SIZE_LIMIT")
 
-            # Slices validation
-            if not isinstance(slices, dict):
-                for sl_name in p_req_slices.keys():
-                    v_reasons.add(f"MISSING_SLICE:{sl_name}")
-            else:
-                for sl_name, sl_floor in p_req_slices.items():
-                    if sl_name not in slices:
+                # Slices validation
+                if not isinstance(slices, dict):
+                    for sl_name in p_req_slices.keys():
                         v_reasons.add(f"MISSING_SLICE:{sl_name}")
-                    else:
-                        sl_val = slices[sl_name]
-                        if not isinstance(sl_val, (int, float)) or isinstance(sl_val, bool) or not (0.0 <= sl_val <= 1.0):
-                            v_reasons.add(f"SLICE_RANGE:{sl_name}")
-                        elif sl_val < sl_floor:
-                            v_reasons.add(f"SLICE_FLOOR:{sl_name}")
+                else:
+                    for sl_name, sl_floor in p_req_slices.items():
+                        if sl_name not in slices:
+                            v_reasons.add(f"MISSING_SLICE:{sl_name}")
+                        else:
+                            sl_val = slices[sl_name]
+                            if not isinstance(sl_val, (int, float)) or isinstance(sl_val, bool) or not (0.0 <= sl_val <= 1.0):
+                                v_reasons.add(f"SLICE_RANGE:{sl_name}")
+                            elif sl_val < sl_floor:
+                                v_reasons.add(f"SLICE_FLOOR:{sl_name}")
 
         sorted_v_reasons = sorted(list(v_reasons), key=lambda s: s.encode("utf-8"))
         failed_gates[v_key] = sorted_v_reasons
@@ -1286,9 +1289,8 @@ def adapt_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
             ):
                 reasons.add("FULL_MODEL_ARTIFACT")
 
-        sorted_adapter_files = (
-            sorted(artifact_files, key=lambda s: s.encode("utf-8")) if isinstance(artifact_files, list) else []
-        )
+        # Always return the expected canonical sorted adapter file list
+        sorted_adapter_files = sorted(expected_artifacts, key=lambda s: s.encode("utf-8"))
 
         # Base revision
         if not isinstance(base_rev, str) or not re.match(r"^[0-9a-f]{40}$", base_rev):
@@ -1512,13 +1514,10 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
                     compact_inv = json.dumps(inventory, separators=(",", ":"), ensure_ascii=False)
                     package_digest = hashlib.sha256(compact_inv.encode("utf-8")).hexdigest()
 
-            status = "invalid"
+            # Candidate-specific validation (skip loadable/calib/tok for unsupported candidates)
             if unsupp_reason is not None:
                 if unsupp_reason not in allowed_unsupported_set:
                     reasons.add("UNALLOWED_UNSUPPORTED_REASON")
-                    status = "invalid"
-                else:
-                    status = "unsupported"
             else:
                 if loadable is not True:
                     reasons.add("NOT_LOADABLE")
@@ -1526,10 +1525,14 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
                     reasons.add("CALIBRATION_MISMATCH")
                 if c_tok != tok_dig:
                     reasons.add("TOKENIZER_MISMATCH")
-                if not reasons:
-                    status = "frozen"
-                else:
-                    status = "invalid"
+
+            # Final status: reasons > unsupported > frozen
+            if reasons:
+                status = "invalid"
+            elif unsupp_reason is not None:
+                status = "unsupported"
+            else:
+                status = "frozen"
 
             sorted_codes = sorted(list(reasons), key=lambda s: s.encode("utf-8"))
             frozen_candidates.append({
@@ -1590,10 +1593,15 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
         )
 
         stored_freeze = st.get_freeze(tenant, freeze_id)
-        is_lineage_valid = (
-            stored_freeze is not None
-            and json.dumps(stored_freeze["candidates"], sort_keys=True) == json.dumps(candidates, sort_keys=True)
-        )
+        if stored_freeze is not None and isinstance(candidates, list):
+            # Compare by name-sorted candidate list for order-independence
+            stored_by_name = {c["name"]: c for c in stored_freeze["candidates"] if isinstance(c, dict) and "name" in c}
+            input_by_name = {c["name"]: c for c in candidates if isinstance(c, dict) and "name" in c}
+            is_lineage_valid = (set(stored_by_name.keys()) == set(input_by_name.keys()) and
+                all(json.dumps(stored_by_name[n], sort_keys=True) == json.dumps(input_by_name[n], sort_keys=True)
+                    for n in stored_by_name))
+        else:
+            is_lineage_valid = False
 
         results = []
         admitted_candidates = []
@@ -1621,8 +1629,11 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
             c_pkg_dig = None
             if isinstance(inv, list):
                 try:
-                    c_total_bytes = sum(item["bytes"] for item in inv)
-                    compact_inv = json.dumps(inv, separators=(",", ":"), ensure_ascii=False)
+                    # Re-normalize with exact key order name,bytes,sha256 before hashing
+                    norm_inv = [{"name": item["name"], "bytes": item["bytes"], "sha256": item["sha256"]} for item in inv]
+                    norm_inv = sorted(norm_inv, key=lambda x: x["name"].encode("utf-8"))
+                    c_total_bytes = sum(item["bytes"] for item in norm_inv)
+                    compact_inv = json.dumps(norm_inv, separators=(",", ":"), ensure_ascii=False)
                     c_pkg_dig = hashlib.sha256(compact_inv.encode("utf-8")).hexdigest()
                 except Exception:
                     pass
@@ -1810,32 +1821,35 @@ def pipeline_decision(body: Any, store: Optional[PipelineStore] = None, tenant: 
         return hashlib.sha256(json.dumps(arr, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()
 
     node_keys: Dict[str, Optional[str]] = {}
-    node_keys["verify_data"] = _hash_arr([inputs["generation"], inputs["checksum"]])
+    vd_key = _hash_arr([inputs["generation"], inputs["checksum"]])
+    node_keys["verify_data"] = vd_key
 
-    if "verify_data" in cache:
-        node_keys["prepare"] = _hash_arr([inputs["canonicalData"], inputs["prepareCode"], inputs["prepareConfig"]])
-    else:
-        node_keys["prepare"] = None
+    prep_key = _hash_arr([inputs["canonicalData"], inputs["prepareCode"], inputs["prepareConfig"]])
+    node_keys["prepare"] = prep_key if vd_key in cache else None
 
-    if "prepare" in cache:
-        node_keys["train"] = _hash_arr([cache["prepare"]["artifactDigest"], inputs["trainCode"], inputs["trainConfig"], inputs["runtime"]])
+    if node_keys["prepare"] is not None and prep_key in cache:
+        train_key = _hash_arr([cache[prep_key]["artifactDigest"], inputs["trainCode"], inputs["trainConfig"], inputs["runtime"]])
     else:
-        node_keys["train"] = None
+        train_key = None
+    node_keys["train"] = train_key
 
-    if "train" in cache:
-        node_keys["evaluate"] = _hash_arr([cache["train"]["artifactDigest"], inputs["canonicalData"], inputs["evaluateCode"], inputs["evaluateConfig"]])
+    if train_key is not None and train_key in cache:
+        eval_key = _hash_arr([cache[train_key]["artifactDigest"], inputs["canonicalData"], inputs["evaluateCode"], inputs["evaluateConfig"]])
     else:
-        node_keys["evaluate"] = None
+        eval_key = None
+    node_keys["evaluate"] = eval_key
 
-    if "evaluate" in cache:
-        node_keys["register"] = _hash_arr([cache["evaluate"]["artifactDigest"], inputs["schemaDigest"]])
+    if eval_key is not None and eval_key in cache:
+        reg_key = _hash_arr([cache[eval_key]["artifactDigest"], inputs["schemaDigest"]])
     else:
-        node_keys["register"] = None
+        reg_key = None
+    node_keys["register"] = reg_key
 
-    if "register" in cache:
-        node_keys["publish"] = _hash_arr([cache["register"]["artifactDigest"], inputs["publishConfig"]])
+    if reg_key is not None and reg_key in cache:
+        pub_key = _hash_arr([cache[reg_key]["artifactDigest"], inputs["publishConfig"]])
     else:
-        node_keys["publish"] = None
+        pub_key = None
+    node_keys["publish"] = pub_key
 
     accepted_event_ids: List[str] = []
     ignored_event_ids: List[str] = []
@@ -1919,7 +1933,6 @@ def pipeline_decision(body: Any, store: Optional[PipelineStore] = None, tenant: 
                             return 409, {"error": "EVIDENCE_CONFLICT"}
                     else:
                         cache[ev_key] = {"artifactDigest": ev_art, "eventId": ev_id}
-                        cache[ev_node] = {"artifactDigest": ev_art, "eventId": ev_id}
             elif ev_att < curr_state["attempt"]:
                 ignored_event_ids.append(ev_id)
             else:
@@ -1934,7 +1947,8 @@ def pipeline_decision(body: Any, store: Optional[PipelineStore] = None, tenant: 
             else:
                 return 409, {"error": "STATUS_CONFLICT"}
         elif curr_state["status"] == "succeeded":
-            if ev_status == "succeeded" and ev_art != cache[ev_node]["artifactDigest"]:
+            curr_key = curr_state.get("key")
+            if ev_status == "succeeded" and curr_key and curr_key in cache and ev_art != cache[curr_key]["artifactDigest"]:
                 return 409, {"error": "EVIDENCE_CONFLICT"}
             else:
                 return 409, {"error": "STATUS_CONFLICT"}
@@ -2077,7 +2091,13 @@ def verify_bundle_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
     if isinstance(inv_file_raw, str):
         try:
             parsed_inv = json.loads(inv_file_raw)
-            if json.dumps(parsed_inv, separators=(",", ":")) != json.dumps(recomputed_inventory, separators=(",", ":")):
+            # Normalize: sort both by name, compare with consistent key order
+            def _norm_inv(inv_list):
+                return sorted(
+                    [{"name": e["name"], "bytes": e["bytes"], "sha256": e["sha256"]} for e in inv_list if isinstance(e, dict)],
+                    key=lambda x: x["name"].encode("utf-8")
+                )
+            if not isinstance(parsed_inv, list) or json.dumps(_norm_inv(parsed_inv), separators=(",", ":")) != json.dumps(_norm_inv(recomputed_inventory), separators=(",", ":")):
                 violations.add("INVENTORY_MISMATCH")
         except Exception:
             violations.add("INVALID_JSON:inventory.json")
