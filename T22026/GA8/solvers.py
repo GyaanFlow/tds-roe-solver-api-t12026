@@ -722,6 +722,7 @@ def bqml_decision(body: Any, store: Optional[BQMLStore] = None, tenant: str = ""
             and not isinstance(sel_trial, bool)
             and _is_safe_integer(sel_trial)
             and isinstance(digest, str)
+            and bool(re.match(r"^[0-9a-f]{64}$", digest))
             and isinstance(floor, (int, float))
             and not isinstance(floor, bool)
             and not math.isnan(floor)
@@ -2278,7 +2279,7 @@ def verify_bundle_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
                     "trainingConfigDigest", "modelArtifactDigest", "evaluationArtifactDigest"
                 ]
                 for fld in req_m_fields:
-                    if fld not in manifest_obj:
+                    if fld not in manifest_obj or not manifest_obj[fld] or not isinstance(manifest_obj[fld], str):
                         violations.add(f"MISSING_MANIFEST_FIELD:{fld}")
 
                 base_rev = manifest_obj.get("baseRevision")
