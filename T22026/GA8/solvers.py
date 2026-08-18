@@ -108,7 +108,7 @@ def parse_rfc3339_timestamp(ts: Any) -> Optional[Tuple[datetime, str]]:
 # ===========================================================================
 # 1. POST /build-corpus
 # ===========================================================================
-_GS_URI_RE = re.compile(r"^gs://([^/]+)/(.+)$")
+_GS_URI_RE = re.compile(r"^gs://([^/]+)/([^/]+)$")
 _WORD_RE = re.compile(r"[^\W_]+", re.UNICODE)
 
 
@@ -184,12 +184,12 @@ def build_corpus_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
         if not isinstance(uri, str) or not _GS_URI_RE.match(uri):
             obj_reasons.add("URI_INVALID")
 
-        # Generation checks
-        gen_valid = isinstance(generation, str) and generation.isdigit()
-        fetch_valid = isinstance(fetched_generation, str) and fetched_generation.isdigit()
+        # Generation checks (independent evaluations per spec)
+        gen_valid = isinstance(generation, str) and generation.isdigit() and len(generation) > 0
+        fetch_valid = isinstance(fetched_generation, str) and fetched_generation.isdigit() and len(fetched_generation) > 0
         if not gen_valid or not fetch_valid:
             obj_reasons.add("GENERATION_INVALID")
-        elif generation != fetched_generation:
+        if generation != fetched_generation:
             obj_reasons.add("GENERATION_MISMATCH")
 
         # CRC32C syntax check
@@ -205,7 +205,7 @@ def build_corpus_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
         if not isinstance(content, str) or schema_id != "training-v1":
             obj_reasons.add("SCHEMA_INVALID")
 
-        # Parse JSONL content
+        # Parse JSONL content (scan all rows without early break to collect all codes)
         obj_rows: List[Dict[str, Any]] = []
         if isinstance(content, str):
             lines = [ln for ln in content.splitlines() if ln.strip()]
@@ -217,16 +217,16 @@ def build_corpus_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
                         row_data = json.loads(line)
                     except Exception:
                         obj_reasons.add("JSONL_INVALID")
-                        break
+                        continue
 
                     if not isinstance(row_data, dict):
                         obj_reasons.add("SCHEMA_INVALID")
-                        break
+                        continue
 
                     expected_keys = {"id", "entity", "eventTime", "revision", "text"}
                     if set(row_data.keys()) != expected_keys:
                         obj_reasons.add("SCHEMA_INVALID")
-                        break
+                        continue
 
                     r_id = row_data.get("id")
                     r_ent = row_data.get("entity")
@@ -244,12 +244,12 @@ def build_corpus_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
                         and r_rev >= 0
                     ):
                         obj_reasons.add("SCHEMA_INVALID")
-                        break
+                        continue
 
                     time_res = parse_rfc3339_timestamp(r_time)
                     if time_res is None:
                         obj_reasons.add("SCHEMA_INVALID")
-                        break
+                        continue
 
                     obj_rows.append({
                         "id": r_id,
@@ -676,14 +676,13 @@ def bqml_decision(body: Any, store: Optional[BQMLStore] = None, tenant: str = ""
         selected_trial_id = None
         if not succeeded_trials and "INVALID_INPUT" not in reasons:
             reasons.add("NO_SUCCESSFUL_TRIAL")
-        elif succeeded_trials:
-            # Always select best trial (even with TRIAL_LIMIT_EXCEEDED etc.)
+        elif succeeded_trials and not reasons:
             sorted_trials = sorted(succeeded_trials, key=lambda x: (-x["evalMetric"], x["trialId"]))
             selected_trial_id = sorted_trials[0]["trialId"]
 
         final_reasons = sorted(list(reasons), key=lambda s: s.encode("utf-8"))
-        # Only null out selectedTrialId on hard input failures
-        if "INVALID_INPUT" in reasons or "NO_SUCCESSFUL_TRIAL" in reasons:
+        # Any code makes selectedTrialId null (per spec line 390)
+        if final_reasons:
             selected_trial_id = None
 
         resp = {
@@ -877,7 +876,13 @@ def promote_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
     version_eval_map: Dict[str, Dict[str, Any]] = {}
     version_metrics: Dict[str, Tuple[float, float, int, int]] = {}
 
-    seen_versions: Set[str] = set()
+    # Pre-count occurrences of all version identifiers to reject every occurrence of a duplicate
+    version_counts: Dict[str, int] = {}
+    for v_obj in versions:
+        if isinstance(v_obj, dict):
+            vid = v_obj.get("version")
+            if isinstance(vid, str):
+                version_counts[vid] = version_counts.get(vid, 0) + 1
 
     for v_obj in versions:
         if not isinstance(v_obj, dict):
@@ -889,13 +894,11 @@ def promote_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
         if not is_valid_policy:
             v_reasons.add("INVALID_POLICY")
 
-        # Version string check
+        # Version string check: must be canonical positive safe integer string
         if not (isinstance(v_id, str) and v_id.isdigit() and str(int(v_id)) == v_id and int(v_id) > 0):
             v_reasons.add("INVALID_VERSION")
-        elif v_id in seen_versions:
+        if isinstance(v_id, str) and version_counts.get(v_id, 0) > 1:
             v_reasons.add("DUPLICATE_VERSION")
-        else:
-            seen_versions.add(v_id)
 
         evaluation = v_obj.get("evaluation")
         artifact_digest = v_obj.get("artifactDigest")
@@ -940,9 +943,9 @@ def promote_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
             # Digest matching
             if artifact_digest != e_art_digest or not artifact_digest:
                 v_reasons.add("ARTIFACT_MISMATCH")
-            if p_dataset_digest != e_data_digest:
+            if is_valid_policy and p_dataset_digest != e_data_digest:
                 v_reasons.add("DATASET_MISMATCH")
-            if p_schema_digest != e_schema_digest:
+            if is_valid_policy and p_schema_digest != e_schema_digest:
                 v_reasons.add("SCHEMA_MISMATCH")
 
             # Accuracy, latency, size limits (only if policy is valid)
@@ -1384,6 +1387,15 @@ def adapt_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
                     break
 
         sorted_reasons = sorted(list(reasons), key=lambda s: s.encode("utf-8"))
+        # Strictly determine boolean flags from violation reasons per contract
+        template_pass = "CHAT_TEMPLATE_COUNT" not in reasons
+        peft_config_pass = not bool({"INVALID_PARAMETER", "INFERENCE_MODE", "FULL_MODEL_ARTIFACT", "ADAPTER_FILE_SET"} & reasons)
+        checkpoint_complete = "INCOMPLETE_CHECKPOINT" not in reasons
+        lineage_pass = not bool({"MUTABLE_BASE_REVISION", "LINEAGE_MISMATCH"} & reasons)
+        eval_isolated = not bool({"EVAL_LEAKAGE", "EVAL_DROPOUT_ACTIVE"} & reasons)
+        evaluation_deterministic = "EFFECTIVE_BATCH_MISMATCH" not in reasons
+        resume_pass = "RESUME_DIVERGENCE" not in reasons
+
         return 200, {
             "labels": labels,
             "templatePass": template_pass,
@@ -1394,7 +1406,7 @@ def adapt_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
             "checkpointComplete": checkpoint_complete,
             "lineagePass": lineage_pass,
             "evalIsolated": eval_isolated,
-            "evaluationDeterministic": True,
+            "evaluationDeterministic": evaluation_deterministic,
             "resumePass": resume_pass,
             "reasonCodes": sorted_reasons,
         }
@@ -1449,12 +1461,20 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
             isinstance(freeze_id, str)
             and 1 <= len(freeze_id) <= 128
             and isinstance(calib_dig, str)
+            and bool(calib_dig)
             and isinstance(tok_dig, str)
+            and bool(tok_dig)
             and isinstance(allowed_unsupported, list)
-            and all(isinstance(x, str) for x in allowed_unsupported)
+            and all(isinstance(x, str) and bool(x) for x in allowed_unsupported)
+            and len(set(allowed_unsupported)) == len(allowed_unsupported)
             and isinstance(candidates, list)
             and len(candidates) > 0
+            and all(isinstance(c, dict) and isinstance(c.get("name"), str) and bool(c.get("name")) for c in candidates)
         ):
+            return 400, {"error": "INVALID_INPUT"}
+
+        cand_names_list = [c["name"] for c in candidates]
+        if len(set(cand_names_list)) != len(cand_names_list):
             return 400, {"error": "INVALID_INPUT"}
 
         if st.check_conflict(tenant, freeze_id, input_canonical):
@@ -1736,7 +1756,11 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
 
             sorted_admitted = sorted(admitted_candidates, key=_winner_sort_key)
             selected_winner = sorted_admitted[0][0]
-            winner_manifest = sorted_admitted[0][3]
+            # Return exactly the recorded winner object from store per spec
+            if stored_freeze is not None:
+                winner_manifest = stored_by_name.get(selected_winner)
+            else:
+                winner_manifest = sorted_admitted[0][3]
 
         return 200, {
             "freezeId": freeze_id,
@@ -1815,41 +1839,46 @@ def pipeline_decision(body: Any, store: Optional[PipelineStore] = None, tenant: 
         session["inputs"] = input_canon
         session["node_state"] = {}
 
-    cache = session["cache"]
+    # Work on shallow copies of state for transactional atomic processing (rollback on 409)
+    cache = dict(session["cache"])
+    node_state = dict(session["node_state"])
+    seen_events = dict(session["seen_events"])
 
     def _hash_arr(arr: List[Any]) -> str:
         return hashlib.sha256(json.dumps(arr, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()
 
-    node_keys: Dict[str, Optional[str]] = {}
-    vd_key = _hash_arr([inputs["generation"], inputs["checksum"]])
-    node_keys["verify_data"] = vd_key
+    def _compute_dag_keys(cur_cache: Dict[str, Any]) -> Dict[str, Optional[str]]:
+        keys: Dict[str, Optional[str]] = {}
+        vk = _hash_arr([inputs["generation"], inputs["checksum"]])
+        keys["verify_data"] = vk
 
-    prep_key = _hash_arr([inputs["canonicalData"], inputs["prepareCode"], inputs["prepareConfig"]])
-    node_keys["prepare"] = prep_key if vd_key in cache else None
+        pk = _hash_arr([inputs["canonicalData"], inputs["prepareCode"], inputs["prepareConfig"]])
+        keys["prepare"] = pk if vk in cur_cache else None
 
-    if node_keys["prepare"] is not None and prep_key in cache:
-        train_key = _hash_arr([cache[prep_key]["artifactDigest"], inputs["trainCode"], inputs["trainConfig"], inputs["runtime"]])
-    else:
-        train_key = None
-    node_keys["train"] = train_key
+        if keys["prepare"] is not None and pk in cur_cache:
+            tk = _hash_arr([cur_cache[pk]["artifactDigest"], inputs["trainCode"], inputs["trainConfig"], inputs["runtime"]])
+        else:
+            tk = None
+        keys["train"] = tk
 
-    if train_key is not None and train_key in cache:
-        eval_key = _hash_arr([cache[train_key]["artifactDigest"], inputs["canonicalData"], inputs["evaluateCode"], inputs["evaluateConfig"]])
-    else:
-        eval_key = None
-    node_keys["evaluate"] = eval_key
+        if tk is not None and tk in cur_cache:
+            ek = _hash_arr([cur_cache[tk]["artifactDigest"], inputs["canonicalData"], inputs["evaluateCode"], inputs["evaluateConfig"]])
+        else:
+            ek = None
+        keys["evaluate"] = ek
 
-    if eval_key is not None and eval_key in cache:
-        reg_key = _hash_arr([cache[eval_key]["artifactDigest"], inputs["schemaDigest"]])
-    else:
-        reg_key = None
-    node_keys["register"] = reg_key
+        if ek is not None and ek in cur_cache:
+            rk = _hash_arr([cur_cache[ek]["artifactDigest"], inputs["schemaDigest"]])
+        else:
+            rk = None
+        keys["register"] = rk
 
-    if reg_key is not None and reg_key in cache:
-        pub_key = _hash_arr([cache[reg_key]["artifactDigest"], inputs["publishConfig"]])
-    else:
-        pub_key = None
-    node_keys["publish"] = pub_key
+        if rk is not None and rk in cur_cache:
+            pub_k = _hash_arr([cur_cache[rk]["artifactDigest"], inputs["publishConfig"]])
+        else:
+            pub_k = None
+        keys["publish"] = pub_k
+        return keys
 
     accepted_event_ids: List[str] = []
     ignored_event_ids: List[str] = []
@@ -1880,8 +1909,8 @@ def pipeline_decision(body: Any, store: Optional[PipelineStore] = None, tenant: 
             return 409, {"error": "INVALID_EVENT"}
 
         ev_canon = json.dumps(ev, sort_keys=True, separators=(",", ":"))
-        if ev_id in session["seen_events"]:
-            if session["seen_events"][ev_id] == ev_canon:
+        if ev_id in seen_events:
+            if seen_events[ev_id] == ev_canon:
                 ignored_event_ids.append(ev_id)
                 continue
             else:
@@ -1891,7 +1920,9 @@ def pipeline_decision(body: Any, store: Optional[PipelineStore] = None, tenant: 
             ignored_event_ids.append(ev_id)
             continue
 
-        curr_node_key = node_keys.get(ev_node)
+        # Recompute DAG keys dynamically to check readiness with latest cache
+        dyn_keys = _compute_dag_keys(cache)
+        curr_node_key = dyn_keys.get(ev_node)
         if curr_node_key is None or curr_node_key != ev_key:
             ignored_event_ids.append(ev_id)
             continue
@@ -1913,19 +1944,19 @@ def pipeline_decision(body: Any, store: Optional[PipelineStore] = None, tenant: 
                 ignored_event_ids.append(ev_id)
                 continue
 
-        curr_state = session["node_state"].get(ev_node)
+        curr_state = node_state.get(ev_node)
 
         if curr_state is None:
             if ev_status == "started" and ev_att == 1:
-                session["node_state"][ev_node] = {"status": "started", "attempt": 1, "key": ev_key, "eventId": ev_id}
-                session["seen_events"][ev_id] = ev_canon
+                node_state[ev_node] = {"status": "started", "attempt": 1, "key": ev_key, "eventId": ev_id}
+                seen_events[ev_id] = ev_canon
                 accepted_event_ids.append(ev_id)
             else:
                 ignored_event_ids.append(ev_id)
         elif curr_state["status"] == "started":
             if ev_att == curr_state["attempt"] and ev_status in ("succeeded", "retryable_failed", "terminal_failed"):
-                session["node_state"][ev_node] = {"status": ev_status, "attempt": ev_att, "key": ev_key, "eventId": ev_id}
-                session["seen_events"][ev_id] = ev_canon
+                node_state[ev_node] = {"status": ev_status, "attempt": ev_att, "key": ev_key, "eventId": ev_id}
+                seen_events[ev_id] = ev_canon
                 accepted_event_ids.append(ev_id)
                 if ev_status == "succeeded":
                     if ev_key in cache:
@@ -1939,8 +1970,8 @@ def pipeline_decision(body: Any, store: Optional[PipelineStore] = None, tenant: 
                 return 409, {"error": "STATUS_CONFLICT"}
         elif curr_state["status"] == "retryable_failed":
             if ev_status == "started" and ev_att == curr_state["attempt"] + 1:
-                session["node_state"][ev_node] = {"status": "started", "attempt": ev_att, "key": ev_key, "eventId": ev_id}
-                session["seen_events"][ev_id] = ev_canon
+                node_state[ev_node] = {"status": "started", "attempt": ev_att, "key": ev_key, "eventId": ev_id}
+                seen_events[ev_id] = ev_canon
                 accepted_event_ids.append(ev_id)
             elif ev_att <= curr_state["attempt"]:
                 ignored_event_ids.append(ev_id)
@@ -1955,13 +1986,64 @@ def pipeline_decision(body: Any, store: Optional[PipelineStore] = None, tenant: 
         elif curr_state["status"] == "terminal_failed":
             return 409, {"error": "STATUS_CONFLICT"}
 
+    # Commit state changes transactionally on success
+    session["cache"] = cache
+    session["node_state"] = node_state
+    session["seen_events"] = seen_events
+
+    # Final DAG keys after batch processing
+    node_keys = _compute_dag_keys(cache)
+
     response_nodes = []
     has_terminal_upstream = False
     has_pending_upstream = False
 
+    # Build dependency digests per node (named inputs + cacheKey)
+    node_dep_digests: Dict[str, Dict[str, Any]] = {}
+    node_dep_digests["verify_data"] = {
+        "generation": inputs["generation"],
+        "checksum": inputs["checksum"],
+        "cacheKey": node_keys["verify_data"],
+    }
+    node_dep_digests["prepare"] = {
+        "canonicalData": inputs["canonicalData"],
+        "prepareCode": inputs["prepareCode"],
+        "prepareConfig": inputs["prepareConfig"],
+        "cacheKey": node_keys["prepare"],
+    }
+    # train depends on prepare artifact
+    prep_art = cache[node_keys["prepare"]]["artifactDigest"] if (node_keys["prepare"] and node_keys["prepare"] in cache) else None
+    node_dep_digests["train"] = {
+        "prepareArtifact": prep_art,
+        "trainCode": inputs["trainCode"],
+        "trainConfig": inputs["trainConfig"],
+        "runtime": inputs["runtime"],
+        "cacheKey": node_keys["train"],
+    }
+    train_art = cache[node_keys["train"]]["artifactDigest"] if (node_keys["train"] and node_keys["train"] in cache) else None
+    node_dep_digests["evaluate"] = {
+        "trainArtifact": train_art,
+        "canonicalData": inputs["canonicalData"],
+        "evaluateCode": inputs["evaluateCode"],
+        "evaluateConfig": inputs["evaluateConfig"],
+        "cacheKey": node_keys["evaluate"],
+    }
+    eval_art = cache[node_keys["evaluate"]]["artifactDigest"] if (node_keys["evaluate"] and node_keys["evaluate"] in cache) else None
+    node_dep_digests["register"] = {
+        "evaluateArtifact": eval_art,
+        "schemaDigest": inputs["schemaDigest"],
+        "cacheKey": node_keys["register"],
+    }
+    reg_art = cache[node_keys["register"]]["artifactDigest"] if (node_keys["register"] and node_keys["register"] in cache) else None
+    node_dep_digests["publish"] = {
+        "registerArtifact": reg_art,
+        "publishConfig": inputs["publishConfig"],
+        "cacheKey": node_keys["publish"],
+    }
+
     for node in _DAG_NODES:
         key = node_keys.get(node)
-        dep_digests: Dict[str, Any] = {"cacheKey": key}
+        dep_digests = node_dep_digests[node]
         triggering_events: List[str] = []
 
         if has_terminal_upstream:
@@ -1972,7 +2054,7 @@ def pipeline_decision(body: Any, store: Optional[PipelineStore] = None, tenant: 
             reason = "UPSTREAM_PENDING"
         else:
             state = session["node_state"].get(node)
-            if key in cache:
+            if key is not None and key in cache:
                 action = "reuse"
                 reason = "CACHE_HIT"
                 triggering_events = [cache[key]["eventId"]]
@@ -2063,7 +2145,7 @@ def verify_bundle_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
 
     for f_name in files.keys():
         if f_name not in required_filenames:
-            violations.add(f"UNTRACKED_FILE:{f_name}")
+            violations.add("UNTRACKED_FILE")
         for unsafe_ext in _UNSAFE_EXTENSIONS:
             if f_name.endswith(unsafe_ext):
                 violations.add("UNSAFE_WEIGHTS")
@@ -2091,16 +2173,27 @@ def verify_bundle_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
     if isinstance(inv_file_raw, str):
         try:
             parsed_inv = json.loads(inv_file_raw)
-            # Normalize: sort both by name, compare with consistent key order
-            def _norm_inv(inv_list):
-                return sorted(
-                    [{"name": e["name"], "bytes": e["bytes"], "sha256": e["sha256"]} for e in inv_list if isinstance(e, dict)],
-                    key=lambda x: x["name"].encode("utf-8")
-                )
-            if not isinstance(parsed_inv, list) or json.dumps(_norm_inv(parsed_inv), separators=(",", ":")) != json.dumps(_norm_inv(recomputed_inventory), separators=(",", ":")):
-                violations.add("INVENTORY_MISMATCH")
         except Exception:
             violations.add("INVALID_JSON:inventory.json")
+            parsed_inv = None
+
+        if parsed_inv is not None:
+            if not isinstance(parsed_inv, list):
+                violations.add("INVENTORY_MISMATCH")
+            else:
+                try:
+                    norm_parsed = []
+                    for e in parsed_inv:
+                        if not isinstance(e, dict) or "name" not in e or "bytes" not in e or "sha256" not in e:
+                            violations.add("INVENTORY_MISMATCH")
+                            break
+                        norm_parsed.append({"name": e["name"], "bytes": e["bytes"], "sha256": e["sha256"]})
+                    else:
+                        norm_parsed = sorted(norm_parsed, key=lambda x: str(x["name"]).encode("utf-8"))
+                        if json.dumps(norm_parsed, separators=(",", ":")) != json.dumps(recomputed_inventory, separators=(",", ":")):
+                            violations.add("INVENTORY_MISMATCH")
+                except Exception:
+                    violations.add("INVENTORY_MISMATCH")
 
     cfg_raw = files.get("adapter_config.json")
     if isinstance(cfg_raw, str):
