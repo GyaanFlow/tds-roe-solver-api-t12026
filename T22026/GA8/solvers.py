@@ -1478,30 +1478,38 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
 
         input_canonical = json.dumps(body, sort_keys=True, separators=(",", ":"))
 
+        # Global input validation per spec:
+        # freezeId is non-empty and at most 128 characters. Digests are non-empty strings.
+        # candidates is a non-empty array.
         if not (
             isinstance(freeze_id, str)
             and 1 <= len(freeze_id) <= 128
             and isinstance(calib_dig, str)
-            and bool(calib_dig)
+            and len(calib_dig) > 0
             and isinstance(tok_dig, str)
-            and bool(tok_dig)
-            and isinstance(allowed_unsupported, list)
-            and all(isinstance(reason, str) and reason for reason in allowed_unsupported)
-            and len(set(allowed_unsupported)) == len(allowed_unsupported)
+            and len(tok_dig) > 0
             and isinstance(candidates, list)
             and len(candidates) > 0
-            and all(isinstance(candidate, dict) and isinstance(candidate.get("name"), str)
-                    and candidate["name"] for candidate in candidates)
-            and len({candidate["name"] for candidate in candidates if isinstance(candidate, dict)}) == len(candidates)
         ):
             return 400, {"error": "INVALID_INPUT"}
+
+        # allowedUnsupportedReasons is optional in JSON; if provided it must be a list of non-empty unique strings
+        if allowed_unsupported is not None:
+            if not isinstance(allowed_unsupported, list):
+                return 400, {"error": "INVALID_INPUT"}
+            if not all(isinstance(r, str) and len(r) > 0 for r in allowed_unsupported):
+                return 400, {"error": "INVALID_INPUT"}
+            if len(set(allowed_unsupported)) != len(allowed_unsupported):
+                return 400, {"error": "INVALID_INPUT"}
+            allowed_unsupported_set = set(allowed_unsupported)
+        else:
+            allowed_unsupported_set = set()
 
         if st.check_conflict(tenant, freeze_id, input_canonical):
             return 409, {"error": "FREEZE_ID_CONFLICT"}
         if st.get_freeze(tenant, freeze_id) is not None:
             return 200, st.get_freeze(tenant, freeze_id)  # type: ignore
 
-        allowed_unsupported_set = set(allowed_unsupported)
         frozen_candidates = []
 
         seen_cand_names = set()
