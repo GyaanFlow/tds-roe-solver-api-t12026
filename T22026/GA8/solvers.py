@@ -109,7 +109,7 @@ def parse_rfc3339_timestamp(ts: Any) -> Optional[Tuple[datetime, str]]:
 # 1. POST /build-corpus
 # ===========================================================================
 _GS_URI_RE = re.compile(r"^gs://([^/]+)/([^/]+)$")
-_WORD_RE = re.compile(r"\b[\w]+\b", re.UNICODE)
+_WORD_RE = re.compile(r"[^\W_]+", re.UNICODE)
 
 
 def _canonicalize_text(s: str) -> str:
@@ -197,7 +197,6 @@ def build_corpus_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
         if not crc_syntax_valid:
             obj_reasons.add("CRC32C_INVALID")
         elif isinstance(content, str):
-            # CRC32C mismatch check only if content is string and crc is syntactically valid
             computed_crc = crc32c_hex(content.encode("utf-8"))
             if computed_crc.lower() != crc32c_val.lower():
                 obj_reasons.add("CRC32C_MISMATCH")
@@ -301,7 +300,6 @@ def build_corpus_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
         if len(group) == 1:
             retained_rows.append(group[0])
         else:
-            # Sort group: highest revision desc, then UTF-8-byte-smallest ID asc
             sorted_group = sorted(
                 group,
                 key=lambda x: (-x["revision"], x["id"].encode("utf-8")),
@@ -450,29 +448,30 @@ def build_corpus_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
 # 2. POST /bqml
 # ===========================================================================
 class BQMLStore:
-    """Thread-safe store for BQML runs."""
+    """Thread-safe multi-tenant store for BQML runs."""
 
     def __init__(self) -> None:
-        self._runs: Dict[str, Dict[str, Any]] = {}
-        self._inputs: Dict[str, str] = {}
+        self._runs: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        self._inputs: Dict[Tuple[str, str], str] = {}
 
-    def get_run(self, run_id: str) -> Optional[Dict[str, Any]]:
-        return self._runs.get(run_id)
+    def get_run(self, tenant: str, run_id: str) -> Optional[Dict[str, Any]]:
+        return self._runs.get((tenant, run_id))
 
-    def record_selection(self, run_id: str, input_json: str, response: Dict[str, Any]) -> None:
-        self._runs[run_id] = response
-        self._inputs[run_id] = input_json
+    def record_selection(self, tenant: str, run_id: str, input_json: str, response: Dict[str, Any]) -> None:
+        self._runs[(tenant, run_id)] = response
+        self._inputs[(tenant, run_id)] = input_json
 
-    def check_conflict(self, run_id: str, input_json: str) -> bool:
-        if run_id in self._inputs:
-            return self._inputs[run_id] != input_json
+    def check_conflict(self, tenant: str, run_id: str, input_json: str) -> bool:
+        key = (tenant, run_id)
+        if key in self._inputs:
+            return self._inputs[key] != input_json
         return False
 
 
 _BQML_STORE = BQMLStore()
 
 
-def bqml_decision(body: Any, store: Optional[BQMLStore] = None) -> Tuple[int, Dict[str, Any]]:
+def bqml_decision(body: Any, store: Optional[BQMLStore] = None, tenant: str = "") -> Tuple[int, Dict[str, Any]]:
     """Q2 Solver: Leakage-Safe BigQuery ML Experiment Gate."""
     st = store or _BQML_STORE
     if not isinstance(body, dict):
@@ -491,10 +490,10 @@ def bqml_decision(body: Any, store: Optional[BQMLStore] = None) -> Tuple[int, Di
         input_canonical = json.dumps(body, sort_keys=True, separators=(",", ":"))
 
         # Replay / conflict check
-        if isinstance(run_id, str) and st.check_conflict(run_id, input_canonical):
+        if isinstance(run_id, str) and st.check_conflict(tenant, run_id, input_canonical):
             return 409, {"error": "RUN_ID_CONFLICT"}
-        if isinstance(run_id, str) and st.get_run(run_id) is not None:
-            return 200, st.get_run(run_id)  # type: ignore
+        if isinstance(run_id, str) and st.get_run(tenant, run_id) is not None:
+            return 200, st.get_run(tenant, run_id)  # type: ignore
 
         reasons: Set[str] = set()
 
@@ -523,7 +522,7 @@ def bqml_decision(body: Any, store: Optional[BQMLStore] = None) -> Tuple[int, Di
                 "reasonCodes": sorted(list(reasons), key=lambda s: s.encode("utf-8")),
             }
             if isinstance(run_id, str) and 1 <= len(run_id) <= 128:
-                st.record_selection(run_id, input_canonical, resp)
+                st.record_selection(tenant, run_id, input_canonical, resp)
             return 200, resp
 
         # Check unique row IDs & timestamps
@@ -585,7 +584,7 @@ def bqml_decision(body: Any, store: Optional[BQMLStore] = None) -> Tuple[int, Di
                 "datasetDigest": None,
                 "reasonCodes": sorted(list(reasons), key=lambda s: s.encode("utf-8")),
             }
-            st.record_selection(run_id, input_canonical, resp)
+            st.record_selection(tenant, run_id, input_canonical, resp)
             return 200, resp
 
         # Deduplicate rows by [entity, UTC(eventTime)] keeping highest version, smallest ID
@@ -694,7 +693,7 @@ def bqml_decision(body: Any, store: Optional[BQMLStore] = None) -> Tuple[int, Di
             "datasetDigest": dataset_digest if not ("INVALID_INPUT" in reasons) else None,
             "reasonCodes": final_reasons,
         }
-        st.record_selection(run_id, input_canonical, resp)
+        st.record_selection(tenant, run_id, input_canonical, resp)
         return 200, resp
 
     else:
@@ -735,7 +734,7 @@ def bqml_decision(body: Any, store: Optional[BQMLStore] = None) -> Tuple[int, Di
             reasons.add("INVALID_INPUT")
 
         # Lineage check
-        stored = st.get_run(run_id) if isinstance(run_id, str) else None
+        stored = st.get_run(tenant, run_id) if isinstance(run_id, str) else None
         if not stored or stored.get("selectedTrialId") != sel_trial or stored.get("datasetDigest") != digest:
             reasons.add("INVALID_LINEAGE")
 
@@ -1403,29 +1402,30 @@ def adapt_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
 # 5. POST /quantize
 # ===========================================================================
 class QuantizeStore:
-    """Thread-safe store for frozen quantization candidates."""
+    """Thread-safe multi-tenant store for frozen quantization candidates."""
 
     def __init__(self) -> None:
-        self._frozen: Dict[str, Dict[str, Any]] = {}
-        self._inputs: Dict[str, str] = {}
+        self._frozen: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        self._inputs: Dict[Tuple[str, str], str] = {}
 
-    def get_freeze(self, freeze_id: str) -> Optional[Dict[str, Any]]:
-        return self._frozen.get(freeze_id)
+    def get_freeze(self, tenant: str, freeze_id: str) -> Optional[Dict[str, Any]]:
+        return self._frozen.get((tenant, freeze_id))
 
-    def record_freeze(self, freeze_id: str, input_json: str, response: Dict[str, Any]) -> None:
-        self._frozen[freeze_id] = response
-        self._inputs[freeze_id] = input_json
+    def record_freeze(self, tenant: str, freeze_id: str, input_json: str, response: Dict[str, Any]) -> None:
+        self._frozen[(tenant, freeze_id)] = response
+        self._inputs[(tenant, freeze_id)] = input_json
 
-    def check_conflict(self, freeze_id: str, input_json: str) -> bool:
-        if freeze_id in self._inputs:
-            return self._inputs[freeze_id] != input_json
+    def check_conflict(self, tenant: str, freeze_id: str, input_json: str) -> bool:
+        key = (tenant, freeze_id)
+        if key in self._inputs:
+            return self._inputs[key] != input_json
         return False
 
 
 _QUANTIZE_STORE = QuantizeStore()
 
 
-def quantize_decision(body: Any, store: Optional[QuantizeStore] = None) -> Tuple[int, Dict[str, Any]]:
+def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: str = "") -> Tuple[int, Dict[str, Any]]:
     """Q5 Solver: Quantized Model Candidate Admission Gate."""
     st = store or _QUANTIZE_STORE
     if not isinstance(body, dict):
@@ -1455,10 +1455,10 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None) -> Tuple
         ):
             return 400, {"error": "INVALID_INPUT"}
 
-        if st.check_conflict(freeze_id, input_canonical):
+        if st.check_conflict(tenant, freeze_id, input_canonical):
             return 409, {"error": "FREEZE_ID_CONFLICT"}
-        if st.get_freeze(freeze_id) is not None:
-            return 200, st.get_freeze(freeze_id)  # type: ignore
+        if st.get_freeze(tenant, freeze_id) is not None:
+            return 200, st.get_freeze(tenant, freeze_id)  # type: ignore
 
         allowed_unsupported_set = set(allowed_unsupported)
         frozen_candidates = []
@@ -1547,7 +1547,7 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None) -> Tuple
             "freezeId": freeze_id,
             "candidates": frozen_candidates,
         }
-        st.record_freeze(freeze_id, input_canonical, resp)
+        st.record_freeze(tenant, freeze_id, input_canonical, resp)
         return 200, resp
 
     else:
@@ -1589,7 +1589,7 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None) -> Tuple
             and isinstance(latencies, dict)
         )
 
-        stored_freeze = st.get_freeze(freeze_id)
+        stored_freeze = st.get_freeze(tenant, freeze_id)
         is_lineage_valid = (
             stored_freeze is not None
             and json.dumps(stored_freeze["candidates"], sort_keys=True) == json.dumps(candidates, sort_keys=True)
@@ -1742,27 +1742,28 @@ _DAG_NODES = ["verify_data", "prepare", "train", "evaluate", "register", "publis
 
 
 class PipelineStore:
-    """Thread-safe store for content-addressed pipeline sessions."""
+    """Thread-safe multi-tenant store for content-addressed pipeline sessions."""
 
     def __init__(self) -> None:
-        self._sessions: Dict[str, Dict[str, Any]] = {}
+        self._sessions: Dict[Tuple[str, str], Dict[str, Any]] = {}
 
-    def get_session(self, session_id: str) -> Dict[str, Any]:
-        if session_id not in self._sessions:
-            self._sessions[session_id] = {
+    def get_session(self, tenant: str, session_id: str) -> Dict[str, Any]:
+        key = (tenant, session_id)
+        if key not in self._sessions:
+            self._sessions[key] = {
                 "revision": 0,
                 "inputs": {},
                 "cache": {},
                 "node_state": {},
                 "seen_events": {},
             }
-        return self._sessions[session_id]
+        return self._sessions[key]
 
 
 _PIPELINE_STORE = PipelineStore()
 
 
-def pipeline_decision(body: Any, store: Optional[PipelineStore] = None) -> Tuple[int, Dict[str, Any]]:
+def pipeline_decision(body: Any, store: Optional[PipelineStore] = None, tenant: str = "") -> Tuple[int, Dict[str, Any]]:
     """Q6 Solver: Content-Addressed ML Pipeline Controller."""
     st = store or _PIPELINE_STORE
     if not isinstance(body, dict):
@@ -1792,7 +1793,7 @@ def pipeline_decision(body: Any, store: Optional[PipelineStore] = None) -> Tuple
     if not req_input_keys.issubset(set(inputs.keys())) or any(not isinstance(inputs[k], str) or not inputs[k] for k in req_input_keys):
         return 400, {"error": "INVALID_REQUEST"}
 
-    session = st.get_session(session_id)
+    session = st.get_session(tenant, session_id)
 
     input_canon = json.dumps(inputs, sort_keys=True, separators=(",", ":"))
     if revision == session["revision"]:

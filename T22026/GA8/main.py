@@ -3,14 +3,14 @@ from __future__ import annotations
 """
 T22026/GA8/main.py — GA8 FastAPI Router.
 
-Provides dual-route support (both bare and tenant-prefixed routes) for all 7 live policy endpoints
-and interactive /solve endpoints for Q8, Q9, Q10.
+Provides robust, multi-tenant dual-route support (both bare and tenant-prefixed routes)
+for all 7 live policy endpoints and interactive /solve endpoints for Q8, Q9, Q10.
 """
 
 import logging
 from typing import Any, Optional
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from T22026.GA8.solvers import (
@@ -39,8 +39,11 @@ async def _read_json_body(request: Request) -> Any:
 
 def _get_email(email: Optional[str], request: Request) -> str:
     if email:
-        return email
-    return getattr(request.state, "tenant_email", None) or request.scope.get("tenant_email") or "student@example.com"
+        return email.strip().lower()
+    t = getattr(request.state, "tenant_email", None) or request.scope.get("tenant_email")
+    if t:
+        return str(t).strip().lower()
+    return "student@example.com"
 
 
 # ---------------------------------------------------------------------------
@@ -49,9 +52,13 @@ def _get_email(email: Optional[str], request: Request) -> str:
 @router.post("/build-corpus")
 @router.post("/{email}/build-corpus")
 async def build_corpus_endpoint(request: Request, email: Optional[str] = None):
-    body = await _read_json_body(request)
-    status_code, resp = build_corpus_decision(body)
-    return JSONResponse(status_code=status_code, content=resp)
+    try:
+        body = await _read_json_body(request)
+        status_code, resp = build_corpus_decision(body)
+        return JSONResponse(status_code=status_code, content=resp)
+    except Exception as exc:
+        logger.warning("Error in /build-corpus: %s", exc)
+        return JSONResponse(status_code=400, content={"error": "INVALID_INPUT"})
 
 
 # ---------------------------------------------------------------------------
@@ -60,9 +67,14 @@ async def build_corpus_endpoint(request: Request, email: Optional[str] = None):
 @router.post("/bqml")
 @router.post("/{email}/bqml")
 async def bqml_endpoint(request: Request, email: Optional[str] = None):
-    body = await _read_json_body(request)
-    status_code, resp = bqml_decision(body)
-    return JSONResponse(status_code=status_code, content=resp)
+    try:
+        e = _get_email(email, request)
+        body = await _read_json_body(request)
+        status_code, resp = bqml_decision(body, tenant=e)
+        return JSONResponse(status_code=status_code, content=resp)
+    except Exception as exc:
+        logger.warning("Error in /bqml: %s", exc)
+        return JSONResponse(status_code=400, content={"error": "INVALID_INPUT"})
 
 
 # ---------------------------------------------------------------------------
@@ -71,9 +83,13 @@ async def bqml_endpoint(request: Request, email: Optional[str] = None):
 @router.post("/promote")
 @router.post("/{email}/promote")
 async def promote_endpoint(request: Request, email: Optional[str] = None):
-    body = await _read_json_body(request)
-    status_code, resp = promote_decision(body)
-    return JSONResponse(status_code=status_code, content=resp)
+    try:
+        body = await _read_json_body(request)
+        status_code, resp = promote_decision(body)
+        return JSONResponse(status_code=status_code, content=resp)
+    except Exception as exc:
+        logger.warning("Error in /promote: %s", exc)
+        return JSONResponse(status_code=400, content={"error": "INVALID_INPUT"})
 
 
 # ---------------------------------------------------------------------------
@@ -82,9 +98,13 @@ async def promote_endpoint(request: Request, email: Optional[str] = None):
 @router.post("/adapt")
 @router.post("/{email}/adapt")
 async def adapt_endpoint(request: Request, email: Optional[str] = None):
-    body = await _read_json_body(request)
-    status_code, resp = adapt_decision(body)
-    return JSONResponse(status_code=status_code, content=resp)
+    try:
+        body = await _read_json_body(request)
+        status_code, resp = adapt_decision(body)
+        return JSONResponse(status_code=status_code, content=resp)
+    except Exception as exc:
+        logger.warning("Error in /adapt: %s", exc)
+        return JSONResponse(status_code=400, content={"error": "INVALID_INPUT"})
 
 
 # ---------------------------------------------------------------------------
@@ -93,9 +113,14 @@ async def adapt_endpoint(request: Request, email: Optional[str] = None):
 @router.post("/quantize")
 @router.post("/{email}/quantize")
 async def quantize_endpoint(request: Request, email: Optional[str] = None):
-    body = await _read_json_body(request)
-    status_code, resp = quantize_decision(body)
-    return JSONResponse(status_code=status_code, content=resp)
+    try:
+        e = _get_email(email, request)
+        body = await _read_json_body(request)
+        status_code, resp = quantize_decision(body, tenant=e)
+        return JSONResponse(status_code=status_code, content=resp)
+    except Exception as exc:
+        logger.warning("Error in /quantize: %s", exc)
+        return JSONResponse(status_code=400, content={"error": "INVALID_INPUT"})
 
 
 # ---------------------------------------------------------------------------
@@ -104,9 +129,14 @@ async def quantize_endpoint(request: Request, email: Optional[str] = None):
 @router.post("/pipeline")
 @router.post("/{email}/pipeline")
 async def pipeline_endpoint(request: Request, email: Optional[str] = None):
-    body = await _read_json_body(request)
-    status_code, resp = pipeline_decision(body)
-    return JSONResponse(status_code=status_code, content=resp)
+    try:
+        e = _get_email(email, request)
+        body = await _read_json_body(request)
+        status_code, resp = pipeline_decision(body, tenant=e)
+        return JSONResponse(status_code=status_code, content=resp)
+    except Exception as exc:
+        logger.warning("Error in /pipeline: %s", exc)
+        return JSONResponse(status_code=400, content={"error": "INVALID_REQUEST"})
 
 
 # ---------------------------------------------------------------------------
@@ -115,9 +145,13 @@ async def pipeline_endpoint(request: Request, email: Optional[str] = None):
 @router.post("/verify-bundle")
 @router.post("/{email}/verify-bundle")
 async def verify_bundle_endpoint(request: Request, email: Optional[str] = None):
-    body = await _read_json_body(request)
-    status_code, resp = verify_bundle_decision(body)
-    return JSONResponse(status_code=status_code, content=resp)
+    try:
+        body = await _read_json_body(request)
+        status_code, resp = verify_bundle_decision(body)
+        return JSONResponse(status_code=status_code, content=resp)
+    except Exception as exc:
+        logger.warning("Error in /verify-bundle: %s", exc)
+        return JSONResponse(status_code=400, content={"error": "INVALID_INPUT"})
 
 
 # ---------------------------------------------------------------------------
