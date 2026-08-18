@@ -52,6 +52,24 @@ def test_rfc3339_timestamp_parser():
     assert parse_rfc3339_timestamp("2026-02-29T00:00:00Z") is None
 
 
+def test_safe_integer_boundaries_are_rejected():
+    content = '{"id":"r1","entity":"u","eventTime":"2026-01-01T00:00:00Z","revision":9007199254740992,"text":"x"}\n'
+    code, response = build_corpus_decision({
+        "policy": {"minTime": "2026-01-01T00:00:00Z", "maxTime": "2026-01-02T00:00:00Z", "contaminationThreshold": 0},
+        "objects": [{"uri": "gs://bucket/object", "generation": "1", "fetchedGeneration": "1", "crc32c": crc32c_hex(content.encode()), "schemaId": "training-v1", "content": content}],
+    })
+    assert code == 200
+    assert response["rejectedObjects"][0]["reasonCodes"] == ["SCHEMA_INVALID"]
+
+
+def test_quantize_rejects_invalid_global_freeze_input():
+    code, response = quantize_decision({
+        "phase": "freeze", "freezeId": "f1", "calibrationDigest": "", "tokenizerDigest": "tok",
+        "allowedUnsupportedReasons": [], "candidates": [],
+    }, store=QuantizeStore())
+    assert (code, response) == (400, {"error": "INVALID_INPUT"})
+
+
 # ===========================================================================
 # 2. Q1: POST /build-corpus
 # ===========================================================================

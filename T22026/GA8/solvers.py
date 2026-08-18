@@ -44,6 +44,12 @@ def _make_crc32c_table() -> List[int]:
 
 
 _CRC32C_TABLE = _make_crc32c_table()
+_MAX_SAFE_INTEGER = (1 << 53) - 1
+
+
+def _is_safe_integer(value: Any, *, minimum: int = 0) -> bool:
+    """Match JavaScript's non-Boolean safe-integer domain exactly."""
+    return isinstance(value, int) and not isinstance(value, bool) and minimum <= value <= _MAX_SAFE_INTEGER
 
 
 def crc32c_hex(data: bytes) -> str:
@@ -241,7 +247,7 @@ def build_corpus_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
                         and isinstance(r_txt, str)
                         and isinstance(r_rev, int)
                         and not isinstance(r_rev, bool)
-                        and r_rev >= 0
+                        and _is_safe_integer(r_rev)
                     ):
                         obj_reasons.add("SCHEMA_INVALID")
                         continue
@@ -504,7 +510,7 @@ def bqml_decision(body: Any, store: Optional[BQMLStore] = None, tenant: str = ""
             and all(isinstance(f, str) for f in forbidden)
             and isinstance(trials_limit, int)
             and not isinstance(trials_limit, bool)
-            and trials_limit > 0
+            and _is_safe_integer(trials_limit, minimum=1)
             and isinstance(rows, list)
             and len(rows) > 0
             and isinstance(trials, list)
@@ -548,7 +554,7 @@ def bqml_decision(body: Any, store: Optional[BQMLStore] = None, tenant: str = ""
                 or not isinstance(pred_time, str)
                 or not isinstance(ver, int)
                 or isinstance(ver, bool)
-                or ver < 0
+                or not _is_safe_integer(ver)
                 or split not in ("TRAIN", "EVAL")
                 or not isinstance(features, dict)
             ):
@@ -652,7 +658,7 @@ def bqml_decision(body: Any, store: Optional[BQMLStore] = None, tenant: str = ""
             st_status = t.get("status")
             metric = t.get("evalMetric")
 
-            if not (isinstance(t_id, int) and not isinstance(t_id, bool) and t_id >= 0):
+            if not _is_safe_integer(t_id):
                 reasons.add("INVALID_INPUT")
                 break
             if t_id in trial_ids_seen:
@@ -714,7 +720,7 @@ def bqml_decision(body: Any, store: Optional[BQMLStore] = None, tenant: str = ""
             isinstance(run_id, str)
             and isinstance(sel_trial, int)
             and not isinstance(sel_trial, bool)
-            and sel_trial >= 0
+            and _is_safe_integer(sel_trial)
             and isinstance(digest, str)
             and isinstance(floor, (int, float))
             and not isinstance(floor, bool)
@@ -725,10 +731,10 @@ def bqml_decision(body: Any, store: Optional[BQMLStore] = None, tenant: str = ""
             and isinstance(rows, list)
             and isinstance(bytes_proc, int)
             and not isinstance(bytes_proc, bool)
-            and bytes_proc >= 0
+            and _is_safe_integer(bytes_proc)
             and isinstance(max_bytes, int)
             and not isinstance(max_bytes, bool)
-            and max_bytes >= 0
+            and _is_safe_integer(max_bytes)
         )
 
         if not is_valid_input:
@@ -853,21 +859,23 @@ def promote_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
         and bool(p_dataset_digest)
         and isinstance(p_schema_digest, str)
         and bool(p_schema_digest)
-        and isinstance(p_max_age, int)
-        and not isinstance(p_max_age, bool)
-        and p_max_age >= 0
+        and _is_safe_integer(p_max_age)
         and isinstance(p_acc_floor, (int, float))
         and not isinstance(p_acc_floor, bool)
+        and math.isfinite(p_acc_floor)
         and 0.0 <= p_acc_floor <= 1.0
         and isinstance(p_req_slices, dict)
+        and all(isinstance(name, str) and name and isinstance(floor, (int, float))
+                and not isinstance(floor, bool) and math.isfinite(floor) and 0.0 <= floor <= 1.0
+                for name, floor in p_req_slices.items())
         and isinstance(p_max_lat, (int, float))
         and not isinstance(p_max_lat, bool)
+        and math.isfinite(p_max_lat)
         and p_max_lat >= 0
-        and isinstance(p_max_size, int)
-        and not isinstance(p_max_size, bool)
-        and p_max_size >= 0
+        and _is_safe_integer(p_max_size)
         and isinstance(p_min_imp, (int, float))
         and not isinstance(p_min_imp, bool)
+        and math.isfinite(p_min_imp)
         and 0.0 <= p_min_imp <= 1.0
     )
 
@@ -895,7 +903,8 @@ def promote_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
             v_reasons.add("INVALID_POLICY")
 
         # Version string check: must be canonical positive safe integer string
-        if not (isinstance(v_id, str) and v_id.isdigit() and str(int(v_id)) == v_id and int(v_id) > 0):
+        if not (isinstance(v_id, str) and v_id.isdigit() and str(int(v_id)) == v_id
+                and 0 < int(v_id) <= _MAX_SAFE_INTEGER):
             v_reasons.add("INVALID_VERSION")
         if isinstance(v_id, str) and version_counts.get(v_id, 0) > 1:
             v_reasons.add("DUPLICATE_VERSION")
@@ -941,7 +950,7 @@ def promote_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
                 v_reasons.add("METRIC_RANGE")
             if isinstance(lat, (int, float)) and not isinstance(lat, bool) and lat < 0:
                 v_reasons.add("METRIC_RANGE")
-            if isinstance(sz, (int, float)) and not isinstance(sz, bool) and (sz < 0 or (isinstance(sz, float) and not sz.is_integer())):
+            if not _is_safe_integer(sz):
                 v_reasons.add("METRIC_RANGE")
 
             # Digest matching
@@ -1217,7 +1226,7 @@ def adapt_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
                 if (
                     not isinstance(t_id, int)
                     or isinstance(t_id, bool)
-                    or t_id < 0
+                    or not _is_safe_integer(t_id)
                     or role not in ("system", "user", "assistant")
                     or not isinstance(padding, bool)
                     or not isinstance(text, str)
@@ -1250,6 +1259,7 @@ def adapt_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
             isinstance(params, list)
             and isinstance(allowed_targets, list)
             and len(allowed_targets) > 0
+            and all(isinstance(target, str) and target for target in allowed_targets)
             and len(set(allowed_targets)) == len(allowed_targets)
         )
 
@@ -1268,7 +1278,7 @@ def adapt_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
                     or not isinstance(target, str)
                     or not isinstance(numel, int)
                     or isinstance(numel, bool)
-                    or numel <= 0
+                    or not _is_safe_integer(numel, minimum=1)
                 ):
                     params_valid = False
                     break
@@ -1326,16 +1336,16 @@ def adapt_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
         if not (
             isinstance(micro_b, int)
             and not isinstance(micro_b, bool)
-            and micro_b > 0
+            and _is_safe_integer(micro_b, minimum=1)
             and isinstance(grad_acc, int)
             and not isinstance(grad_acc, bool)
-            and grad_acc > 0
+            and _is_safe_integer(grad_acc, minimum=1)
             and isinstance(replicas, int)
             and not isinstance(replicas, bool)
-            and replicas > 0
+            and _is_safe_integer(replicas, minimum=1)
             and isinstance(exp_eff_b, int)
             and not isinstance(exp_eff_b, bool)
-            and exp_eff_b > 0
+            and _is_safe_integer(exp_eff_b, minimum=1)
             and micro_b * grad_acc * replicas == exp_eff_b
         ):
             reasons.add("EFFECTIVE_BATCH_MISMATCH")
@@ -1347,6 +1357,10 @@ def adapt_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
             and len(train_ids) > 0
             and isinstance(eval_ids, list)
             and len(eval_ids) > 0
+            and all(isinstance(row_id, str) and row_id for row_id in train_ids)
+            and all(isinstance(row_id, str) and row_id for row_id in eval_ids)
+            and len(set(train_ids)) == len(train_ids)
+            and len(set(eval_ids)) == len(eval_ids)
             and len(set(train_ids) & set(eval_ids)) == 0
         ):
             reasons.add("EVAL_LEAKAGE")
@@ -1371,6 +1385,7 @@ def adapt_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
             and len(uninterrupted) > 0
             and isinstance(res_tol, (int, float))
             and not isinstance(res_tol, bool)
+            and math.isfinite(res_tol)
             and res_tol >= 0
         ):
             reasons.add("RESUME_DIVERGENCE")
@@ -1466,8 +1481,18 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
         if not (
             isinstance(freeze_id, str)
             and 1 <= len(freeze_id) <= 128
+            and isinstance(calib_dig, str)
+            and bool(calib_dig)
+            and isinstance(tok_dig, str)
+            and bool(tok_dig)
+            and isinstance(allowed_unsupported, list)
+            and all(isinstance(reason, str) and reason for reason in allowed_unsupported)
+            and len(set(allowed_unsupported)) == len(allowed_unsupported)
             and isinstance(candidates, list)
             and len(candidates) > 0
+            and all(isinstance(candidate, dict) and isinstance(candidate.get("name"), str)
+                    and candidate["name"] for candidate in candidates)
+            and len({candidate["name"] for candidate in candidates if isinstance(candidate, dict)}) == len(candidates)
         ):
             return 400, {"error": "INVALID_INPUT"}
 
@@ -1476,8 +1501,7 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
         if st.get_freeze(tenant, freeze_id) is not None:
             return 200, st.get_freeze(tenant, freeze_id)  # type: ignore
 
-        allowed_unsupported_list = allowed_unsupported if isinstance(allowed_unsupported, list) else []
-        allowed_unsupported_set = set(allowed_unsupported_list)
+        allowed_unsupported_set = set(allowed_unsupported)
         frozen_candidates = []
 
         seen_cand_names = set()
@@ -1549,7 +1573,7 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
                 if c_tok != tok_dig:
                     reasons.add("TOKENIZER_MISMATCH")
 
-            if is_name_dup or not isinstance(c_name, str) or not c_name or not isinstance(calib_dig, str) or not calib_dig or not isinstance(tok_dig, str) or not tok_dig:
+            if is_name_dup or not isinstance(c_name, str) or not c_name:
                 reasons.add("INVALID_INPUT")
 
             # Final status: reasons > unsupported > frozen
@@ -1602,18 +1626,22 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
         cand_order = policy.get("candidateOrder")
 
         is_valid_policy = (
-            isinstance(max_bytes, int)
-            and not isinstance(max_bytes, bool)
-            and max_bytes >= 0
+            _is_safe_integer(max_bytes)
             and isinstance(agg_floor, (int, float))
             and not isinstance(agg_floor, bool)
+            and math.isfinite(agg_floor)
             and 0.0 <= agg_floor <= 1.0
             and isinstance(req_slices, dict)
+            and all(isinstance(name, str) and name and isinstance(floor, (int, float))
+                    and not isinstance(floor, bool) and math.isfinite(floor) and 0.0 <= floor <= 1.0
+                    for name, floor in req_slices.items())
             and isinstance(max_lat, (int, float))
             and not isinstance(max_lat, bool)
+            and math.isfinite(max_lat)
             and max_lat >= 0
             and isinstance(cand_order, list)
             and len(cand_order) > 0
+            and all(isinstance(name, str) and name for name in cand_order)
             and len(set(cand_order)) == len(cand_order)
             and isinstance(latencies, dict)
         )
@@ -1623,7 +1651,8 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
             # Compare by name-sorted candidate list for order-independence
             stored_by_name = {c["name"]: c for c in stored_freeze["candidates"] if isinstance(c, dict) and "name" in c}
             input_by_name = {c["name"]: c for c in candidates if isinstance(c, dict) and "name" in c}
-            is_lineage_valid = (set(stored_by_name.keys()) == set(input_by_name.keys()) and
+            is_lineage_valid = (len(input_by_name) == len(candidates)
+                and set(stored_by_name.keys()) == set(input_by_name.keys()) and
                 all(json.dumps(stored_by_name[n], sort_keys=True) == json.dumps(input_by_name[n], sort_keys=True)
                     for n in stored_by_name))
         else:
@@ -1632,6 +1661,8 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
         results = []
         admitted_candidates = []
         cand_order_list = cand_order if isinstance(cand_order, list) else []
+        if is_valid_policy and {candidate.get("name") for candidate in candidates if isinstance(candidate, dict)} != set(cand_order_list):
+            is_valid_policy = False
 
         for cand in candidates:
             if not isinstance(cand, dict):
@@ -1820,7 +1851,7 @@ def pipeline_decision(body: Any, store: Optional[PipelineStore] = None, tenant: 
         or not session_id
         or not isinstance(revision, int)
         or isinstance(revision, bool)
-        or revision <= 0
+        or not _is_safe_integer(revision, minimum=1)
         or not isinstance(inputs, dict)
         or not isinstance(events, list)
     ):
@@ -1834,20 +1865,23 @@ def pipeline_decision(body: Any, store: Optional[PipelineStore] = None, tenant: 
     if not req_input_keys.issubset(set(inputs.keys())) or any(not isinstance(inputs[k], str) or not inputs[k] for k in req_input_keys):
         return 400, {"error": "INVALID_REQUEST"}
 
-    session = st.get_session(tenant, session_id)
-
     input_canon = json.dumps(inputs, sort_keys=True, separators=(",", ":"))
+    session = st.get_session(tenant, session_id)
+    next_revision = session["revision"]
+    next_inputs = session["inputs"]
+    next_node_state = dict(session["node_state"])
     if revision == session["revision"]:
         if session["inputs"] and session["inputs"] != input_canon:
             return 409, {"error": "REVISION_CONFLICT"}
     elif revision > session["revision"]:
-        session["revision"] = revision
-        session["inputs"] = input_canon
-        session["node_state"] = {}
+        # Do not mutate persistent state until the whole event batch succeeds.
+        next_revision = revision
+        next_inputs = input_canon
+        next_node_state = {}
 
     # Work on shallow copies of state for transactional atomic processing (rollback on 409)
     cache = dict(session["cache"])
-    node_state = dict(session["node_state"])
+    node_state = next_node_state
     seen_events = dict(session["seen_events"])
 
     def _hash_arr(arr: List[Any]) -> str:
@@ -1905,12 +1939,12 @@ def pipeline_decision(body: Any, store: Optional[PipelineStore] = None, tenant: 
         if (
             not isinstance(ev_id, str)
             or not ev_id
-            or not isinstance(ev_rev, int)
+            or not _is_safe_integer(ev_rev, minimum=1)
             or ev_node not in _DAG_NODES
-            or not isinstance(ev_att, int)
-            or ev_att <= 0
+            or not _is_safe_integer(ev_att, minimum=1)
             or ev_status not in ("started", "succeeded", "retryable_failed", "terminal_failed")
             or not isinstance(ev_key, str)
+            or set(ev.keys()) != {"eventId", "revision", "node", "attempt", "status", "key", "artifactDigest", "receiptId"}
         ):
             return 409, {"error": "INVALID_EVENT"}
 
@@ -1922,7 +1956,7 @@ def pipeline_decision(body: Any, store: Optional[PipelineStore] = None, tenant: 
             else:
                 return 409, {"error": "EVENT_ID_CONFLICT"}
 
-        if ev_rev != session["revision"]:
+        if ev_rev != next_revision:
             ignored_event_ids.append(ev_id)
             continue
 
@@ -1996,6 +2030,8 @@ def pipeline_decision(body: Any, store: Optional[PipelineStore] = None, tenant: 
             return 409, {"error": "STATUS_CONFLICT"}
 
     # Commit state changes transactionally on success
+    session["revision"] = next_revision
+    session["inputs"] = next_inputs
     session["cache"] = cache
     session["node_state"] = node_state
     session["seen_events"] = seen_events
@@ -2130,8 +2166,8 @@ def verify_bundle_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
     is_valid_policy = (
         isinstance(req_slices, list)
         and len(req_slices) > 0
-        and len(set(req_slices)) == len(req_slices)
         and all(isinstance(s, str) and s for s in req_slices)
+        and len(set(req_slices)) == len(req_slices)
         and isinstance(license_val, str)
         and bool(license_val)
         and isinstance(intended_use, str)
@@ -2187,22 +2223,11 @@ def verify_bundle_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
             parsed_inv = None
 
         if parsed_inv is not None:
-            if not isinstance(parsed_inv, list):
+            # The inventory is itself an immutable artifact: no reordering, whitespace,
+            # aliases, extra keys, or normalization is permitted.
+            exact_inventory = json.dumps(recomputed_inventory, separators=(",", ":"), ensure_ascii=False)
+            if not isinstance(parsed_inv, list) or inv_file_raw != exact_inventory:
                 violations.add("INVENTORY_MISMATCH")
-            else:
-                try:
-                    norm_parsed = []
-                    for e in parsed_inv:
-                        if not isinstance(e, dict) or "name" not in e or "bytes" not in e or "sha256" not in e:
-                            violations.add("INVENTORY_MISMATCH")
-                            break
-                        norm_parsed.append({"name": e["name"], "bytes": e["bytes"], "sha256": e["sha256"]})
-                    else:
-                        norm_parsed = sorted(norm_parsed, key=lambda x: str(x["name"]).encode("utf-8"))
-                        if json.dumps(norm_parsed, separators=(",", ":")) != json.dumps(recomputed_inventory, separators=(",", ":")):
-                            violations.add("INVENTORY_MISMATCH")
-                except Exception:
-                    violations.add("INVENTORY_MISMATCH")
 
     cfg_raw = files.get("adapter_config.json")
     if isinstance(cfg_raw, str):
@@ -2216,7 +2241,7 @@ def verify_bundle_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
                 if not (
                     isinstance(r_val, int)
                     and not isinstance(r_val, bool)
-                    and r_val > 0
+                    and _is_safe_integer(r_val, minimum=1)
                     and isinstance(t_mods, list)
                     and len(t_mods) > 0
                     and len(set(t_mods)) == len(t_mods)
@@ -2275,7 +2300,8 @@ def verify_bundle_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
                         violations.add("EVALUATION_ARTIFACT_MISMATCH")
 
                 agg_acc = eval_obj.get("accuracy")
-                if not isinstance(agg_acc, (int, float)) or isinstance(agg_acc, bool) or not (0.0 <= agg_acc <= 1.0):
+                if (not isinstance(agg_acc, (int, float)) or isinstance(agg_acc, bool)
+                        or not math.isfinite(agg_acc) or not (0.0 <= agg_acc <= 1.0)):
                     violations.add("INVALID_AGGREGATE")
 
                 slices_obj = eval_obj.get("slices")
@@ -2289,7 +2315,8 @@ def verify_bundle_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
                             violations.add(f"MISSING_SLICE:{s_name}")
                         else:
                             sl_val = slices_obj[s_name]
-                            if not isinstance(sl_val, (int, float)) or isinstance(sl_val, bool) or not (0.0 <= sl_val <= 1.0):
+                            if (not isinstance(sl_val, (int, float)) or isinstance(sl_val, bool)
+                                    or not math.isfinite(sl_val) or not (0.0 <= sl_val <= 1.0)):
                                 violations.add(f"SLICE_RANGE:{s_name}")
         except Exception:
             violations.add("INVALID_JSON:evaluation.json")
