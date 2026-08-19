@@ -1163,11 +1163,10 @@ def adapt_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
                 c_reasons.add("INVALID_INPUT")
                 total_costs[name] = None
             else:
-                if _is_safe_integer(horizon):
+                if is_valid_policy:
                     tot_cost = round(float(one_time) + float(horizon) * float(recurring), 12)
                     total_costs[name] = tot_cost
                 else:
-                    tot_cost = None
                     total_costs[name] = None
 
                 if not avail:
@@ -1316,17 +1315,15 @@ def adapt_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
 
         # Artifact files
         expected_artifacts = ["adapter_config.json", "adapter_model.safetensors"]
-        if not isinstance(artifact_files, list) or any(
-            not isinstance(f, str) for f in artifact_files
-        ) or sorted(artifact_files) != sorted(expected_artifacts):
+        if not isinstance(artifact_files, list) or sorted(artifact_files) != sorted(expected_artifacts):
             reasons.add("ADAPTER_FILE_SET")
         if isinstance(artifact_files, list) and any(
             isinstance(f, str) and (
-                (f.endswith(".safetensors") and f != "adapter_model.safetensors")
+                f in ("model.safetensors", "pytorch_model.bin")
                 or f.endswith((".bin", ".pt", ".pth", ".pkl", ".pickle"))
                 or "pytorch_model" in f
-                or "model.safetensors" in f
             )
+            and f != "adapter_model.safetensors"
             for f in artifact_files
         ):
             reasons.add("FULL_MODEL_ARTIFACT")
