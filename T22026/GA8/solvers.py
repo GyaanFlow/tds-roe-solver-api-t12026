@@ -1428,9 +1428,8 @@ def adapt_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
                     break
 
         sorted_reasons = sorted(list(reasons), key=lambda s: s.encode("utf-8"))
-        # Strictly determine boolean flags from violation reasons per contract
         template_pass = "CHAT_TEMPLATE_COUNT" not in reasons
-        peft_config_pass = not bool({"INVALID_PARAMETER", "INFERENCE_MODE", "FULL_MODEL_ARTIFACT", "ADAPTER_FILE_SET"} & reasons)
+        peft_config_pass = not bool({"INVALID_PARAMETER", "INFERENCE_MODE"} & reasons)
         checkpoint_complete = "INCOMPLETE_CHECKPOINT" not in reasons
         lineage_pass = not bool({"MUTABLE_BASE_REVISION", "LINEAGE_MISMATCH"} & reasons)
         eval_isolated = not bool({"EVAL_LEAKAGE", "EVAL_DROPOUT_ACTIVE"} & reasons)
