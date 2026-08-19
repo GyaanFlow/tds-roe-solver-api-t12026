@@ -113,7 +113,7 @@ def parse_rfc3339_timestamp(ts: Any) -> Optional[Tuple[datetime, str]]:
 # ===========================================================================
 # 1. POST /build-corpus
 # ===========================================================================
-_GS_URI_RE = re.compile(r"^gs://([^/]+)/(.+)$")
+_GS_URI_RE = re.compile(r"^gs://([^/]+)/([^/]+)$")
 _WORD_RE = re.compile(r"[^\W_]+", re.UNICODE)
 
 
@@ -816,7 +816,7 @@ def bqml_decision(body: Any, store: Optional[BQMLStore] = None, tenant: str = ""
 
         return 200, {
             "runId": run_id if isinstance(run_id, str) else "",
-            "selectedTrialId": sel_trial if isinstance(sel_trial, int) else None,
+            "selectedTrialId": sel_trial if (isinstance(sel_trial, int) and not isinstance(sel_trial, bool)) else None,
             "datasetDigest": digest if isinstance(digest, str) else "",
             "testMetric": test_metric,
             "criticalSlicePass": critical_slice_pass,
@@ -958,7 +958,7 @@ def promote_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
                 v_reasons.add("METRIC_RANGE")
             if isinstance(lat, (int, float)) and not isinstance(lat, bool) and lat < 0:
                 v_reasons.add("METRIC_RANGE")
-            if not _is_safe_integer(sz):
+            if isinstance(sz, (int, float)) and not isinstance(sz, bool) and (not isinstance(sz, int) or not _is_safe_integer(sz)):
                 v_reasons.add("METRIC_RANGE")
 
             # Digest matching
@@ -1163,10 +1163,11 @@ def adapt_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
                 c_reasons.add("INVALID_INPUT")
                 total_costs[name] = None
             else:
-                if is_valid_policy:
+                if _is_safe_integer(horizon):
                     tot_cost = round(float(one_time) + float(horizon) * float(recurring), 12)
                     total_costs[name] = tot_cost
                 else:
+                    tot_cost = None
                     total_costs[name] = None
 
                 if not avail:
@@ -1320,8 +1321,12 @@ def adapt_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
         ) or sorted(artifact_files) != sorted(expected_artifacts):
             reasons.add("ADAPTER_FILE_SET")
         if isinstance(artifact_files, list) and any(
-            isinstance(f, str) and (f in ("model.safetensors", "pytorch_model.bin") or f.endswith((".bin", ".pt", ".pth", ".pkl", ".pickle")))
-            and f != "adapter_model.safetensors" and not f.startswith("adapter_")
+            isinstance(f, str) and (
+                (f.endswith(".safetensors") and f != "adapter_model.safetensors")
+                or f.endswith((".bin", ".pt", ".pth", ".pkl", ".pickle"))
+                or "pytorch_model" in f
+                or "model.safetensors" in f
+            )
             for f in artifact_files
         ):
             reasons.add("FULL_MODEL_ARTIFACT")
@@ -1504,7 +1509,7 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
         tok_dig_str = str(tok_dig) if isinstance(tok_dig, str) else ""
         allowed_unsupported = body.get("allowedUnsupportedReasons")
 
-        input_canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        input_canonical = json.dumps(body, separators=(",", ":"), ensure_ascii=False)
 
         # Idempotency and conflict checks (only for valid freezeId)
         if freeze_id_str and 1 <= len(freeze_id_str) <= 128:
@@ -1579,7 +1584,8 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
                     package_digest = hashlib.sha256(compact_inv.encode("utf-8")).hexdigest()
 
             # Candidate-specific validation
-            if unsupp_reason is not None:
+            is_unsupp = isinstance(unsupp_reason, str) and len(unsupp_reason) > 0
+            if is_unsupp:
                 if unsupp_reason not in allowed_unsupported_set:
                     reasons.add("UNALLOWED_UNSUPPORTED_REASON")
             else:
@@ -1596,7 +1602,7 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
             # Final status: reasons > unsupported > frozen
             if reasons:
                 status = "invalid"
-            elif unsupp_reason is not None:
+            elif is_unsupp:
                 status = "unsupported"
             else:
                 status = "frozen"
@@ -2262,7 +2268,7 @@ def verify_bundle_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
             # The inventory is itself an immutable artifact: no reordering, whitespace,
             # aliases, extra keys, or normalization is permitted.
             exact_inventory = json.dumps(recomputed_inventory, separators=(",", ":"), ensure_ascii=False)
-            if not isinstance(parsed_inv, list) or inv_file_raw != exact_inventory:
+            if not isinstance(parsed_inv, list) or (inv_file_raw != exact_inventory and inv_file_raw.strip() != exact_inventory):
                 violations.add("INVENTORY_MISMATCH")
 
     cfg_raw = files.get("adapter_config.json")
