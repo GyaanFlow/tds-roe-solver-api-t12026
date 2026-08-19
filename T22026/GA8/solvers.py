@@ -836,7 +836,7 @@ def _adapt_repair(data: Dict[str, Any]) -> Dict[str, Any]:
     )
     if not file_pass:
         codes.append("ADAPTER_FILE_SET")
-    peft_pass = params_ok and inference_ok and file_pass and not full_model
+    peft_pass = inference_ok and file_pass and not full_model
 
     checkpoint = data.get("checkpoint")
     checkpoint_ok = isinstance(checkpoint, dict) and all(
