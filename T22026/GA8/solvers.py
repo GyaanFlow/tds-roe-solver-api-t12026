@@ -1515,13 +1515,26 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
             if st.get_freeze(tenant, freeze_id_str) is not None:
                 return 200, st.get_freeze(tenant, freeze_id_str)  # type: ignore
 
-        if isinstance(allowed_unsupported, list):
+        allowed_unsupp_valid = True
+        if allowed_unsupported is not None:
+            if not isinstance(allowed_unsupported, list):
+                allowed_unsupp_valid = False
+            elif not all(isinstance(r, str) and r for r in allowed_unsupported) or len(set(allowed_unsupported)) != len(allowed_unsupported):
+                allowed_unsupp_valid = False
+
+        if isinstance(allowed_unsupported, list) and allowed_unsupp_valid:
             allowed_unsupported_set = {str(r) for r in allowed_unsupported if isinstance(r, str) and r}
         else:
             allowed_unsupported_set = set()
 
+        cand_name_counts: Dict[str, int] = {}
+        for cand in candidates:
+            if isinstance(cand, dict):
+                cn = cand.get("name")
+                if isinstance(cn, str) and cn:
+                    cand_name_counts[cn] = cand_name_counts.get(cn, 0) + 1
+
         frozen_candidates = []
-        seen_cand_names = set()
 
         for cand in candidates:
             if not isinstance(cand, dict):
@@ -1537,8 +1550,7 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
 
             c_name = cand.get("name")
             c_name_str = str(c_name) if isinstance(c_name, str) and c_name else "invalid"
-            is_name_dup = c_name_str in seen_cand_names
-            seen_cand_names.add(c_name_str)
+            is_name_dup = cand_name_counts.get(c_name_str, 0) > 1
 
             files = cand.get("files")
             loadable = cand.get("loadable")
@@ -1593,7 +1605,16 @@ def quantize_decision(body: Any, store: Optional[QuantizeStore] = None, tenant: 
                 if c_tok != tok_dig_str or not tok_dig_str:
                     reasons.add("TOKENIZER_MISMATCH")
 
-            if is_name_dup or not isinstance(c_name, str) or not c_name or not freeze_id_str or len(freeze_id_str) > 128:
+            if (
+                is_name_dup
+                or not isinstance(c_name, str)
+                or not c_name
+                or not freeze_id_str
+                or len(freeze_id_str) > 128
+                or not calib_dig_str
+                or not tok_dig_str
+                or not allowed_unsupp_valid
+            ):
                 reasons.add("INVALID_INPUT")
 
             # Final status: reasons > unsupported > frozen
