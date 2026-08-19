@@ -777,27 +777,32 @@ def _adapt_repair(data: Dict[str, Any]) -> Dict[str, Any]:
             )
             if not ok:
                 tokens_ok = False
-            else:
-                seen.add(token["id"])
-        labels = [t["id"] if t["role"] == "assistant" and not t["padding"] else -100 for t in tokens] if tokens_ok else [-100] * len(tokens)
+                break
+            seen.add(token["id"])
+        if tokens_ok:
+            labels = [t["id"] if t["role"] == "assistant" and not t["padding"] else -100 for t in tokens]
+        else:
+            labels = [-100] * len(tokens)
+    else:
+        labels = [-100] * (len(tokens) if isinstance(tokens, list) else 0)
     if not tokens_ok:
         codes.append("INVALID_TOKEN")
-        if isinstance(tokens, list):
-            labels = [-100] * len(tokens)
+
     template_pass = _safe_int(data.get("templateApplications")) and data.get("templateApplications") == 1
     if not template_pass:
         codes.append("CHAT_TEMPLATE_COUNT")
 
     params, allowed = data.get("parameters"), data.get("allowedTargets")
-    allowed_shape = isinstance(allowed, list) and bool(allowed) and all(isinstance(x, str) and x for x in allowed)
+    allowed_shape = isinstance(allowed, list) and bool(allowed) and all(isinstance(x, str) and bool(x) for x in allowed)
     allowed_eligible = allowed_shape and len(set(allowed)) == len(allowed)
     params_ok = isinstance(params, list) and allowed_eligible
     trainable, count, names = [], 0, set()
     if params_ok:
         for param in params:
             valid_param = (
-                isinstance(param, dict) and isinstance(param.get("name"), str)
-                and isinstance(param.get("target"), str) and _safe_int(param.get("numel"), positive=True)
+                isinstance(param, dict) and isinstance(param.get("name"), str) and bool(param["name"])
+                and isinstance(param.get("target"), str) and bool(param["target"])
+                and _safe_int(param.get("numel"), positive=True)
             )
             if not valid_param or param["name"] in names:
                 params_ok = False
@@ -820,11 +825,15 @@ def _adapt_repair(data: Dict[str, Any]) -> Dict[str, Any]:
     files = data.get("artifactFiles")
     adapter_files = ["adapter_config.json", "adapter_model.safetensors"]
     full_model = isinstance(files, list) and any(
-        isinstance(x, str) and (x == "model.safetensors" or x.endswith((".bin", ".pt", ".pth"))) for x in files
+        isinstance(x, str) and (x == "model.safetensors" or x.endswith((".bin", ".pt", ".pth", ".pkl", ".pickle"))) for x in files
     )
     if full_model:
         codes.append("FULL_MODEL_ARTIFACT")
-    file_pass = sorted(files) == adapter_files if isinstance(files, list) else False
+    file_pass = (
+        isinstance(files, list)
+        and all(isinstance(x, str) for x in files)
+        and sorted(files) == adapter_files
+    )
     if not file_pass:
         codes.append("ADAPTER_FILE_SET")
     peft_pass = params_ok and inference_ok and file_pass and not full_model
@@ -852,7 +861,7 @@ def _adapt_repair(data: Dict[str, Any]) -> Dict[str, Any]:
     train, evaluate = data.get("trainRowIds"), data.get("evalRowIds")
     eval_ok = (
         isinstance(train, list) and isinstance(evaluate, list) and bool(train) and bool(evaluate)
-        and all(isinstance(x, str) and x for x in train + evaluate) and len(set(train)) == len(train)
+        and all(isinstance(x, str) and bool(x) for x in train + evaluate) and len(set(train)) == len(train)
         and len(set(evaluate)) == len(evaluate) and set(train).isdisjoint(evaluate)
     )
     if not eval_ok:
@@ -864,7 +873,7 @@ def _adapt_repair(data: Dict[str, Any]) -> Dict[str, Any]:
     resume_ok = (
         isinstance(left, list) and isinstance(right, list) and bool(left) and len(left) == len(right)
         and _number(tolerance, 0) and all(_number(x) for x in left + right)
-        and all(abs(a - b) <= tolerance for a, b in zip(left, right))
+        and all(abs(a - b) <= tolerance for a, b in zip(left, right) if _number(a) and _number(b))
     )
     if not resume_ok:
         codes.append("RESUME_DIVERGENCE")
