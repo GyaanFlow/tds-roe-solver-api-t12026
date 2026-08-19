@@ -136,7 +136,7 @@ async def pipeline_endpoint(request: Request, email: Optional[str] = None):
         return JSONResponse(status_code=status_code, content=resp)
     except Exception as exc:
         logger.warning("Error in /pipeline: %s", exc)
-        return JSONResponse(status_code=400, content={"error": "INVALID_REQUEST"})
+        return JSONResponse(status_code=409, content={"error": "INVALID_REQUEST"})
 
 
 # ---------------------------------------------------------------------------
