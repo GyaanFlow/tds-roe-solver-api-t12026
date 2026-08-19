@@ -188,7 +188,7 @@ def _empty_result() -> Dict[str, Any]:
 # ===========================================================================
 def build_corpus_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
     """Q1 Solver: Immutable, Leakage-Safe Training Corpus."""
-    if not isinstance(body, dict) or "policy" not in body or not isinstance(body.get("objects"), list):
+    if not isinstance(body, dict) or not isinstance(body.get("policy"), dict) or not isinstance(body.get("objects"), list):
         return 400, {"error": "INVALID_INPUT"}
 
     policy = body["policy"]
