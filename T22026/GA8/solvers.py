@@ -2048,6 +2048,12 @@ def pipeline_decision(body: Any, store: Optional[PipelineStore] = None, tenant: 
                 ignored_event_ids.append(ev_id)
                 continue
 
+        # Check cached key first (succeeded/current cache transition row)
+        if ev_key in cache:
+            if ev_status == "succeeded" and ev_art != cache[ev_key]["artifactDigest"]:
+                return 409, {"error": "EVIDENCE_CONFLICT"}
+            return 409, {"error": "STATUS_CONFLICT"}
+
         curr_state = node_state.get(ev_node)
 
         if curr_state is None:
