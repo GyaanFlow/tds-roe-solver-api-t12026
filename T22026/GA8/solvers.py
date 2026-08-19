@@ -316,7 +316,7 @@ def build_corpus_decision(body: Any) -> Tuple[int, Dict[str, Any]]:
         body_bytes = "".join(_compact(row) + "\n" for row in result["splits"][split]).encode("utf-8")
         result["digests"][split] = hashlib.sha256(body_bytes).hexdigest()
 
-    result["rejectedObjects"].sort(key=lambda x: ((x["uri"] or "").encode("utf-8"), _compact(x).encode("utf-8")))
+    result["rejectedObjects"].sort(key=lambda x: (x["uri"] is None, (x["uri"] or "").encode("utf-8"), _compact(x).encode("utf-8")))
     result["rejectedRows"].sort(key=lambda x: (x["id"].encode("utf-8"), _compact(x).encode("utf-8")))
     result["lineage"].sort(key=lambda x: (x["uri"].encode("utf-8"), _compact(x).encode("utf-8")))
     return 200, result
@@ -479,7 +479,7 @@ def _evaluate_bqml(data: Dict[str, Any], st: BQMLStore, tenant: str) -> Dict[str
     )
     bytes_ok = _safe_int(processed) and _safe_int(maximum)
     lineage_shape = isinstance(run_id, str) and _safe_int(selected) and isinstance(digest, str) and bool(_HEX64.fullmatch(digest))
-    valid = finite_floor and required_ok and isinstance(rows, list) and bytes_ok
+    valid = finite_floor and required_ok and isinstance(rows, list) and bool(rows) and bytes_ok
     codes = []
     if not valid:
         codes.append("INVALID_INPUT")
@@ -516,7 +516,8 @@ def _evaluate_bqml(data: Dict[str, Any], st: BQMLStore, tenant: str) -> Dict[str
     metric = None
     slice_pass = valid and lineage_ok and test_rows_ok
     if not test_rows_ok:
-        codes.append("INVALID_TEST_ROW")
+        if rows:
+            codes.append("INVALID_TEST_ROW")
     else:
         metric = round(correct / total, 12)
         if finite_floor and metric < floor:
@@ -978,12 +979,15 @@ def _quant_select(data: Dict[str, Any], st: QuantizeStore, tenant: str) -> Dict[
     frozen = st.get_freeze(tenant, freeze_id) if isinstance(freeze_id, str) else None
     required = policy.get("requiredSlices") if isinstance(policy, dict) else None
     order = policy.get("candidateOrder") if isinstance(policy, dict) else None
-    policy_ok = (
-        isinstance(policy, dict) and _safe_int(policy.get("maxBytes")) and _number(policy.get("aggregateFloor"), 0, 1)
-        and isinstance(required, dict) and all(_number(x, 0, 1) for x in required.values())
-        and _number(policy.get("maxLatencyMs"), 0) and isinstance(order, list) and all(isinstance(x, str) for x in order)
+    max_bytes_ok = isinstance(policy, dict) and _safe_int(policy.get("maxBytes"))
+    aggregate_floor_ok = isinstance(policy, dict) and _number(policy.get("aggregateFloor"), 0, 1)
+    required_ok = isinstance(required, dict) and all(_number(x, 0, 1) for x in required.values())
+    max_latency_ok = isinstance(policy, dict) and _number(policy.get("maxLatencyMs"), 0)
+    order_ok = (
+        isinstance(order, list) and all(isinstance(x, str) for x in order)
         and len(set(order)) == len(order)
     )
+    policy_ok = max_bytes_ok and aggregate_floor_ok and required_ok and max_latency_ok and order_ok
     names = [x.get("name") for x in supplied if isinstance(x, dict)]
     sets_ok = policy_ok and len(names) == len(supplied) and set(names) == set(order) and len(set(names)) == len(names)
     recorded = {candidate["name"]: candidate for candidate in frozen["candidates"]} if frozen else {}
@@ -999,20 +1003,21 @@ def _quant_select(data: Dict[str, Any], st: QuantizeStore, tenant: str) -> Dict[
         if not policy_ok or not sets_ok:
             codes.append("INVALID_POLICY")
         inventory = candidate.get("inventory")
-        manifest_ok = (
-            isinstance(inventory, list) and all(
+        manifest_shape = (
+            isinstance(inventory, list) and bool(inventory) and all(
                 isinstance(x, dict) and list(x) == ["name", "bytes", "sha256"] and isinstance(x["name"], str)
                 and _safe_int(x["bytes"]) and isinstance(x["sha256"], str) and bool(_HEX64.fullmatch(x["sha256"]))
                 for x in inventory
             )
         )
-        manifest_ok = manifest_ok and [x["name"] for x in inventory] == sorted({x["name"] for x in inventory}, key=lambda x: x.encode("utf-8"))
-        total = sum(x["bytes"] for x in inventory) if manifest_ok else None
-        package = hashlib.sha256(_compact(inventory).encode("utf-8")).hexdigest() if manifest_ok else None
-        manifest_ok = manifest_ok and total == candidate.get("totalBytes") and package == candidate.get("packageDigest")
+        manifest_shape = manifest_shape and [x["name"] for x in inventory] == sorted(
+            {x["name"] for x in inventory}, key=lambda x: x.encode("utf-8")
+        )
+        total = sum(x["bytes"] for x in inventory) if manifest_shape else None
+        package = hashlib.sha256(_compact(inventory).encode("utf-8")).hexdigest() if manifest_shape else None
+        manifest_ok = manifest_shape and total == candidate.get("totalBytes") and package == candidate.get("packageDigest")
         if not manifest_ok:
             codes.append("INVALID_MANIFEST")
-            total = None
         latency = data.get("latencies", {}).get(name) if isinstance(data.get("latencies"), dict) else None
         latency_ok = _number(latency, 0)
         if not latency_ok:
@@ -1041,17 +1046,18 @@ def _quant_select(data: Dict[str, Any], st: QuantizeStore, tenant: str) -> Dict[
         slices = {k: (round(counts[k][0] / counts[k][1], 12) if predictions_ok and k in counts else None) for k in required_names}
         if not predictions_ok:
             codes.append("INVALID_PREDICTIONS")
-        elif policy_ok:
-            if aggregate < policy["aggregateFloor"]:
+        else:
+            if aggregate_floor_ok and aggregate < policy["aggregateFloor"]:
                 codes.append("AGGREGATE_FLOOR")
-            for slice_name, floor in required.items():
-                if slices[slice_name] is None:
-                    codes.append("MISSING_SLICE:" + slice_name)
-                elif slices[slice_name] < floor:
-                    codes.append("SLICE_FLOOR:" + slice_name)
-        if policy_ok and total is not None and total > policy["maxBytes"]:
+            if required_ok:
+                for slice_name, floor in required.items():
+                    if slices[slice_name] is None:
+                        codes.append("MISSING_SLICE:" + slice_name)
+                    elif slices[slice_name] < floor:
+                        codes.append("SLICE_FLOOR:" + slice_name)
+        if max_bytes_ok and total is not None and total > policy["maxBytes"]:
             codes.append("SIZE_LIMIT")
-        if policy_ok and latency is not None and latency > policy["maxLatencyMs"]:
+        if max_latency_ok and latency is not None and latency > policy["maxLatencyMs"]:
             codes.append("LATENCY_LIMIT")
         results.append({
             "name": name,
