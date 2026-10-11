@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 import json
 import re
 import time
 from collections import OrderedDict
 from typing import Any
-from urllib.parse import parse_qs, quote, urlsplit
+from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlsplit
 
 import httpx
 from fastapi import APIRouter, Query, Request
@@ -151,11 +153,20 @@ def _api_paths(value: Any) -> list[str]:
 
 def _links(value: Any) -> list[str]:
     found: list[str] = []
-    if isinstance(value, dict):
-        for key in ("href", "url"):
-            path = value.get(key)
-            if isinstance(path, str) and path.startswith("/") and not path.startswith("//"):
-                found.append(path)
+    if isinstance(value, str):
+        if value.startswith("/questionData?") or value.startswith(EXAM_ORIGIN + "/questionData?"):
+            try:
+                params = parse_qs(urlsplit(value).query)
+                if len(params.get("path", [])) == 1:
+                    extra = [(k, v) for k, v in parse_qsl(urlsplit(value).query)
+                             if k not in {"email", "quizSign", "questionId", "path"}]
+                    path = params["path"][0]
+                    found.append(path + ("&" if "?" in path else "?") + urlencode(extra) if extra else path)
+            except ValueError:
+                pass
+        elif value.startswith("/") and not value.startswith("//"):
+            found.append(value)
+    elif isinstance(value, dict):
         for child in value.values():
             found.extend(_links(child))
     elif isinstance(value, list):
@@ -182,9 +193,21 @@ def _resource_paths(root: Any) -> list[str]:
 
 
 async def _fetch_upstream(client: httpx.AsyncClient, url: str, params: dict[str, str]):
+    params = dict(params)
+    virtual = urlsplit(params.get("path", "/"))
+    params["path"] = virtual.path
+    for key, value in parse_qsl(virtual.query):
+        if key not in {"email", "quizSign", "questionId", "path"}:
+            params[key] = value
     async with _UPSTREAM_LIMIT:
         response = await client.get(url, params=params)
     response.raise_for_status()
+    if len(response.content) > 8 * 1024 * 1024:
+        raise ValueError("LEDGER_RESPONSE_TOO_LARGE")
+    if "ndjson" in response.headers.get("content-type", "").lower():
+        return {"orders": [json.loads(line) for line in response.text.splitlines() if line.strip()]}
+    if "csv" in response.headers.get("content-type", "").lower():
+        return {"rows": list(csv.DictReader(io.StringIO(response.text)))}
     return response.json()
 
 
@@ -238,7 +261,8 @@ async def _discover_ledger_resources(student: str) -> tuple[dict[str, Any] | Non
         async with httpx.AsyncClient(timeout=_UPSTREAM_TIMEOUT, follow_redirects=False, limits=httpx.Limits(max_connections=48, max_keepalive_connections=24)) as client:
             root = await _fetch_upstream(client, url, base_params)
             resources: dict[str, Any] = {"/": root}
-            paths = _resource_paths(root)
+            seen = {"/"}
+            pending = _resource_paths(root)
 
             async def fetch_path(path: str):
                 try:
@@ -247,9 +271,28 @@ async def _discover_ledger_resources(student: str) -> tuple[dict[str, Any] | Non
                 except (httpx.HTTPError, ValueError):
                     return None
 
-            for item in await asyncio.gather(*(fetch_path(path) for path in paths)):
-                if item is not None:
-                    resources[item[0]] = item[1]
+            # Follow named root links and the next-page links advertised by
+            # their responses. Never send signatures to an arbitrary host.
+            for _ in range(12):
+                queued = list(dict.fromkeys(path for path in pending if path not in seen))
+                paths = queued[:32]
+                if not paths:
+                    break
+                if len(seen) + len(paths) > 256:
+                    return None, JSONResponse(status_code=502, content={"error": "LEDGER_DISCOVERY_LIMIT_EXCEEDED"})
+                seen.update(paths)
+                pending = queued[32:]
+                for item in await asyncio.gather(*(fetch_path(path) for path in paths)):
+                    if item is not None:
+                        resources[item[0]] = item[1]
+                        pending.extend(path for path in _resource_paths(item[1]) if path not in seen)
+                # Acme's NDJSON export is the complete ledger, including all
+                # revisions. Do not spend the deadline fetching 85 order pages.
+                bulk = resources.get("/export")
+                if isinstance(bulk, dict) and isinstance(bulk.get("orders"), list) and bulk["orders"]:
+                    pending = [path for path in pending if urlsplit(path).path != "/orders"]
+            if any(path not in seen for path in pending):
+                return None, JSONResponse(status_code=502, content={"error": "LEDGER_DISCOVERY_LIMIT_EXCEEDED"})
     except httpx.TimeoutException:
         return None, JSONResponse(status_code=504, content={"error": "LEDGER_DISCOVERY_TIMEOUT"})
     except httpx.HTTPStatusError as exc:

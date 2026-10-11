@@ -78,4 +78,6 @@ The SQLite backend is appropriate for a single instance with persistent storage.
 
 Simultaneous questions for one email share discovery within a worker, with a 12-second total discovery deadline. `LEDGER_UPSTREAM_REJECTED` includes the upstream HTTP status without revealing the signature. For 401/403, save a current signed URL for the same email; connection errors are reported separately.
 
+For the Acme ledger, the service follows the signed named links, reads the full `/export` NDJSON response and `/rates`, and avoids the 85-page order chain once the bulk export succeeds. It keeps the newest `updated_at` row per ID before filtering, converts `created_at` to Asia/Kolkata business dates, counts only paid orders for revenue, and converts currency using `usd_per_unit`. Final money totals are rounded to cents after summing converted values. A filtered query with no matching rows returns zero.
+
 Before serving a large cohort, configure shared Redis and run a deployment-level load test with realistic distinct tenants and concurrent Ledger requests. Verify the exam upstream's rate limits and observed latency; the local tests do not establish a safe student count. Ledger field names and question wording may vary by student, so use the dashboard's schema manifest to investigate any unsupported response rather than treating a plausible numeric answer as verified.

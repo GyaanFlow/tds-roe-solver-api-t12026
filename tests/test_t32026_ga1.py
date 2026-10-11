@@ -111,6 +111,35 @@ def test_simultaneous_ledger_questions_share_discovery(monkeypatch):
     assert not main._LEDGER_INFLIGHT
 
 
+def test_named_links_and_next_pages_are_discovered_without_signed_url_leaks(monkeypatch):
+    client_type = httpx.AsyncClient
+    payloads = {
+        "/": {"links": {"orders": "/orders?page=1", "rates": "/rates", "export": "/export.csv"}},
+        "/orders?page=1": {"orders": [{"id": "1", "region": "North", "date": "2026-05-01", "total": 25}],
+                           "links": {"next": "https://exam.sanand.workers.dev/questionData?quizSign=private-sentinel&path=%2Forders%3Fpage%3D2"}},
+        "/orders?page=2": {"orders": [{"id": "2", "region": "North", "date": "2026-05-02", "total": 35}]},
+        "/rates": {"rates": {"USD": 1}},
+    }
+
+    def upstream(request):
+        path = request.url.params.get("path")
+        if "page" in request.url.params:
+            path += "?page=" + request.url.params["page"]
+        if path == "/export.csv":
+            return httpx.Response(200, text="id,region,date,total\n1,North,2026-05-01,25\n2,North,2026-05-02,35\n", headers={"content-type": "text/csv"})
+        return httpx.Response(200, json=payloads[path]) if path in payloads else httpx.Response(404)
+
+    monkeypatch.setattr(main, "get_config", lambda email: {"quiz_sign": "test-signature"})
+    monkeypatch.setattr(main.httpx, "AsyncClient", lambda **kwargs: client_type(transport=httpx.MockTransport(upstream), **kwargs))
+    main._LEDGER_CACHE.clear()
+    data, error = asyncio.run(main._ledger_resources("student@example.com"))
+    assert error is None
+    assert "/orders?page=2" in data
+    assert "/export.csv" in data
+    assert "private-sentinel" not in str(main._resource_manifest(data))
+    assert answer_ledger_question("How much did North earn in May 2026, in US dollars?", data) == 60
+
+
 def test_ledger_revenue_uses_order_rows_not_nested_line_items_and_no_filter_fallback():
     data = {"/": {"orders": [
         {"id": "o1", "date": "2026-03-04", "region": "North", "total": 100,
@@ -146,6 +175,62 @@ def test_refunded_order_count_is_not_refund_amount():
         {"refund_id": "r4", "order_id": "o3", "amount": 30, "region": "East", "date": "2026-04-04"},
     ]}}
     assert answer_ledger_question("How many orders from North were refunded in April 2026?", data) == 2
+
+
+def test_acme_revisions_kolkata_dates_paid_status_and_usd_rates():
+    def order(id, **kwargs):
+        return {"id": id, "customer": "C1", "region": "North", "product": "Mixer", "qty": 2,
+                "amount": 100, "currency": "EUR", "status": "paid",
+                "created_at": "2026-04-30T20:00:00Z", "updated_at": "2026-05-02T00:00:00Z", **kwargs}
+    data = {
+        "/export": {"orders": [
+            order("o1", status="void", updated_at="2026-05-01T00:00:00Z"), order("o1"),
+            order("o2", status="refunded", currency="USD", amount=25),
+            order("o3", product="Fan", qty=5, amount=1000, currency="INR", customer="C2"),
+            order("o4", status="void", amount=9999),
+        ]},
+        "/rates": {"usd_per_unit": {"USD": 1, "EUR": 1.13, "INR": 0.01216}},
+    }
+    assert answer_ledger_question("How much did North earn in May 2026, in US dollars?", data) == 125.16
+    assert answer_ledger_question("Total revenue in North in April 2026?", data) == 0
+    assert answer_ledger_question("How many orders from North were refunded in May 2026?", data) == 1
+    assert answer_ledger_question("How much was refunded in North in May 2026 in USD?", data) == 25
+    assert answer_ledger_question("Which product sold the most units in North in May 2026?", data) == "Fan"
+    assert answer_ledger_question("Which product earned the most revenue in North in May 2026?", data) == "Mixer"
+    assert answer_ledger_question("How many unique paying customers in North in May 2026?", data) == 2
+
+
+def test_acme_bulk_ndjson_skips_the_85_page_chain(monkeypatch):
+    client_type = httpx.AsyncClient
+    visited = []
+    row = {"id": "o1", "customer": "C1", "region": "North", "product": "Mixer", "qty": 1,
+           "amount": 100, "currency": "EUR", "status": "paid",
+           "created_at": "2026-05-01T00:00:00Z", "updated_at": "2026-05-02T00:00:00Z"}
+
+    def upstream(request):
+        path = request.url.params["path"]
+        visited.append(path)
+        if path == "/":
+            return httpx.Response(200, json={"links": {
+                "orders": "https://exam.sanand.workers.dev/questionData?path=%2Forders&page=1&quizSign=private-sentinel",
+                "rates": "/rates", "export": "/export"}})
+        if path == "/orders":
+            assert request.url.params["page"] == "1"
+            return httpx.Response(200, json={"page": 1, "pages": 85, "orders": [row], "next": "/orders?page=2"})
+        if path == "/rates":
+            return httpx.Response(200, json={"usd_per_unit": {"EUR": 1.13}})
+        if path == "/export":
+            import json
+            return httpx.Response(200, text=json.dumps(row) + "\n", headers={"content-type": "application/x-ndjson"})
+        return httpx.Response(404)
+
+    monkeypatch.setattr(main, "get_config", lambda email: {"quiz_sign": "test-signature"})
+    monkeypatch.setattr(main.httpx, "AsyncClient", lambda **kwargs: client_type(transport=httpx.MockTransport(upstream), **kwargs))
+    main._LEDGER_CACHE.clear()
+    data, error = asyncio.run(main._ledger_resources("student@example.com"))
+    assert error is None
+    assert visited.count("/orders") == 1
+    assert answer_ledger_question("How much did North earn in May 2026, in US dollars?", data) == 113
 
 
 def test_tenant_store_atomic_merge_and_normalized_key(monkeypatch):

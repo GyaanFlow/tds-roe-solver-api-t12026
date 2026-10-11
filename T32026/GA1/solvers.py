@@ -4,7 +4,8 @@ import hashlib
 import json
 import re
 from collections import Counter
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
 
 from T22026.shared.seedrandom_arc4 import SeedRandom
@@ -22,6 +23,15 @@ _MONTHS = {
     "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
     "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12,
 }
+_IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def _timestamp(value: Any) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=_IST)
+    except (TypeError, ValueError):
+        return None
 
 
 def coerce_config_value(key: str, value: Any) -> Any:
@@ -143,7 +153,7 @@ def _record_collections(value: Any, path: str = "") -> list[tuple[str, list[dict
 
 
 def _dedupe_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    seen: set[str] = set()
+    seen: dict[str, int] = {}
     unique: list[dict[str, Any]] = []
     for row in rows:
         identity = next(((name, row[name]) for name in (
@@ -156,12 +166,21 @@ def _dedupe_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         key = json.dumps(identity, ensure_ascii=False, default=str)
         if key not in seen:
-            seen.add(key)
+            seen[key] = len(unique)
             unique.append(row)
+        else:
+            index = seen[key]
+            previous = _timestamp(unique[index].get("updated_at"))
+            current = _timestamp(row.get("updated_at"))
+            if current is not None and (previous is None or current > previous):
+                unique[index] = row
     return unique
 
 
 def _date_in_row(row: dict[str, Any]) -> date | None:
+    created = _timestamp(row.get("created_at"))
+    if created is not None:
+        return created.astimezone(_IST).date()
     for key, value in row.items():
         if not any(term in str(key).lower() for term in ("date", "time", "created", "month")):
             continue
@@ -227,6 +246,72 @@ def _sum_fields(rows: list[dict[str, Any]], names: tuple[str, ...]) -> float | N
     return sum(values) if values else None
 
 
+def _answer_acme(question: str, rows: list[dict[str, Any]], resources: dict[str, Any]) -> Any:
+    q = question.lower()
+    rows = _filters(question, _dedupe_rows(rows))
+    is_refund = bool(re.search(r"\b(refund\w*|return\w*)\b", q))
+    is_count = any(term in q for term in ("how many", "number of", "count", "distinct", "unique"))
+    is_product = bool(re.search(r"\b(product\w*|item\w*|sku)\b", q))
+    is_customer = bool(re.search(r"\b(customer\w*|client\w*)\b", q))
+    paid = [row for row in rows if str(row.get("status", "")).lower() == "paid"]
+    refunded = [row for row in rows if str(row.get("status", "")).lower() == "refunded"]
+    rates: dict[str, Any] = {"USD": 1}
+    for payload in resources.values():
+        if isinstance(payload, dict) and isinstance(payload.get("usd_per_unit"), dict):
+            rates.update(payload["usd_per_unit"])
+
+    def usd(row):
+        currency = str(row.get("currency", "USD")).upper()
+        if currency not in rates:
+            raise ValueError(f"No USD exchange rate available for {currency}.")
+        try:
+            return Decimal(str(row["amount"])) * Decimal(str(rates[currency]))
+        except (KeyError, InvalidOperation):
+            raise ValueError("Invalid ledger amount or exchange rate.") from None
+
+    def money(value):
+        return float(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+    if is_refund:
+        if is_count and not (is_product or is_customer):
+            return len(refunded)
+        selected = refunded
+    else:
+        selected = paid
+
+    if is_product or is_customer:
+        key = "product" if is_product else "customer"
+        if is_customer and is_count:
+            buying = any(term in q for term in ("pay", "bought", "buy", "purchas", "spend", "spent"))
+            customers = selected if is_refund or buying else rows
+            return len({row[key] for row in customers})
+        totals: dict[str, Decimal] = {}
+        units = is_product and not any(word in q for word in ("revenue", "earn", "spend", "spent", "money", "dollar", "usd", "sales value"))
+        for row in selected:
+            name = str(row[key])
+            value = Decimal(str(row.get("qty", 0))) if units else usd(row)
+            totals[name] = totals.get(name, Decimal(0)) + value
+        if is_count and is_product:
+            if "distinct" in q or "unique" in q:
+                return len(totals)
+            return int(sum(totals.values(), Decimal(0)))
+        if any(word in q for word in ("most", "top", "highest", "largest", "best", "leading")):
+            return sorted(totals, key=lambda name: (-totals[name], name))[0] if totals else ""
+        names = [name for name in totals if re.search(rf"\b{re.escape(name.lower())}\b", q)]
+        if len(names) == 1:
+            return int(totals[names[0]]) if units else money(totals[names[0]])
+        raise ValueError("Specify a product/customer measure or ranking.")
+
+    if is_count:
+        return len(selected if is_refund or "paid" in q else rows)
+    if any(word in q for word in ("revenue", "sales", "earn", "income", "receipts", "total", "amount", "how much", "refund", "average", "mean", "per order")):
+        total = sum((usd(row) for row in selected), Decimal(0))
+        if any(word in q for word in ("average", "mean", "per order")):
+            total = total / len(selected) if selected else Decimal(0)
+        return money(total)
+    raise ValueError("Could not map the question to a supported ledger measure.")
+
+
 def answer_ledger_question(question: str, resources: dict[str, Any]) -> Any:
     """Interpret common revenue/refund/product/customer questions over discovered API collections."""
     q = question.lower()
@@ -235,6 +320,10 @@ def answer_ledger_question(question: str, resources: dict[str, Any]) -> Any:
     collections = [(path, rows) for path, rows in collections if rows]
     if not collections:
         raise ValueError("No record collections found in the discovered ledger API.")
+    acme = [row for _, rows in collections for row in rows
+            if all(key in row for key in ("id", "created_at", "updated_at", "status", "currency", "amount", "qty", "product", "customer"))]
+    if acme:
+        return _answer_acme(question, acme, resources)
 
     is_refund = bool(re.search(r"\b(refund|refunded|refunds|return|returned)\b", q))
     is_product = "product" in q or "item" in q or "sku" in q
@@ -273,7 +362,7 @@ def answer_ledger_question(question: str, resources: dict[str, Any]) -> Any:
     rows = _dedupe_rows([row for group in candidates for row in group])
     rows = _filters(question, rows)
     if not rows:
-        return 0 if is_refund or any(word in q for word in ("revenue", "sales", "sold", "how many", "count")) else []
+        return 0 if is_refund or any(word in q for word in ("revenue", "sales", "sold", "earn", "how much", "how many", "count")) else []
 
     if is_customer:
         values = _field_values(rows, ("customer", "customer_name", "customer_id", "client", "client_name", "client_id"))
@@ -319,7 +408,7 @@ def answer_ledger_question(question: str, resources: dict[str, Any]) -> Any:
             return round(sum(refund_values) + 1e-9, 2)
         raise ValueError("Refund question detected, but no refund amount field was found.")
 
-    if any(word in q for word in ("revenue", "sales", "sold", "total", "amount")):
+    if any(word in q for word in ("revenue", "sales", "sold", "total", "amount", "earn", "how much", "income", "receipts")):
         amount_names = ("revenue", "order_total", "total_amount", "grand_total", "total", "amount", "subtotal")
         total = _sum_fields(rows, amount_names)
         if total is None:
