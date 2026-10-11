@@ -1,5 +1,10 @@
 # Connect the T3 GA1 APIs to the browser solver
 
+Q13 now has a stateless ROT13/hex/reversal decoding helper. See
+[Q13_IMPLEMENTATION_GUIDE.md](Q13_IMPLEMENTATION_GUIDE.md) for its API and
+terminal workflow. Unlike Q6/Q14/Q15, Q13 requires a public signed-recording
+archive URL, not a submitted API URL.
+
 This is the browser-solver integration guide, separate from [IMPLEMENTATION_GUIDE.md](IMPLEMENTATION_GUIDE.md), which explains deploying the API itself. Follow this when wiring the live API hub into the separate `tds-roe-solver` project, using the T2 GA1 `solved` result + `guide` pattern.
 
 The browser solver is at `C:/Users/gaura/Downloads/tds-roe-solver/tds-roe-solver`. Its T3 GA1 API modules currently return “implementation pending” handoff cards. The API repo is separate: do not paste its private `quizSign` into solver source or browser storage.

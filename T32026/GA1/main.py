@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse, Response
 
 from T32026.GA1.shared.tenant import get_config, normalize_email, set_config
 from T32026.GA1.solvers import answer_ledger_question, challenge_digest, effective_config, mcp_tool_definition
+from T32026.GA1.termlog import decode_termlog
 
 router = APIRouter()
 EXAM_ORIGIN = "https://exam.sanand.workers.dev"
@@ -82,6 +83,23 @@ def _quiz_sign_from_question_data_url(value: Any, email: str) -> str | None:
 @router.get("/health")
 async def health():
     return {"status": "ok", "service": "t32026-ga1"}
+
+
+@router.post("/q13/decode")
+@router.post("/{email}/q13/decode")
+async def decode_q13(request: Request, email: str | None = None):
+    body, error = await _json_body(request, max_bytes=32768)
+    if error:
+        return error
+    if not isinstance(body, dict) or not isinstance(body.get("ciphertext"), str):
+        return JSONResponse(status_code=400, content={"error": "CIPHERTEXT_STRING_REQUIRED"})
+    try:
+        result = decode_termlog(body["ciphertext"])
+    except ValueError:
+        return JSONResponse(status_code=400, content={"error": "CIPHERTEXT_REQUIRED_ASCII_MAX_16384"})
+    # Stateless: no signature, student dataset, or decoded code is stored.
+    status = 200 if result["candidates"] else 422
+    return JSONResponse(status_code=status, content=result, headers={"Cache-Control": "no-store"})
 
 
 @router.post("/onboard")

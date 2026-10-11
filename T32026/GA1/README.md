@@ -29,3 +29,11 @@ The MCP route supports JSON-RPC `initialize`, `notifications/initialized`, `tool
 ## Scope
 
 The exam's other API-adjacent questions are not hosted services: the `httpbin` question asks the student to make an outbound HTTP request; the HTTP-header question reads a code from the exam's own response; and file/ZIP questions operate on downloadable artifacts. They are outside this API hub.
+
+## Q13 decoding helper
+
+`POST /ga1/q13/decode` accepts `{"ciphertext":"..."}` without onboarding.
+It enumerates all six ROT13/hex/reversal undo orders and reports readable
+candidates rather than guessing when ambiguous. Q13 still requires a genuine
+signed terminal recording archive, not this endpoint URL. See
+[Q13_IMPLEMENTATION_GUIDE.md](Q13_IMPLEMENTATION_GUIDE.md).
