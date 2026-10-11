@@ -47,7 +47,7 @@ class MultiTenantASGIMiddleware:
             from urllib.parse import unquote
             raw_path = scope.get("path", "")
             path = unquote(raw_path)
-            match = re.match(r"^/(ga2|ga3|ga4|ga5|ga6|ga7|ga8)/([^/]+@[^/]+)(/.*)?$", path)
+            match = re.match(r"^/(ga1|ga2|ga3|ga4|ga5|ga6|ga7|ga8)/([^/]+@[^/]+)(/.*)?$", path)
             if match:
                 ga_version = match.group(1)
                 email = match.group(2).strip()
@@ -58,6 +58,7 @@ class MultiTenantASGIMiddleware:
                 known_prefixes = {
                     "q1", "q2", "q3", "q4", "q5", "q6", "q7", "q8", "q9", "q10", "q11", "q12", "q13",
                     "solve", "health", "onboard", "status", "config", "docs", "redoc", "cache-stats",
+                    "effective-config", "ledger", "mcp",
                     "answer-image", "extract", "dynamic-extract", "answer-audio", "rank",
                     "grounded-answer", "vector-search", "extract-graph", "graph-query", "community-summary",
                     "proration", "guardrail", "skill-scan", "budget-guard", "mcp", "guardrail-redteam", "mailroom", "a2a", "v2", "scrape-books",
@@ -66,7 +67,9 @@ class MultiTenantASGIMiddleware:
                 }
                 if parts and (parts[0].startswith("sess_") or parts[0] not in known_prefixes):
                     possible_session_or_token = parts[0]
-                    if ga_version == "ga4":
+                    if ga_version == "ga1":
+                        resolved = None
+                    elif ga_version == "ga4":
                         from T22026.GA4.shared.tenant import get_ga4_session_token as _get_session_token
                     elif ga_version == "ga5":
                         from T22026.GA5.shared.tenant import get_ga5_session_token as _get_session_token
@@ -91,7 +94,7 @@ class ConditionalCORSMiddleware(CORSMiddleware):
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http":
             path = scope.get("path", "")
-            if path.startswith(("/ga2", "/ga3", "/ga4", "/ga5", "/ga6", "/ga7", "/ga8")):
+            if path.startswith(("/ga1", "/ga2", "/ga3", "/ga4", "/ga5", "/ga6", "/ga7", "/ga8")):
                 await self.app(scope, receive, send)
                 return
         await super().__call__(scope, receive, send)
@@ -352,6 +355,19 @@ def home() -> str:
       </div>
     </div>
 
+    <!-- T3-2026 GA1 -->
+    <div class="hub-card ga5">
+      <div>
+        <div class="hub-meta c-ga5">T3-2026 · Graded Assignment 1</div>
+        <div class="hub-title">GA1 API Service Bench</div>
+        <div class="hub-desc">Config precedence API, student-specific Ledger Agent, and a live MCP challenge server, with onboarding and an interactive request bench.</div>
+      </div>
+      <div class="btn-stack">
+        <a href="/ga1/" class="btn b-ga5">Open GA1 Dashboard</a>
+        <a href="/ga1/docs" class="btn btn-secondary">API Reference</a>
+      </div>
+    </div>
+
     <!-- GA8 -->
     <div class="hub-card ga5">
       <div>
@@ -476,4 +492,8 @@ app.mount("/ga7", ga7)
 # Mount GA8 Multi-Tenant Service Hub (MLOps, PEFT, Quantization, Model Registry & Pipelines)
 ga8 = load_app("ga8_app", BASE / "T22026" / "GA8" / "app.py")
 app.mount("/ga8", ga8)
+
+# Mount the T3-2026 GA1 API service and its request test bench.
+ga1 = load_app("ga1_app", BASE / "T32026" / "GA1" / "app.py")
+app.mount("/ga1", ga1)
 
