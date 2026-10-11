@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import hashlib
+import asyncio
 import tempfile
 from pathlib import Path
 
 from T32026.GA1.shared import tenant
-from T32026.GA1.solvers import answer_ledger_question, challenge_digest, effective_config
+from T32026.GA1.main import _quiz_sign_from_question_data_url
+import httpx
+from fastapi.testclient import TestClient
+from T32026.GA1 import main
+from T32026.GA1.app import app
+from T32026.GA1.solvers import answer_ledger_question, assigned_config, challenge_digest, effective_config
 
 
 def test_config_cli_precedence_alias_types_and_masking():
@@ -23,6 +29,86 @@ def test_mcp_digest_matches_sha256_and_normalizes_email():
     challenge = "0123456789abcdef0123456789abcdef"
     expected = hashlib.sha256(f"{challenge}:student@example.com".encode()).hexdigest()[:16]
     assert challenge_digest(challenge, " Student@Example.com ") == expected
+
+
+def test_question_data_url_onboarding_extracts_signature_and_validates_tenant():
+    url = (
+        "https://exam.sanand.workers.dev/questionData?"
+        "email=student%40example.com&quizSign=a%2Bb%2Fc%3D&"
+        "questionId=q-ledger-agent-server&path=%2F"
+    )
+    assert _quiz_sign_from_question_data_url(url, "student@example.com") == "a+b/c="
+    assert _quiz_sign_from_question_data_url(url, "other@example.com") is None
+    assert _quiz_sign_from_question_data_url(url.replace("q-ledger-agent-server", "q-other"), "student@example.com") is None
+    assert _quiz_sign_from_question_data_url(url.replace("exam.sanand.workers.dev", "evil.example"), "student@example.com") is None
+    assert _quiz_sign_from_question_data_url(url + "&quizSign=second", "student@example.com") is None
+
+
+def test_config_grader_regression_preserves_student_layers():
+    email = "23f1000805@ds.study.iitm.ac.in"
+    assert assigned_config(email) == {
+        "port": 8172, "workers": 1, "debug": False, "log_level": "error", "api_key": "****"
+    }
+    with TestClient(app) as client:
+        r = client.get(f"/{email}/effective-config?set=log_level=debug&set=workers=11")
+        assert r.status_code == 200
+        assert r.json() == {"port": 8172, "workers": 11, "debug": False, "log_level": "debug", "api_key": "****"}
+        assert client.get("/effective-config").status_code == 400
+
+
+def test_ledger_upstream_failure_is_diagnosable_without_leaking_signature(monkeypatch):
+    client_type = httpx.AsyncClient
+    transport = httpx.MockTransport(lambda request: httpx.Response(403, json={"error": "denied"}))
+    monkeypatch.setattr(main, "get_config", lambda email: {"quiz_sign": "sentinel-private-signature"})
+    monkeypatch.setattr(main.httpx, "AsyncClient", lambda **kwargs: client_type(transport=transport, **kwargs))
+    main._LEDGER_CACHE.clear()
+    with TestClient(app) as client:
+        r = client.post("/student@example.com/ledger/answer", json={"question": "Total revenue in East in March 2026?"})
+    assert r.status_code == 502
+    assert r.json()["upstream_status"] == 403
+    assert "sentinel-private-signature" not in r.text
+
+
+def test_onboarding_does_not_replace_tenant_with_rejected_signature(monkeypatch):
+    client_type = httpx.AsyncClient
+    transport = httpx.MockTransport(lambda request: httpx.Response(403))
+    saved = []
+    monkeypatch.setattr(main, "set_config", lambda *args: saved.append(args))
+    monkeypatch.setattr(main.httpx, "AsyncClient", lambda **kwargs: client_type(transport=transport, **kwargs))
+    with TestClient(app) as client:
+        r = client.post("/onboard", json={
+            "email": "student@example.com",
+            "question_data_url": "https://exam.sanand.workers.dev/questionData?email=student%40example.com&quizSign=private-sentinel&questionId=q-ledger-agent-server&path=/",
+        })
+    assert r.status_code == 502
+    assert r.json()["upstream_status"] == 403
+    assert "private-sentinel" not in r.text
+    assert not saved
+
+
+def test_simultaneous_ledger_questions_share_discovery(monkeypatch):
+    client_type = httpx.AsyncClient
+    requests = []
+
+    async def upstream(request):
+        requests.append(request.url.params.get("path"))
+        await asyncio.sleep(0.01)
+        if request.url.params.get("path") == "/":
+            return httpx.Response(200, json={"orders": [{"id": "o1", "region": "East", "date": "2026-03-01", "total": 25}]})
+        return httpx.Response(404)
+
+    monkeypatch.setattr(main, "get_config", lambda email: {"quiz_sign": "test-signature"})
+    monkeypatch.setattr(main.httpx, "AsyncClient", lambda **kwargs: client_type(transport=httpx.MockTransport(upstream), **kwargs))
+    main._LEDGER_CACHE.clear()
+
+    async def run():
+        results = await asyncio.gather(*(main._ledger_resources("student@example.com") for _ in range(12)))
+        assert all(error is None for data, error in results)
+        assert all(answer_ledger_question("Total revenue in East in March 2026?", data) == 25 for data, error in results)
+
+    asyncio.run(run())
+    assert requests.count("/") == 1
+    assert not main._LEDGER_INFLIGHT
 
 
 def test_ledger_revenue_uses_order_rows_not_nested_line_items_and_no_filter_fallback():
@@ -50,6 +136,16 @@ def test_ledger_refunds_products_and_customers():
     assert answer_ledger_question("How much was refunded in North in March 2026?", data) == 16.5
     assert answer_ledger_question("How many unique customers?", data) == 2
     assert answer_ledger_question("Which product sold the most?", data) == "Fan"
+
+
+def test_refunded_order_count_is_not_refund_amount():
+    data = {"/refunds": {"refunds": [
+        {"refund_id": "r1", "order_id": "o1", "amount": 25, "region": "North", "date": "2026-04-02"},
+        {"refund_id": "r2", "order_id": "o1", "amount": 10, "region": "North", "date": "2026-04-03"},
+        {"refund_id": "r3", "order_id": "o2", "amount": 45, "region": "North", "date": "2026-04-04"},
+        {"refund_id": "r4", "order_id": "o3", "amount": 30, "region": "East", "date": "2026-04-04"},
+    ]}}
+    assert answer_ledger_question("How many orders from North were refunded in April 2026?", data) == 2
 
 
 def test_tenant_store_atomic_merge_and_normalized_key(monkeypatch):

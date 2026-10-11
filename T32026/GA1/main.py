@@ -6,7 +6,7 @@ import re
 import time
 from collections import OrderedDict
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlsplit
 
 import httpx
 from fastapi import APIRouter, Query, Request
@@ -17,8 +17,10 @@ from T32026.GA1.solvers import answer_ledger_question, challenge_digest, effecti
 
 router = APIRouter()
 EXAM_ORIGIN = "https://exam.sanand.workers.dev"
+LEDGER_QUESTION_ID = "q-ledger-agent-server"
 _LEDGER_CACHE: OrderedDict[tuple[str, str], tuple[float, dict[str, Any]]] = OrderedDict()
 _LEDGER_CACHE_LOCK = asyncio.Lock()
+_LEDGER_INFLIGHT: dict[str, asyncio.Task] = {}
 _UPSTREAM_LIMIT = asyncio.Semaphore(48)
 _CACHE_TTL_SECONDS = 45
 _CACHE_MAX_TENANTS = 512
@@ -51,6 +53,30 @@ async def _json_body(request: Request, max_bytes: int = 32_768) -> tuple[Any | N
     return body, None
 
 
+def _quiz_sign_from_question_data_url(value: Any, email: str) -> str | None:
+    """Validate the official per-student questionData URL and extract its signature."""
+    if not isinstance(value, str) or len(value) > 8192:
+        return None
+    try:
+        parsed = urlsplit(value.strip())
+        params = parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
+    except ValueError:
+        return None
+    if (parsed.scheme != "https" or parsed.netloc.lower() != "exam.sanand.workers.dev"
+            or parsed.path != "/questionData" or parsed.fragment or parsed.username or parsed.password):
+        return None
+    if any(len(params.get(key, [])) != 1 for key in ("email", "quizSign", "questionId", "path")):
+        return None
+    if normalize_email(params["email"][0]) != email:
+        return None
+    if params["questionId"][0] != LEDGER_QUESTION_ID or params["path"][0] != "/":
+        return None
+    quiz_sign = params["quizSign"][0]
+    if not quiz_sign or len(quiz_sign) > 4096:
+        return None
+    return quiz_sign
+
+
 @router.get("/health")
 async def health():
     return {"status": "ok", "service": "t32026-ga1"}
@@ -64,12 +90,23 @@ async def onboard(request: Request):
     email = normalize_email(body.get("email")) if isinstance(body, dict) else ""
     if len(email) > 254 or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
         return JSONResponse(status_code=400, content={"error": "VALID_EMAIL_REQUIRED"})
-    raw_sign = body.get("quiz_sign", "") if isinstance(body, dict) else ""
-    if not isinstance(raw_sign, (str, int)):
-        return JSONResponse(status_code=400, content={"error": "INVALID_QUIZ_SIGN"})
-    quiz_sign = str(raw_sign).strip()
-    if len(quiz_sign) > 512:
-        return JSONResponse(status_code=400, content={"error": "INVALID_QUIZ_SIGN"})
+    question_data_url = body.get("question_data_url") if isinstance(body, dict) else None
+    quiz_sign = _quiz_sign_from_question_data_url(question_data_url, email)
+    if not quiz_sign:
+        return JSONResponse(status_code=400, content={"error": "VALID_LEDGER_QUESTION_DATA_URL_REQUIRED"})
+    # Reject an expired/incorrect signature before overwriting a working tenant.
+    params = {"email": email, "quizSign": quiz_sign, "questionId": LEDGER_QUESTION_ID, "path": "/"}
+    try:
+        async with httpx.AsyncClient(timeout=_UPSTREAM_TIMEOUT, follow_redirects=False) as client:
+            await _fetch_upstream(client, f"{EXAM_ORIGIN}/questionData", params)
+    except httpx.TimeoutException:
+        return JSONResponse(status_code=504, content={"error": "LEDGER_DISCOVERY_TIMEOUT"})
+    except httpx.HTTPStatusError as exc:
+        return JSONResponse(status_code=502, content={"error": "LEDGER_UPSTREAM_REJECTED", "upstream_status": exc.response.status_code})
+    except httpx.HTTPError:
+        return JSONResponse(status_code=502, content={"error": "LEDGER_UPSTREAM_CONNECTION_FAILED"})
+    except ValueError:
+        return JSONResponse(status_code=502, content={"error": "LEDGER_INVALID_UPSTREAM_JSON"})
     try:
         await asyncio.to_thread(set_config, email, {"quiz_sign": quiz_sign})
     except Exception:
@@ -91,10 +128,11 @@ async def onboard(request: Request):
 
 @router.get("/{email}/effective-config")
 @router.get("/effective-config")
-async def get_effective_config(request: Request, email: str | None = None, set: list[str] = Query(default=[])):
-    # The live verifier sends valid fresh CLI overrides and compares them with
-    # the documented defaults. Keep this route stateless and mask the secret.
-    return JSONResponse(content=effective_config(set))
+async def get_effective_config(request: Request, email: str | None = None, set: list[str] = Query(default=[]), version: str = ""):
+    student = _email(request, email)
+    if not student:
+        return JSONResponse(status_code=400, content={"error": "EMAIL_REQUIRED"})
+    return JSONResponse(content=effective_config(set, student, version))
 
 
 def _api_paths(value: Any) -> list[str]:
@@ -151,6 +189,30 @@ async def _fetch_upstream(client: httpx.AsyncClient, url: str, params: dict[str,
 
 
 async def _ledger_resources(student: str) -> tuple[dict[str, Any] | None, JSONResponse | None]:
+    task = _LEDGER_INFLIGHT.get(student)
+    if task is None:
+        if len(_LEDGER_INFLIGHT) >= _CACHE_MAX_TENANTS:
+            return None, JSONResponse(status_code=503, content={"error": "LEDGER_DISCOVERY_BUSY"})
+
+        async def load():
+            try:
+                async with asyncio.timeout(12):
+                    return await _discover_ledger_resources(student)
+            except TimeoutError:
+                return None, JSONResponse(status_code=504, content={"error": "LEDGER_DISCOVERY_TIMEOUT"})
+
+        task = asyncio.create_task(load())
+        _LEDGER_INFLIGHT[student] = task
+
+        def finished(completed):
+            if _LEDGER_INFLIGHT.get(student) is completed:
+                _LEDGER_INFLIGHT.pop(student, None)
+
+        task.add_done_callback(finished)
+    return await asyncio.shield(task)
+
+
+async def _discover_ledger_resources(student: str) -> tuple[dict[str, Any] | None, JSONResponse | None]:
     if not student:
         return None, JSONResponse(status_code=400, content={"error": "EMAIL_REQUIRED"})
     try:
@@ -171,7 +233,7 @@ async def _ledger_resources(student: str) -> tuple[dict[str, Any] | None, JSONRe
             _LEDGER_CACHE.pop(cache_key, None)
 
     url = f"{EXAM_ORIGIN}/questionData"
-    base_params = {"email": student, "quizSign": quiz_sign, "questionId": "q-ledger-agent-server", "path": "/"}
+    base_params = {"email": student, "quizSign": quiz_sign, "questionId": LEDGER_QUESTION_ID, "path": "/"}
     try:
         async with httpx.AsyncClient(timeout=_UPSTREAM_TIMEOUT, follow_redirects=False, limits=httpx.Limits(max_connections=48, max_keepalive_connections=24)) as client:
             root = await _fetch_upstream(client, url, base_params)
@@ -190,8 +252,15 @@ async def _ledger_resources(student: str) -> tuple[dict[str, Any] | None, JSONRe
                     resources[item[0]] = item[1]
     except httpx.TimeoutException:
         return None, JSONResponse(status_code=504, content={"error": "LEDGER_DISCOVERY_TIMEOUT"})
+    except httpx.HTTPStatusError as exc:
+        # Exception text contains the signed request URL. Never expose it.
+        status = exc.response.status_code
+        content = {"error": "LEDGER_UPSTREAM_REJECTED", "upstream_status": status}
+        if status in (401, 403):
+            content["action"] = "Save this email's current signed Ledger URL again in the dashboard."
+        return None, JSONResponse(status_code=502, content=content)
     except httpx.HTTPError:
-        return None, JSONResponse(status_code=502, content={"error": "LEDGER_DISCOVERY_FAILED"})
+        return None, JSONResponse(status_code=502, content={"error": "LEDGER_UPSTREAM_CONNECTION_FAILED"})
     except ValueError:
         return None, JSONResponse(status_code=502, content={"error": "LEDGER_INVALID_UPSTREAM_JSON"})
 

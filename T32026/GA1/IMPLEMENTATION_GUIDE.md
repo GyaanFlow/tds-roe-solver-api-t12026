@@ -15,7 +15,7 @@ Open `http://localhost:7860/ga1/`. The service endpoints and API reference are a
 
 ## 2. Tenant storage
 
-The service stores each normalized exam email's `quizSign` in a small tenant record.
+The service stores each normalized exam email's Ledger signature in a small tenant record. Onboarding takes the complete signed `questionData` URL shown by the active exam, validates its host, email, question ID, and root path, then stores only the decoded signature. Never commit or share that signed URL.
 
 - For local development or one instance with a persistent disk, set `GA1_TENANT_DB_PATH` to a writable SQLite file on that disk. If unset, the database is created under the repository's `work/` directory.
 - For multiple workers or replicas, set `GA1_REDIS_URL` to a shared Redis instance. Redis is already listed in `hf_space/requirements.txt`. All replicas must use the same Redis URL.
@@ -32,22 +32,22 @@ Keep Redis credentials and other secrets in the host's secret/environment config
 
 ## 3. Onboard a student
 
-Use the dashboard setup form, or call:
+Paste the learner's complete signed Ledger URL in the dashboard, or call:
 
 ```http
 POST /ga1/onboard
 Content-Type: application/json
 
-{"email":"student@example.com","quiz_sign":"<active-session-quizSign>"}
+{"email":"student@example.com","question_data_url":"https://exam.sanand.workers.dev/questionData?email=student%40example.com&quizSign=<encoded-signature>&questionId=q-ledger-agent-server&path=%2F"}
 ```
 
-The response includes the email-scoped routes. Use the exact returned URLs when exercising the service or submitting endpoints. The `quizSign` is required for Ledger discovery; the config and MCP endpoints do not depend on ledger data.
+The URL's email must match the submitted email, and its `questionId` and `path` must be `q-ledger-agent-server` and `/`. Onboarding verifies access to the root before saving the signature; a rejected URL cannot overwrite existing setup. The response includes clean email-scoped routes and does not echo the signed URL or signature. Use the exact returned URLs when exercising the service or submitting endpoints. The signed URL is required for Ledger discovery; the config and MCP endpoints do not depend on ledger data.
 
 ## 4. Endpoint contracts
 
 | Question | Request | Expected behavior |
 | --- | --- | --- |
-| Config precedence | `GET /ga1/{email}/effective-config?set=port=8123&set=debug=yes` | Applies repeated CLI overrides in order, coerces numeric/boolean fields, maps `num_workers` to `workers`, and always masks `api_key`. |
+| Config precedence | `GET /ga1/{email}/effective-config?set=port=8123&set=debug=yes` | Reproduces the student's seeded YAML/.env/OS layers, then applies CLI overrides, coerces types, and masks `api_key`. Add `version` only if the official question uses a nonempty version. |
 | Ledger discovery | `GET /ga1/{email}/ledger/discover` | Fetches the signed student-specific schema and returns resource paths and field names, not ledger rows. |
 | Ledger answer | `POST /ga1/{email}/ledger/answer` with `{"question":"..."}` | Returns `{"answer": ...}` for supported revenue, refund, product, customer, date, and region questions. Upstream and unsupported-question failures return explicit HTTP errors. |
 | MCP server | `POST /ga1/{email}/mcp` | Supports `initialize`, `notifications/initialized`, `ping`, `tools/list`, and `tools/call` for the single `solve_challenge` tool. |
@@ -58,7 +58,7 @@ Each MCP tool call must include a fresh `X-Exam-Challenge` header containing 32 
 
 The dashboard runs real calls against the service:
 
-1. Save the exam email and active `quizSign`.
+1. Save the exam email and paste that student's full signed Ledger `questionData` URL.
 2. Run the config override check.
 3. Discover Ledger paths and fields, then submit a sample question.
 4. Run MCP initialize, tools/list, and a fresh challenge call.
@@ -75,5 +75,7 @@ These checks cover representative contracts and edge cases. They are not a subst
 ## 6. Scaling and operational notes
 
 The SQLite backend is appropriate for a single instance with persistent storage. Redis is the shared tenant store for multi-instance deployments. Ledger discovery uses bounded outbound concurrency, short-lived per-process caching, response-size limits, and request timeouts. Cache entries are local to a worker, so a cache miss on another replica can repeat upstream discovery.
+
+Simultaneous questions for one email share discovery within a worker, with a 12-second total discovery deadline. `LEDGER_UPSTREAM_REJECTED` includes the upstream HTTP status without revealing the signature. For 401/403, save a current signed URL for the same email; connection errors are reported separately.
 
 Before serving a large cohort, configure shared Redis and run a deployment-level load test with realistic distinct tenants and concurrent Ledger requests. Verify the exam upstream's rate limits and observed latency; the local tests do not establish a safe student count. Ledger field names and question wording may vary by student, so use the dashboard's schema manifest to investigate any unsupported response rather than treating a plausible numeric answer as verified.

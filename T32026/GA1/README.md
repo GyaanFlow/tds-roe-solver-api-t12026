@@ -4,11 +4,11 @@ This hub implements the three GA1 questions whose official September 2026 source
 
 | Exam question | Route | Contract |
 | --- | --- | --- |
-| Resolve 12-Factor Config Precedence | `GET /ga1/{email}/effective-config?set=key=value` | Defaults, repeated CLI overrides, typed values, `num_workers` alias, masked `api_key` |
+| Resolve 12-Factor Config Precedence | `GET /ga1/{email}/effective-config?set=key=value` | Student-seeded YAML/.env/OS layers, repeated CLI overrides, typed values, `num_workers` alias, masked `api_key` |
 | The Ledger Agent | `POST /ga1/{email}/ledger/answer` | Accepts `{"question":"..."}` and responds with `{"answer":...}` |
 | Build a Live MCP Server | `POST /ga1/{email}/mcp` | MCP initialize, tools/list, and tools/call for the required `solve_challenge` tool |
 
-The dashboard is available at `/ga1/`. Save the exam email and active-session `quizSign` there. The Ledger question's root data URL is student-specific and signed; the hub uses the official `questionData` endpoint and the configured `quizSign` to discover it. The dashboard's discovery response contains endpoint/schema metadata only, not the private ledger rows.
+The dashboard is available at `/ga1/`. Save the exam email and paste that student's full signed Ledger `questionData` URL there. The hub validates its host, email, question ID, and root path, then stores only the signature for server-side discovery. Keep the signed URL private. The dashboard's discovery response contains endpoint/schema metadata only, not the private ledger rows.
 
 ## Tenant storage and scaling
 

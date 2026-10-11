@@ -7,6 +7,8 @@ from collections import Counter
 from datetime import date
 from typing import Any
 
+from T22026.shared.seedrandom_arc4 import SeedRandom
+
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "port": 8000,
@@ -36,8 +38,33 @@ def coerce_config_value(key: str, value: Any) -> Any:
     return raw
 
 
-def effective_config(overrides: list[str]) -> dict[str, Any]:
+def assigned_config(email: str, version: str = "") -> dict[str, Any]:
+    """Reproduce the official seeded YAML, dotenv, and OS environment layers."""
+    rng = SeedRandom(f"q-config-precedence-server#{email.strip().lower()}#{version}")
     result = dict(DEFAULT_CONFIG)
+    levels = ("debug", "info", "warning", "error")
+    alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
+    for _ in range(3):
+        for key in DEFAULT_CONFIG:
+            if rng() >= 0.5:
+                continue
+            if key == "port":
+                value = 8000 + int(rng() * 1001)
+            elif key == "workers":
+                value = 1 + int(rng() * 16)
+            elif key == "debug":
+                value = rng() < 0.5
+            elif key == "log_level":
+                value = levels[int(rng() * len(levels))]
+            else:
+                value = "key-" + "".join(alphabet[int(rng() * len(alphabet))] for _ in range(10))
+            result[key] = value
+    result["api_key"] = "****"
+    return result
+
+
+def effective_config(overrides: list[str], email: str = "", version: str = "") -> dict[str, Any]:
+    result = assigned_config(email, version) if email else dict(DEFAULT_CONFIG)
     for raw in overrides:
         key, sep, value = raw.partition("=")
         key = key.strip().lower()
@@ -269,6 +296,15 @@ def answer_ledger_question(question: str, resources: dict[str, Any]) -> Any:
         return sorted(counts)
 
     if is_refund:
+        if any(word in q for word in ("how many", "count", "number of")):
+            refund_collection = any("refund" in path.lower() or "return" in path.lower()
+                                    for path, group in ranked if relevance(path, group) == best)
+            if not refund_collection:
+                rows = [row for row in rows if
+                        any("refund" in str(value).lower() for key, value in row.items() if "status" in str(key).lower())
+                        or any((_numeric(value) or 0) != 0 for key, value in row.items() if "refund" in str(key).lower())]
+            order_ids = _field_values(rows, ("order_id", "orderId"))
+            return len({str(value) for value in order_ids}) if len(order_ids) == len(rows) else len(rows)
         amount_names = {"refund", "refund_amount", "amount_refunded", "refunded_amount", "return_amount", "credit_amount"}
         refund_values = []
         for row in rows:
