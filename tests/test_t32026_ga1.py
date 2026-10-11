@@ -233,6 +233,27 @@ def test_acme_bulk_ndjson_skips_the_85_page_chain(monkeypatch):
     assert answer_ledger_question("How much did North earn in May 2026, in US dollars?", data) == 113
 
 
+def test_named_product_filters_apply_before_distinct_customer_count():
+    def order(id, customer, product, **kwargs):
+        return {"id": id, "customer": customer, "region": "North", "product": product, "qty": 1,
+                "amount": 100, "currency": "USD", "status": "paid",
+                "created_at": "2026-05-02T00:00:00Z", "updated_at": "2026-05-03T00:00:00Z", **kwargs}
+    data = {"/export": {"orders": [
+        order("1", "A", "Juicer", qty=3), order("2", "A", "Juicer"), order("3", "B", "Juicer"),
+        order("4", "C", "Mixer"), order("5", "D", "Juicer"),
+        order("5", "D", "Juicer", status="void", updated_at="2026-05-04T00:00:00Z"),
+        order("6", "E", "Juicer", region="East"), order("7", "A", "Mixer"),
+    ]}}
+    assert answer_ledger_question("How many distinct customers have bought a Juicer (paid orders only)?", data) == 3
+    assert answer_ledger_question("How many unique customers bought the product Juicer in North in May 2026?", data) == 2
+    assert answer_ledger_question("How many distinct buyers purchased Juicers in North in May 2026?", data) == 2
+    assert answer_ledger_question("How many distinct customers bought both a Juicer and a Mixer?", data) == 1
+    assert answer_ledger_question("How many distinct customers bought a Juicer in North in April 2026?", data) == 0
+    assert answer_ledger_question("Total revenue in North in May 2026 from Juicer in USD?", data) == 300
+    assert answer_ledger_question("How many paid orders for Juicer in North in May 2026?", data) == 3
+    assert answer_ledger_question("How many Juicers sold in North in May 2026 (paid orders only)?", data) == 5
+
+
 def test_tenant_store_atomic_merge_and_normalized_key(monkeypatch):
     monkeypatch.delenv("GA1_REDIS_URL", raising=False)
     with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent) as folder:

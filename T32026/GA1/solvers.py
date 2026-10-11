@@ -248,11 +248,19 @@ def _sum_fields(rows: list[dict[str, Any]], names: tuple[str, ...]) -> float | N
 
 def _answer_acme(question: str, rows: list[dict[str, Any]], resources: dict[str, Any]) -> Any:
     q = question.lower()
-    rows = _filters(question, _dedupe_rows(rows))
+    rows = _dedupe_rows(rows)
+    # Resolve product names from the student's own catalog before aggregating.
+    # A name is a filter even when the question never says "product".
+    catalog = {str(row["product"]) for row in rows}
+    named_products = {name for name in catalog
+                      if re.search(rf"(?<!\w){re.escape(name.lower())}(?:s)?(?!\w)", q)}
+    rows = _filters(question, rows)
+    if named_products:
+        rows = [row for row in rows if str(row["product"]) in named_products]
     is_refund = bool(re.search(r"\b(refund\w*|return\w*)\b", q))
     is_count = any(term in q for term in ("how many", "number of", "count", "distinct", "unique"))
-    is_product = bool(re.search(r"\b(product\w*|item\w*|sku)\b", q))
-    is_customer = bool(re.search(r"\b(customer\w*|client\w*)\b", q))
+    is_product = bool(named_products) or bool(re.search(r"\b(product\w*|item\w*|sku)\b", q))
+    is_customer = bool(re.search(r"\b(customer\w*|client\w*|buyers?|people)\b", q))
     paid = [row for row in rows if str(row.get("status", "")).lower() == "paid"]
     refunded = [row for row in rows if str(row.get("status", "")).lower() == "refunded"]
     rates: dict[str, Any] = {"USD": 1}
@@ -279,19 +287,28 @@ def _answer_acme(question: str, rows: list[dict[str, Any]], resources: dict[str,
     else:
         selected = paid
 
+    main_clause = q.split("(", 1)[0]
+    if (is_count and not is_customer and re.search(r"\borders?\b", main_clause)
+            and not re.search(r"\b(units|items|products)\b", main_clause)):
+        return len(selected if is_refund or "paid" in q else rows)
+
     if is_product or is_customer:
-        key = "product" if is_product else "customer"
+        key = "customer" if is_customer else "product"
         if is_customer and is_count:
-            buying = any(term in q for term in ("pay", "bought", "buy", "purchas", "spend", "spent"))
+            buying = any(term in q for term in ("paid", "pay", "bought", "buy", "purchas", "spend", "spent"))
             customers = selected if is_refund or buying else rows
+            if len(named_products) > 1 and re.search(r"\b(both|each)\b", q):
+                sets = [{row["customer"] for row in customers if row["product"] == name}
+                        for name in named_products]
+                return len(set.intersection(*sets))
             return len({row[key] for row in customers})
         totals: dict[str, Decimal] = {}
-        units = is_product and not any(word in q for word in ("revenue", "earn", "spend", "spent", "money", "dollar", "usd", "sales value"))
+        units = not is_customer and is_product and not any(word in q for word in ("revenue", "earn", "spend", "spent", "money", "dollar", "usd", "sales value"))
         for row in selected:
             name = str(row[key])
             value = Decimal(str(row.get("qty", 0))) if units else usd(row)
             totals[name] = totals.get(name, Decimal(0)) + value
-        if is_count and is_product:
+        if is_count and is_product and not is_customer:
             if "distinct" in q or "unique" in q:
                 return len(totals)
             return int(sum(totals.values(), Decimal(0)))

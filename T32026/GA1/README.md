@@ -14,6 +14,8 @@ The dashboard is available at `/ga1/`. Save the exam email and paste that studen
 
 Ledger discovery follows named links and retains top-level pagination parameters. For the Acme schema, it uses the complete NDJSON export instead of fetching 85 pages: newest `updated_at` per order ID, Asia/Kolkata business dates, paid-only revenue, and `usd_per_unit` currency conversion. Refund counts count current refunded orders; totals use Decimal arithmetic rounded to cents after summation.
 
+Product names are matched against each student's current catalog and applied before aggregation, including distinct-customer and order-count questions. Customer counts count distinct customer IDs rather than products or purchases; named product constraints combine with region, date, and paid/refunded status filters.
+
 Tenant configuration uses SQLite with transactions and WAL mode by default. Set `GA1_TENANT_DB_PATH` to a persistent mounted-volume path for a single-instance deployment. For multiple workers/replicas, set `GA1_REDIS_URL` to a shared Redis service; startup/read failures are reported instead of silently falling back to per-process memory. Do not use a container's ephemeral filesystem for persistent student configuration. Ledger upstream calls are concurrency-limited, bounded by timeouts, and cached briefly in each worker; the tenant store is shared when Redis is configured.
 
 ## Local startup
