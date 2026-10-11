@@ -1,4 +1,5 @@
 import codecs
+import asyncio
 import random
 import os
 import shlex
@@ -9,6 +10,7 @@ from itertools import permutations
 from pathlib import Path
 
 import pytest
+import httpx
 
 from fastapi.testclient import TestClient
 
@@ -97,7 +99,7 @@ def test_generated_shell_pipelines_match_decoder(tmp_path):
     plaintext = "Hello café\r\nworld\t$(touch SHOULD_NOT_EXIST)\n"
     for order in permutations(("rot13", "hex", "reverse")):
         source = encode(plaintext, order)
-        (tmp_path / "cipher.txt").write_bytes((" \n" + source + "\r\n ").encode("ascii"))
+        (tmp_path / "cipher.txt").write_bytes(("# Challenge response\r\n \n" + source + "\r\n# End\r\n ").encode("ascii"))
         for candidate in decode_termlog(source)["candidates"]:
             for pipeline in candidate["shell_pipelines"]:
                 result = subprocess.run([bash, "-c", prefix + "set -o pipefail; " + pipeline], cwd=tmp_path, capture_output=True, timeout=10)
@@ -115,3 +117,33 @@ def test_mounted_hub_q13_route_and_student_middleware():
             result = client.post(f"/ga1/{email}%40example.com/q13/decode", json={"ciphertext": "6162"})
             assert result.status_code == 200
             assert result.json() == expected.json()
+
+
+def test_real_challenge_response_comments_and_unique_result():
+    source = "# This string is your code, put through 3 reversible shell-friendly transforms\n# It changes every 3 hours.\n14a5942315a42384d29574\n"
+    result = decode_termlog(source)
+    assert result["status"] == "unique_readable_candidate"
+    assert result["answer"] == "TL-U2WD2VMN"
+    assert result["candidates"][0]["decode_orders"] == [["reverse", "hex", "rot13"]]
+    with TestClient(app) as client:
+        response = client.post("/q13/decode", json={"ciphertext": source})
+        assert response.status_code == 200
+        assert response.json() == result
+        for invalid in ("# Comments only", "6162\n6261", "# first\n6162\n# second\n6261"):
+            r = client.post("/q13/decode", json={"ciphertext": invalid})
+            assert r.status_code == 400
+            assert r.json() == {"error": "CIPHERTEXT_SINGLE_LINE_REQUIRED"}
+
+
+def test_concurrent_student_requests_are_stateless():
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            async def check(i):
+                plaintext = f"TL-USER-{i:04d}"
+                order = list(permutations(("rot13", "hex", "reverse")))[i % 6]
+                response = await client.post(f"/student{i}@example.com/q13/decode", json={"ciphertext": encode(plaintext, order)})
+                assert response.status_code == 200
+                assert plaintext in [c["plaintext"] for c in response.json()["candidates"]]
+                assert response.headers["cache-control"] == "no-store"
+            await asyncio.gather(*(check(i) for i in range(100)))
+    asyncio.run(run())

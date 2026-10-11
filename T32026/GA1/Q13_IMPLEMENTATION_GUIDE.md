@@ -21,10 +21,12 @@ Request:
 {"ciphertext":"6162"}
 ```
 
-Supply the encoded string itself, **not the entire challenge JSON, secret URL,
-or quizSign**. No outbound fetch occurs. The input is limited to 16,384 ASCII
-characters (32 KiB JSON request). Surrounding whitespace is removed; internal
-whitespace is not silently rewritten.
+Supply the encoded string or the complete text response from curl, including
+its `#` comment lines. Do **not** supply JSON, a curl command, secret URL, or
+quizSign. No outbound fetch occurs. The input is limited to 16,384 ASCII
+characters (32 KiB JSON request). Blank lines and `#` comments are ignored;
+exactly one payload line must remain. Surrounding whitespace is removed;
+internal whitespace is not silently rewritten.
 
 Response fields:
 
@@ -85,20 +87,21 @@ the signed URL out of the terminal transcript; do not type passwords or keys:
 ```sh
 read -r -s -p 'Paste your Q13 challenge URL: ' CHALLENGE_URL
 printf '\n'
-curl --fail --silent --show-error "$CHALLENGE_URL" -o challenge.json
+curl --fail --silent --show-error "$CHALLENGE_URL" -o cipher.txt
 unset CHALLENGE_URL
-cat challenge.json
+cat cipher.txt
 ```
 
-Inspect the actual JSON and extract its ciphertext string into `cipher.txt`
-using the field name it actually provides (this guide does not assume a schema
-not exposed in the client bundle). Preserve the string exactly, with no quotes
-or JSON escaping. Ask the dashboard helper for candidates, then run the chosen
+The observed challenge is plain text: `#` comments followed by a ciphertext
+line. The fetch command above saves it as `cipher.txt`. You may also extract
+its ciphertext line; the helper accepts either form.
+If your response is an error or another format, inspect it rather than passing
+it as ciphertext. Ask the dashboard helper for candidates, then run the chosen
 pipeline **locally in the recording** against `cipher.txt`. For example, if the
 reported undo order is hex → reverse → ROT13:
 
 ```sh
-python3 -c 'import sys; sys.stdout.buffer.write(sys.stdin.buffer.read().strip())' < cipher.txt | xxd -r -p | python3 -c 'import sys; sys.stdout.buffer.write(sys.stdin.buffer.read().decode("utf-8")[::-1].encode("utf-8"))' | LC_ALL=C tr 'A-Za-z' 'N-ZA-Mn-za-m'
+python3 -c 'import sys; lines=[s.strip() for s in sys.stdin.buffer.read().decode("ascii").splitlines() if s.strip() and not s.lstrip().startswith("#")]; assert len(lines)==1, "Expected one ciphertext line"; sys.stdout.buffer.write(lines[0].encode("ascii"))' < cipher.txt | xxd -r -p | python3 -c 'import sys; sys.stdout.buffer.write(sys.stdin.buffer.read().decode("utf-8")[::-1].encode("utf-8"))' | LC_ALL=C tr 'A-Za-z' 'N-ZA-Mn-za-m'
 printf '\n'
 ```
 
@@ -127,7 +130,8 @@ Tests cover 250 generated strings across all six permutations (1,500 cases),
 candidate round-trips, ambiguity, Unicode/multiline plaintext, input limits,
 stateless tenant aliases, mounted hub middleware, real shell pipelines against
 safe fixtures (when Bash/xxd/tr are installed), and existing GA1 regressions.
-The current local run passed all 22 tests without skips. These are synthetic
+Tests also cover the observed commented response and 100 concurrent local
+student requests. These are synthetic
 decoder/API tests, not end-to-end official recording-grader validation.
 
 The existing GA1 router mounting exposes this route when the updated code is

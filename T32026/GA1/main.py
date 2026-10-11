@@ -95,8 +95,9 @@ async def decode_q13(request: Request, email: str | None = None):
         return JSONResponse(status_code=400, content={"error": "CIPHERTEXT_STRING_REQUIRED"})
     try:
         result = decode_termlog(body["ciphertext"])
-    except ValueError:
-        return JSONResponse(status_code=400, content={"error": "CIPHERTEXT_REQUIRED_ASCII_MAX_16384"})
+    except ValueError as exc:
+        # Only fixed decoder error codes; never echo the submitted data.
+        return JSONResponse(status_code=400, content={"error": str(exc)})
     # Stateless: no signature, student dataset, or decoded code is stored.
     status = 200 if result["candidates"] else 422
     return JSONResponse(status_code=status, content=result, headers={"Cache-Control": "no-store"})
