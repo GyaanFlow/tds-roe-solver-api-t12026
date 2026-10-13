@@ -60,7 +60,7 @@ def test_ledger_upstream_failure_is_diagnosable_without_leaking_signature(monkey
     client_type = httpx.AsyncClient
     transport = httpx.MockTransport(lambda request: httpx.Response(403, json={"error": "denied"}))
     monkeypatch.setattr(main, "get_config", lambda email: {"quiz_sign": "sentinel-private-signature"})
-    monkeypatch.setattr(main.httpx, "AsyncClient", lambda **kwargs: client_type(transport=transport, **kwargs))
+    monkeypatch.setattr(main.httpx, "AsyncClient", lambda **kwargs: client_type(**{**kwargs, "transport": transport}))
     main._LEDGER_CACHE.clear()
     with TestClient(app) as client:
         r = client.post("/student@example.com/ledger/answer", json={"question": "Total revenue in East in March 2026?"})
@@ -74,7 +74,7 @@ def test_onboarding_does_not_replace_tenant_with_rejected_signature(monkeypatch)
     transport = httpx.MockTransport(lambda request: httpx.Response(403))
     saved = []
     monkeypatch.setattr(main, "set_config", lambda *args: saved.append(args))
-    monkeypatch.setattr(main.httpx, "AsyncClient", lambda **kwargs: client_type(transport=transport, **kwargs))
+    monkeypatch.setattr(main.httpx, "AsyncClient", lambda **kwargs: client_type(**{**kwargs, "transport": transport}))
     with TestClient(app) as client:
         r = client.post("/onboard", json={
             "email": "student@example.com",
@@ -98,7 +98,7 @@ def test_simultaneous_ledger_questions_share_discovery(monkeypatch):
         return httpx.Response(404)
 
     monkeypatch.setattr(main, "get_config", lambda email: {"quiz_sign": "test-signature"})
-    monkeypatch.setattr(main.httpx, "AsyncClient", lambda **kwargs: client_type(transport=httpx.MockTransport(upstream), **kwargs))
+    monkeypatch.setattr(main.httpx, "AsyncClient", lambda **kwargs: client_type(**{**kwargs, "transport": httpx.MockTransport(upstream)}))
     main._LEDGER_CACHE.clear()
 
     async def run():
@@ -130,7 +130,7 @@ def test_named_links_and_next_pages_are_discovered_without_signed_url_leaks(monk
         return httpx.Response(200, json=payloads[path]) if path in payloads else httpx.Response(404)
 
     monkeypatch.setattr(main, "get_config", lambda email: {"quiz_sign": "test-signature"})
-    monkeypatch.setattr(main.httpx, "AsyncClient", lambda **kwargs: client_type(transport=httpx.MockTransport(upstream), **kwargs))
+    monkeypatch.setattr(main.httpx, "AsyncClient", lambda **kwargs: client_type(**{**kwargs, "transport": httpx.MockTransport(upstream)}))
     main._LEDGER_CACHE.clear()
     data, error = asyncio.run(main._ledger_resources("student@example.com"))
     assert error is None
@@ -225,7 +225,7 @@ def test_acme_bulk_ndjson_skips_the_85_page_chain(monkeypatch):
         return httpx.Response(404)
 
     monkeypatch.setattr(main, "get_config", lambda email: {"quiz_sign": "test-signature"})
-    monkeypatch.setattr(main.httpx, "AsyncClient", lambda **kwargs: client_type(transport=httpx.MockTransport(upstream), **kwargs))
+    monkeypatch.setattr(main.httpx, "AsyncClient", lambda **kwargs: client_type(**{**kwargs, "transport": httpx.MockTransport(upstream)}))
     main._LEDGER_CACHE.clear()
     data, error = asyncio.run(main._ledger_resources("student@example.com"))
     assert error is None
@@ -308,7 +308,7 @@ def test_stateless_ledger_key_round_trips_and_routes_through_gateway(monkeypatch
         return httpx.Response(404)
 
     client_type = httpx.AsyncClient
-    monkeypatch.setattr(main.httpx, "AsyncClient", lambda **kwargs: client_type(transport=httpx.MockTransport(upstream), **kwargs))
+    monkeypatch.setattr(main.httpx, "AsyncClient", lambda **kwargs: client_type(**{**kwargs, "transport": httpx.MockTransport(upstream)}))
     monkeypatch.setattr(main, "get_config", lambda email: (_ for _ in ()).throw(AssertionError("store must not be needed")))
     main._LEDGER_CACHE.clear()
     with TestClient(gateway) as client:

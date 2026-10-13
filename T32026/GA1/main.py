@@ -27,7 +27,14 @@ _LEDGER_INFLIGHT: dict[str, asyncio.Task] = {}
 _UPSTREAM_LIMIT = asyncio.Semaphore(48)
 _CACHE_TTL_SECONDS = 300
 _CACHE_MAX_TENANTS = 512
-_UPSTREAM_TIMEOUT = httpx.Timeout(9.0, connect=3.0, pool=2.0)
+_UPSTREAM_TIMEOUT = httpx.Timeout(10.0, connect=6.0, pool=5.0)
+
+
+def _upstream_client(**kwargs) -> httpx.AsyncClient:
+    # Some hosts (e.g. Hugging Face Spaces) stall on IPv6 egress; bind IPv4 and
+    # retry failed connects so one slow handshake does not fail a grader batch.
+    transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=2)
+    return httpx.AsyncClient(timeout=_UPSTREAM_TIMEOUT, follow_redirects=False, transport=transport, **kwargs)
 
 
 def _email(request: Request, email: str | None = None) -> str:
@@ -129,7 +136,7 @@ async def onboard(request: Request):
     # Reject an expired/incorrect signature before overwriting a working tenant.
     params = {"email": email, "quizSign": quiz_sign, "questionId": LEDGER_QUESTION_ID, "path": "/"}
     try:
-        async with httpx.AsyncClient(timeout=_UPSTREAM_TIMEOUT, follow_redirects=False) as client:
+        async with _upstream_client() as client:
             await _fetch_upstream(client, f"{EXAM_ORIGIN}/questionData", params)
     except httpx.TimeoutException:
         return JSONResponse(status_code=504, content={"error": "LEDGER_DISCOVERY_TIMEOUT"})
@@ -239,7 +246,10 @@ async def _fetch_upstream(client: httpx.AsyncClient, url: str, params: dict[str,
         if key not in {"email", "quizSign", "questionId", "path"}:
             params[key] = value
     async with _UPSTREAM_LIMIT:
-        response = await client.get(url, params=params)
+        try:
+            response = await client.get(url, params=params)
+        except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.RemoteProtocolError):
+            response = await client.get(url, params=params)  # one retry
     response.raise_for_status()
     if len(response.content) > 8 * 1024 * 1024:
         raise ValueError("LEDGER_RESPONSE_TOO_LARGE")
@@ -259,7 +269,7 @@ async def _ledger_resources(student: str, quiz_sign: str | None = None) -> tuple
 
         async def load():
             try:
-                async with asyncio.timeout(12):
+                async with asyncio.timeout(13):
                     return await _discover_ledger_resources(student, quiz_sign)
             except TimeoutError:
                 return None, JSONResponse(status_code=504, content={"error": "LEDGER_DISCOVERY_TIMEOUT"})
@@ -299,7 +309,7 @@ async def _discover_ledger_resources(student: str, quiz_sign: str | None = None)
     url = f"{EXAM_ORIGIN}/questionData"
     base_params = {"email": student, "quizSign": quiz_sign, "questionId": LEDGER_QUESTION_ID, "path": "/"}
     try:
-        async with httpx.AsyncClient(timeout=_UPSTREAM_TIMEOUT, follow_redirects=False, limits=httpx.Limits(max_connections=48, max_keepalive_connections=24)) as client:
+        async with _upstream_client(limits=httpx.Limits(max_connections=48, max_keepalive_connections=24)) as client:
             root = await _fetch_upstream(client, url, base_params)
             resources: dict[str, Any] = {"/": root}
             seen = {"/"}
