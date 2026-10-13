@@ -25,7 +25,7 @@ _LEDGER_CACHE: OrderedDict[tuple[str, str], tuple[float, dict[str, Any]]] = Orde
 _LEDGER_CACHE_LOCK = asyncio.Lock()
 _LEDGER_INFLIGHT: dict[str, asyncio.Task] = {}
 _UPSTREAM_LIMIT = asyncio.Semaphore(48)
-_CACHE_TTL_SECONDS = 45
+_CACHE_TTL_SECONDS = 300
 _CACHE_MAX_TENANTS = 512
 _UPSTREAM_TIMEOUT = httpx.Timeout(9.0, connect=3.0, pool=2.0)
 
@@ -54,6 +54,17 @@ async def _json_body(request: Request, max_bytes: int = 32_768) -> tuple[Any | N
     except Exception:
         return None, JSONResponse(status_code=400, content={"error": "INVALID_JSON"})
     return body, None
+
+
+def encode_ledger_key(quiz_sign: str) -> str:
+    """URL-path-safe form of the exam signature (base64 -> base64url, unpadded)."""
+    return quiz_sign.replace("+", "-").replace("/", "_").rstrip("=")
+
+
+def decode_ledger_key(key: str) -> str | None:
+    if not key or len(key) > 4096 or not re.fullmatch(r"[A-Za-z0-9_-]+", key):
+        return None
+    return key.replace("-", "+").replace("_", "/") + "=" * (-len(key) % 4)
 
 
 def _quiz_sign_from_question_data_url(value: Any, email: str) -> str | None:
@@ -128,19 +139,26 @@ async def onboard(request: Request):
         return JSONResponse(status_code=502, content={"error": "LEDGER_UPSTREAM_CONNECTION_FAILED"})
     except ValueError:
         return JSONResponse(status_code=502, content={"error": "LEDGER_INVALID_UPSTREAM_JSON"})
+    # The stateless key URL works even if the tenant store is lost on redeploy,
+    # so a store failure no longer blocks onboarding.
+    stored = True
     try:
         await asyncio.to_thread(set_config, email, {"quiz_sign": quiz_sign})
     except Exception:
-        return JSONResponse(status_code=503, content={"error": "TENANT_STORE_UNAVAILABLE"})
-    base = f"{request.url.scheme}://{request.url.netloc}"
+        stored = False
+    scheme = request.headers.get("x-forwarded-proto", request.url.scheme).split(",")[0].strip()
+    base = f"{scheme}://{request.url.netloc}"
     prefix = f"{base}/ga1/{quote(email, safe='')}"
     return {
         "status": "ok",
         "email": email,
         "ledger_configured": bool(quiz_sign),
+        "tenant_store_saved": stored,
+        "submit_url": f"{prefix}/ledger/{encode_ledger_key(quiz_sign)}/answer",
         "routes": {
             "effective_config": f"{prefix}/effective-config",
-            "ledger_answer": f"{prefix}/ledger/answer",
+            "ledger_answer": f"{prefix}/ledger/{encode_ledger_key(quiz_sign)}/answer",
+            "ledger_answer_stored": f"{prefix}/ledger/answer",
             "ledger_discover": f"{prefix}/ledger/discover",
             "mcp": f"{prefix}/mcp",
         },
@@ -148,7 +166,9 @@ async def onboard(request: Request):
 
 
 @router.get("/{email}/effective-config")
+@router.get("/{email}/effective-config/", include_in_schema=False)
 @router.get("/effective-config")
+@router.get("/effective-config/", include_in_schema=False)
 async def get_effective_config(request: Request, email: str | None = None, set: list[str] = Query(default=[]), version: str = ""):
     student = _email(request, email)
     if not student:
@@ -230,8 +250,9 @@ async def _fetch_upstream(client: httpx.AsyncClient, url: str, params: dict[str,
     return response.json()
 
 
-async def _ledger_resources(student: str) -> tuple[dict[str, Any] | None, JSONResponse | None]:
-    task = _LEDGER_INFLIGHT.get(student)
+async def _ledger_resources(student: str, quiz_sign: str | None = None) -> tuple[dict[str, Any] | None, JSONResponse | None]:
+    inflight_key = f"{student}\n{quiz_sign or ''}"
+    task = _LEDGER_INFLIGHT.get(inflight_key)
     if task is None:
         if len(_LEDGER_INFLIGHT) >= _CACHE_MAX_TENANTS:
             return None, JSONResponse(status_code=503, content={"error": "LEDGER_DISCOVERY_BUSY"})
@@ -239,29 +260,30 @@ async def _ledger_resources(student: str) -> tuple[dict[str, Any] | None, JSONRe
         async def load():
             try:
                 async with asyncio.timeout(12):
-                    return await _discover_ledger_resources(student)
+                    return await _discover_ledger_resources(student, quiz_sign)
             except TimeoutError:
                 return None, JSONResponse(status_code=504, content={"error": "LEDGER_DISCOVERY_TIMEOUT"})
 
         task = asyncio.create_task(load())
-        _LEDGER_INFLIGHT[student] = task
+        _LEDGER_INFLIGHT[inflight_key] = task
 
         def finished(completed):
-            if _LEDGER_INFLIGHT.get(student) is completed:
-                _LEDGER_INFLIGHT.pop(student, None)
+            if _LEDGER_INFLIGHT.get(inflight_key) is completed:
+                _LEDGER_INFLIGHT.pop(inflight_key, None)
 
         task.add_done_callback(finished)
     return await asyncio.shield(task)
 
 
-async def _discover_ledger_resources(student: str) -> tuple[dict[str, Any] | None, JSONResponse | None]:
+async def _discover_ledger_resources(student: str, quiz_sign: str | None = None) -> tuple[dict[str, Any] | None, JSONResponse | None]:
     if not student:
         return None, JSONResponse(status_code=400, content={"error": "EMAIL_REQUIRED"})
-    try:
-        config = await asyncio.to_thread(get_config, student)
-    except Exception:
-        return None, JSONResponse(status_code=503, content={"error": "TENANT_STORE_UNAVAILABLE"})
-    quiz_sign = config.get("quiz_sign")
+    if not quiz_sign:
+        try:
+            config = await asyncio.to_thread(get_config, student)
+        except Exception:
+            return None, JSONResponse(status_code=503, content={"error": "TENANT_STORE_UNAVAILABLE"})
+        quiz_sign = config.get("quiz_sign")
     if not quiz_sign:
         return None, JSONResponse(status_code=409, content={"error": "ONBOARD_WITH_EMAIL_AND_QUIZ_SIGN_FIRST"})
     cache_key = (student, quiz_sign)
@@ -362,23 +384,39 @@ async def discover_ledger(request: Request, email: str | None = None):
     return {"origin": EXAM_ORIGIN, **_resource_manifest(resources or {})}
 
 
-@router.post("/{email}/ledger/answer")
-@router.post("/ledger/answer")
-async def ledger_answer(request: Request, email: str | None = None):
-    student = _email(request, email)
+async def _answer(request: Request, student: str, quiz_sign: str | None):
     body, error = await _json_body(request)
     if error:
         return error
     question = body.get("question") if isinstance(body, dict) else None
     if not isinstance(question, str) or not question.strip() or len(question) > 4000:
         return JSONResponse(status_code=400, content={"error": "QUESTION_REQUIRED_OR_TOO_LONG"})
-    resources, error = await _ledger_resources(student)
+    resources, error = await _ledger_resources(student, quiz_sign)
     if error:
         return error
     try:
-        return {"answer": answer_ledger_question(question, resources or {})}
+        return {"answer": await asyncio.to_thread(answer_ledger_question, question, resources or {})}
     except ValueError as exc:
         return JSONResponse(status_code=422, content={"error": "UNSUPPORTED_LEDGER_QUESTION", "detail": str(exc)})
+
+
+@router.post("/{email}/ledger/answer")
+@router.post("/ledger/answer")
+async def ledger_answer(request: Request, email: str | None = None):
+    return await _answer(request, _email(request, email), None)
+
+
+# Stateless form returned by onboarding: the signature travels in the URL, so the
+# endpoint keeps working across restarts/replicas with no tenant store at all.
+@router.post("/{email}/ledger/{key}/answer")
+@router.post("/{email}/ledger/{key}/answer/", include_in_schema=False)
+@router.post("/ledger/{key}/answer")
+@router.post("/ledger/{key}/answer/", include_in_schema=False)
+async def ledger_answer_keyed(request: Request, key: str, email: str | None = None):
+    quiz_sign = decode_ledger_key(key)
+    if not quiz_sign:
+        return JSONResponse(status_code=400, content={"error": "INVALID_LEDGER_KEY"})
+    return await _answer(request, _email(request, email), quiz_sign)
 
 
 async def _mcp_response(request: Request, email: str):
@@ -421,10 +459,12 @@ async def _mcp_response(request: Request, email: str):
 
 
 @router.post("/{email}/mcp")
+@router.post("/{email}/mcp/", include_in_schema=False)
 async def mcp_for_email(email: str, request: Request):
     return await _mcp_response(request, normalize_email(email))
 
 
 @router.post("/mcp")
+@router.post("/mcp/", include_in_schema=False)
 async def mcp_default(request: Request):
     return await _mcp_response(request, _email(request))

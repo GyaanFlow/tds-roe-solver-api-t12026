@@ -261,3 +261,61 @@ def test_tenant_store_atomic_merge_and_normalized_key(monkeypatch):
         tenant.set_config(" Student@Example.com ", {"quiz_sign": "first"})
         tenant.set_config("student@example.com", {"other": "kept"})
         assert tenant.get_config("STUDENT@example.com") == {"quiz_sign": "first", "other": "kept"}
+
+
+def _acme(id, **kwargs):
+    return {"id": id, "customer": "C1001", "region": "North", "product": "Rice Cooker", "qty": 1,
+            "unit_price": 100, "amount": 100, "currency": "USD", "status": "paid",
+            "created_at": "2026-03-10T10:00:00Z", "updated_at": "2026-03-11T10:00:00Z", **kwargs}
+
+
+def test_acme_engine_revisions_compare_instants_across_offsets_and_ist_month_edges():
+    data = {"/export": {"orders": [
+        # Same instant family: +05:30 revision is LATER than the Z row, so it wins.
+        _acme("o1", qty=2, amount=200, updated_at="2026-03-12T17:20:39.648Z"),
+        _acme("o1", qty=1, amount=100, updated_at="2026-03-17T06:04:32.758+05:30"),
+        # 2026-03-31T20:00Z is 1 April in Asia/Kolkata.
+        _acme("o2", created_at="2026-03-31T20:00:00Z", amount=50),
+        # 2025-12-31T21:00Z is 1 January 2026 in Asia/Kolkata.
+        _acme("o3", created_at="2025-12-31T21:00:00Z", amount=7, currency="EUR"),
+        _acme("o4", status="refunded", amount=30, product="Air Fryer", region="West"),
+    ]}, "/rates": {"usd_per_unit": {"USD": 1, "EUR": 1.13}}}
+    assert answer_ledger_question("What was the total revenue in USD from the North region in March 2026?", data) == 100
+    assert answer_ledger_question("Revenue in April 2026?", data) == 50
+    assert answer_ledger_question("How much revenue did we make in January 2026 from EUR orders?", data) == 7.91
+    assert answer_ledger_question("How many air fryers were refunded?", data) == 1
+    assert answer_ledger_question("What was the total refund amount in USD for the West?", data) == 30
+    assert answer_ledger_question("Which product generated the most revenue in Q1 2026?", data) == "Rice Cooker"
+    assert answer_ledger_question("Which customer spent the most?", data) == "C1001"
+
+
+def test_stateless_ledger_key_round_trips_and_routes_through_gateway(monkeypatch):
+    from hf_space.app import app as gateway
+
+    sign = "lJj+qL/cGw=="
+    assert main.decode_ledger_key(main.encode_ledger_key(sign)) == sign
+    assert main.decode_ledger_key("bad key!") is None
+    seen = []
+
+    def upstream(request):
+        seen.append(request.url.params.get("quizSign"))
+        path = request.url.params["path"]
+        if path == "/":
+            return httpx.Response(200, json={"links": {"export": "/export"}})
+        if path == "/export":
+            import json
+            return httpx.Response(200, text=json.dumps(_acme("o1")) + "\n", headers={"content-type": "application/x-ndjson"})
+        return httpx.Response(404)
+
+    client_type = httpx.AsyncClient
+    monkeypatch.setattr(main.httpx, "AsyncClient", lambda **kwargs: client_type(transport=httpx.MockTransport(upstream), **kwargs))
+    monkeypatch.setattr(main, "get_config", lambda email: (_ for _ in ()).throw(AssertionError("store must not be needed")))
+    main._LEDGER_CACHE.clear()
+    with TestClient(gateway) as client:
+        key = main.encode_ledger_key(sign)
+        r = client.post(f"/ga1/student%40example.com/ledger/{key}/answer", json={"question": "Total revenue in March 2026?"})
+        assert r.status_code == 200, r.text
+        assert r.json() == {"answer": 100.0}
+        # Unknown GA1 segments must not crash the gateway (previously NameError -> 500).
+        assert client.post("/ga1/student%40example.com/not-a-route", json={}).status_code in (404, 405)
+    assert set(seen) == {sign}

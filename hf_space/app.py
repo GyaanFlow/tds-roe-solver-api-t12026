@@ -68,14 +68,16 @@ class MultiTenantASGIMiddleware:
                 if parts and (parts[0].startswith("sess_") or parts[0] not in known_prefixes):
                     possible_session_or_token = parts[0]
                     if ga_version == "ga1":
+                        # GA1 has no session tokens.
                         resolved = None
-                    elif ga_version == "ga4":
-                        from T22026.GA4.shared.tenant import get_ga4_session_token as _get_session_token
-                    elif ga_version == "ga5":
-                        from T22026.GA5.shared.tenant import get_ga5_session_token as _get_session_token
                     else:
-                        from T22026.GA3.shared.tenant import get_ga3_session_token as _get_session_token
-                    resolved = _get_session_token(possible_session_or_token)
+                        if ga_version == "ga4":
+                            from T22026.GA4.shared.tenant import get_ga4_session_token as _get_session_token
+                        elif ga_version == "ga5":
+                            from T22026.GA5.shared.tenant import get_ga5_session_token as _get_session_token
+                        else:
+                            from T22026.GA3.shared.tenant import get_ga3_session_token as _get_session_token
+                        resolved = _get_session_token(possible_session_or_token)
                     if resolved:
                         token = resolved
                     else:

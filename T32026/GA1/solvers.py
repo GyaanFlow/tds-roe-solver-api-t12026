@@ -9,6 +9,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
 
 from T22026.shared.seedrandom_arc4 import SeedRandom
+from T32026.GA1 import ledger_engine
 
 
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -246,87 +247,30 @@ def _sum_fields(rows: list[dict[str, Any]], names: tuple[str, ...]) -> float | N
     return sum(values) if values else None
 
 
-def _answer_acme(question: str, rows: list[dict[str, Any]], resources: dict[str, Any]) -> Any:
-    q = question.lower()
-    rows = _dedupe_rows(rows)
-    # Resolve product names from the student's own catalog before aggregating.
-    # A name is a filter even when the question never says "product".
-    catalog = {str(row["product"]) for row in rows}
-    named_products = {name for name in catalog
-                      if re.search(rf"(?<!\w){re.escape(name.lower())}(?:s)?(?!\w)", q)}
-    rows = _filters(question, rows)
-    if named_products:
-        rows = [row for row in rows if str(row["product"]) in named_products]
-    is_refund = bool(re.search(r"\b(refund\w*|return\w*)\b", q))
-    is_count = any(term in q for term in ("how many", "number of", "count", "distinct", "unique"))
-    is_product = bool(named_products) or bool(re.search(r"\b(product\w*|item\w*|sku)\b", q))
-    is_customer = bool(re.search(r"\b(customer\w*|client\w*|buyers?|people)\b", q))
-    paid = [row for row in rows if str(row.get("status", "")).lower() == "paid"]
-    refunded = [row for row in rows if str(row.get("status", "")).lower() == "refunded"]
-    rates: dict[str, Any] = {"USD": 1}
+_ACME_CACHE: dict[int, tuple[dict[str, Any], ledger_engine.Ledger]] = {}
+
+
+def acme_ledger(resources: dict[str, Any]) -> ledger_engine.Ledger | None:
+    """Build (once per discovered resource set) the deduplicated Acme ledger, if present."""
+    cached = _ACME_CACHE.get(id(resources))
+    if cached and cached[0] is resources:
+        return cached[1]
+    # Prefer the complete export; the paginated /orders chain holds the same rows.
+    export = resources.get("/export")
+    sources = [export] if isinstance(export, dict) and export.get("orders") else list(resources.values())
+    rows = [row for payload in sources for _, group in _record_collections(payload) for row in group
+            if ledger_engine.is_acme_row(row)]
+    if not rows:
+        return None
+    rates: dict[str, Any] = {}
     for payload in resources.values():
         if isinstance(payload, dict) and isinstance(payload.get("usd_per_unit"), dict):
             rates.update(payload["usd_per_unit"])
-
-    def usd(row):
-        currency = str(row.get("currency", "USD")).upper()
-        if currency not in rates:
-            raise ValueError(f"No USD exchange rate available for {currency}.")
-        try:
-            return Decimal(str(row["amount"])) * Decimal(str(rates[currency]))
-        except (KeyError, InvalidOperation):
-            raise ValueError("Invalid ledger amount or exchange rate.") from None
-
-    def money(value):
-        return float(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
-
-    if is_refund:
-        if is_count and not (is_product or is_customer):
-            return len(refunded)
-        selected = refunded
-    else:
-        selected = paid
-
-    main_clause = q.split("(", 1)[0]
-    if (is_count and not is_customer and re.search(r"\borders?\b", main_clause)
-            and not re.search(r"\b(units|items|products)\b", main_clause)):
-        return len(selected if is_refund or "paid" in q else rows)
-
-    if is_product or is_customer:
-        key = "customer" if is_customer else "product"
-        if is_customer and is_count:
-            buying = any(term in q for term in ("paid", "pay", "bought", "buy", "purchas", "spend", "spent"))
-            customers = selected if is_refund or buying else rows
-            if len(named_products) > 1 and re.search(r"\b(both|each)\b", q):
-                sets = [{row["customer"] for row in customers if row["product"] == name}
-                        for name in named_products]
-                return len(set.intersection(*sets))
-            return len({row[key] for row in customers})
-        totals: dict[str, Decimal] = {}
-        units = not is_customer and is_product and not any(word in q for word in ("revenue", "earn", "spend", "spent", "money", "dollar", "usd", "sales value"))
-        for row in selected:
-            name = str(row[key])
-            value = Decimal(str(row.get("qty", 0))) if units else usd(row)
-            totals[name] = totals.get(name, Decimal(0)) + value
-        if is_count and is_product and not is_customer:
-            if "distinct" in q or "unique" in q:
-                return len(totals)
-            return int(sum(totals.values(), Decimal(0)))
-        if any(word in q for word in ("most", "top", "highest", "largest", "best", "leading")):
-            return sorted(totals, key=lambda name: (-totals[name], name))[0] if totals else ""
-        names = [name for name in totals if re.search(rf"\b{re.escape(name.lower())}\b", q)]
-        if len(names) == 1:
-            return int(totals[names[0]]) if units else money(totals[names[0]])
-        raise ValueError("Specify a product/customer measure or ranking.")
-
-    if is_count:
-        return len(selected if is_refund or "paid" in q else rows)
-    if any(word in q for word in ("revenue", "sales", "earn", "income", "receipts", "total", "amount", "how much", "refund", "average", "mean", "per order")):
-        total = sum((usd(row) for row in selected), Decimal(0))
-        if any(word in q for word in ("average", "mean", "per order")):
-            total = total / len(selected) if selected else Decimal(0)
-        return money(total)
-    raise ValueError("Could not map the question to a supported ledger measure.")
+    ledger = ledger_engine.build_ledger(rows, rates)
+    if len(_ACME_CACHE) > 256:
+        _ACME_CACHE.clear()
+    _ACME_CACHE[id(resources)] = (resources, ledger)
+    return ledger
 
 
 def answer_ledger_question(question: str, resources: dict[str, Any]) -> Any:
@@ -337,10 +281,9 @@ def answer_ledger_question(question: str, resources: dict[str, Any]) -> Any:
     collections = [(path, rows) for path, rows in collections if rows]
     if not collections:
         raise ValueError("No record collections found in the discovered ledger API.")
-    acme = [row for _, rows in collections for row in rows
-            if all(key in row for key in ("id", "created_at", "updated_at", "status", "currency", "amount", "qty", "product", "customer"))]
-    if acme:
-        return _answer_acme(question, acme, resources)
+    acme = acme_ledger(resources)
+    if acme is not None:
+        return ledger_engine.answer(question, acme)
 
     is_refund = bool(re.search(r"\b(refund|refunded|refunds|return|returned)\b", q))
     is_product = "product" in q or "item" in q or "sku" in q
