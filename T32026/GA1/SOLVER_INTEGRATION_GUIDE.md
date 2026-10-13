@@ -1,175 +1,211 @@
-# Connect the T3 GA1 APIs to the browser solver
+# T3-2026 GA1 — Browser-Solver Integration Guide (Q6, Q14, Q15)
 
-Q13 now has a stateless ROT13/hex/reversal decoding helper. See
-[Q13_IMPLEMENTATION_GUIDE.md](Q13_IMPLEMENTATION_GUIDE.md) for its API and
-terminal workflow. Unlike Q6/Q14/Q15, Q13 requires a public signed-recording
-archive URL, not a submitted API URL.
+How to wire the three live API questions into the static browser solver
+(`C:/Users/gaura/Downloads/tds-roe-solver/tds-roe-solver/solvers/T32026/ga1/`)
+using the same `solve(email)` → `{type:'solved', answer, answerDisplay}` style as
+`solvers/T22026/ga2/q-config-precedence.js`.
 
-This is the browser-solver integration guide, separate from [IMPLEMENTATION_GUIDE.md](IMPLEMENTATION_GUIDE.md), which explains deploying the API itself. Follow this when wiring the live API hub into the separate `tds-roe-solver` project, using the T2 GA1 `solved` result + `guide` pattern.
+Q13 (termlog) is **not** an API answer: it needs the student's own signed recording
+archive. See [Q13_IMPLEMENTATION_GUIDE.md](Q13_IMPLEMENTATION_GUIDE.md).
 
-The browser solver is at `C:/Users/gaura/Downloads/tds-roe-solver/tds-roe-solver`. Its T3 GA1 API modules currently return “implementation pending” handoff cards. The API repo is separate: do not paste its private `quizSign` into solver source or browser storage.
+## 0. Which host to use
 
-## How the two projects fit together
+| Host | Q6 config | Q14 MCP | Q15 Ledger |
+|---|---|---|---|
+| Render `https://tds-roe-solver-api-t12026.onrender.com` | ✅ | ✅ | ✅ (verified live, 6/6 in ~3.7 s cold) |
+| HF Space `https://23f1000805-tds-roe-solver-api-t12026.hf.space` | ✅ | ✅ | ❌ HF egress to `exam.sanand.workers.dev` times out |
 
-1. Deploy the API hub and open its `/ga1/` dashboard.
-2. Onboard the learner's exam email and complete signed Ledger `questionData` URL there. The API validates it and stores the signature privately for Q15.
-3. In the browser solver, the T3 solver receives the normalized email and constructs the corresponding public route.
-4. The solver returns that route as its `answer`, just like the older T2 API solvers.
-5. The exam grader calls the submitted API URL live. A generated URL is not proof that the service is healthy; use the dashboard test bench and official grader to verify it.
+**Use Render for all three.** Render's free tier sleeps after inactivity; the first
+request after sleep can take ~30–50 s, which can exceed the Ledger grader's 15 s
+limit. Open `https://tds-roe-solver-api-t12026.onrender.com/health` once just before
+pressing *Check*.
 
-## Files to edit in the browser-solver project
+## 1. Endpoint contracts
 
-- `solvers/T32026/ga1/q06-config-precedence.js`
-- `solvers/T32026/ga1/q14-mcp-server.js`
-- `solvers/T32026/ga1/q15-ledger-agent.js`
-- `solvers/T32026/ga1/registry.js` only if IDs/order change (normally they should not)
-- Add a shared helper such as `solvers/T32026/ga1/api-client.js` for the deployed origin and URL validation.
+| Q | Exam id | Submit URL | Grader behaviour |
+|---|---|---|---|
+| Q6 | `q-config-precedence-server` | `{ORIGIN}/ga1/{email}/effective-config` | Browser `GET`s it with appended `?set=key=value&…`; compares all 5 keys with `===` (int `port`/`workers`, bool `debug`, `api_key` = `"****"`). CORS required. |
+| Q14 | `q-mcp-server-live-server` | `{ORIGIN}/ga1/{email}/mcp` | Real MCP client: `initialize` → `notifications/initialized` → `tools/list` → 5 × `tools/call solve_challenge` with a fresh `X-Exam-Challenge` header. Text must be `sha256("{challenge}:{email}")[:16]`. |
+| Q15 | `q-ledger-agent-server` | `{ORIGIN}/ga1/{email}/ledger/{key}/answer` | `POST {"question":"…"}` several at once; each must return the exact `{"answer":…}` within 15 s. |
 
-Keep the exact official IDs and titles. The registry already lists the modules in official order, and its `apiHandoffQuestions` metadata may remain as a note that these answers are served by a separate API project; it is not a solver import.
+`{email}` is the trimmed, lower-cased exam email, URL-encoded (`@` → `%40`).
 
-## 1. Configure the deployed API origin once
+Q15's `{key}` is the student's `quizSign` in URL-safe form (`+`→`-`, `/`→`_`,
+padding `=` removed). It lets the server fetch that student's private ledger with
+no stored state. **Get it from `/ga1/onboard`**, which also verifies the
+signature with the exam server before returning the URL:
 
-Create `solvers/T32026/ga1/api-client.js` in the browser-solver repo. Replace the placeholder with the API service's public HTTPS origin (no `/ga1` suffix). Do not invent a host or use localhost in a submitted answer.
+```http
+POST {ORIGIN}/ga1/onboard
+Content-Type: application/json
+
+{"email":"student@ds.study.iitm.ac.in","question_data_url":"https://exam.sanand.workers.dev/questionData?email=…&quizSign=…&questionId=q-ledger-agent-server&path=/"}
+```
+
+Response (abridged): `{"status":"ok","submit_url":"{ORIGIN}/ga1/{email}/ledger/{key}/answer","routes":{…}}`.
+Errors: `400 VALID_LEDGER_QUESTION_DATA_URL_REQUIRED` (wrong email / question / host),
+`502 LEDGER_UPSTREAM_REJECTED` with `upstream_status` 401/403 (expired or wrong signature),
+`504 LEDGER_DISCOVERY_TIMEOUT`.
+
+## 2. Shared helper — `solvers/T32026/ga1/api-client.js` (new)
 
 ```js
 import { normalizeEmail } from './utils.js';
 
-export const T3_GA1_API_ORIGIN = 'https://REPLACE-WITH-THE-DEPLOYED-API-HOST';
+export const T3_GA1_API_ORIGIN = 'https://tds-roe-solver-api-t12026.onrender.com';
 
-export function buildT3Ga1Url(email, suffix) {
-  const normalized = normalizeEmail(email);
-  if (!normalized || !normalized.includes('@')) {
-    throw new Error('A valid registered email is required to build the GA1 API URL.');
-  }
-  if (!T3_GA1_API_ORIGIN.startsWith('https://')) {
-    throw new Error('Set T3_GA1_API_ORIGIN to the public HTTPS API origin.');
-  }
-  return `${T3_GA1_API_ORIGIN.replace(/\/$/, '')}/ga1/${encodeURIComponent(normalized)}${suffix}`;
+export function ga1Url(email, suffix) {
+  const norm = normalizeEmail(email);
+  if (!norm || !norm.includes('@')) throw new Error('A valid exam email is required.');
+  return `${T3_GA1_API_ORIGIN}/ga1/${encodeURIComponent(norm)}${suffix}`;
 }
 
-export function makeApiAnswer(title, url, notes) {
+export function apiAnswer(title, url, notes) {
   return {
     type: 'solved',
     answer: url,
-    variant: `Live T3 GA1 endpoint for ${url}`,
-    answerDisplay: [
-      `### ${title}`,
-      '',
-      '**Submit this endpoint URL:**',
-      '```text',
-      url,
-      '```',
-      '',
-      notes,
-    ].join('\n'),
-    guide: notes,
-    debug: { integrationStatus: 'url-generated', apiEndpoint: url },
+    variant: `Live T3 GA1 endpoint`,
+    answerDisplay: [`### ${title}`, `**Submit this URL:**`, '```text', url, '```', '', notes].join('\n'),
   };
 }
 ```
 
-The API hub's onboarding response also returns these routes. Using `buildT3Ga1Url` keeps the solver convention consistent and avoids hardcoding a learner email. If the deployed service changes domains, update only the origin constant.
-
-## 2. Replace the three pending modules
-
-### Q6 — config precedence
-
-In `q06-config-precedence.js`, keep the exported `id` and `title`, and replace the pending `solve()` body with:
+## 3. Q6 — `q06-config-precedence.js`
 
 ```js
-import { buildT3Ga1Url, makeApiAnswer } from './api-client.js';
+import { ga1Url, apiAnswer } from './api-client.js';
+
+export const id = 'q-config-precedence-server';
+export const title = 'Q6: Resolve 12-Factor Config Precedence';
 
 export async function solve(email) {
-  const url = buildT3Ga1Url(email, '/effective-config');
-  return makeApiAnswer(
-    title,
-    url,
-    [
-      'The grader sends fresh repeated `set=key=value` query parameters to this URL.',
-      'The API applies CLI overrides, checks numeric and boolean types, maps `num_workers` to `workers`, and masks `api_key`.',
-      'Test it in the API dashboard with multiple `set` parameters before submitting.',
-    ].join('\n'),
-  );
+  const url = ga1Url(email, '/effective-config');
+  return apiAnswer(title, url,
+    'The grader appends fresh `?set=key=value` overrides itself — submit the URL exactly as shown.');
 }
 ```
 
-The grader appends query parameters to the endpoint. Do not append a sample `?set=` value to the answer URL; that would pin the endpoint to a test case and interfere with fresh randomized checks.
+Do not append a sample `?set=` to the answer.
 
-### Q14 — live MCP server
-
-In `q14-mcp-server.js`, preserve its ID/title and use:
+## 4. Q14 — `q14-mcp-server.js`
 
 ```js
-import { buildT3Ga1Url, makeApiAnswer } from './api-client.js';
+import { ga1Url, apiAnswer } from './api-client.js';
+
+export const id = 'q-mcp-server-live-server';
+export const title = 'Q14: Build a Live MCP Server';
 
 export async function solve(email) {
-  const url = buildT3Ga1Url(email, '/mcp');
-  return makeApiAnswer(
-    title,
-    url,
-    [
-      'The API exposes one `solve_challenge` MCP tool.',
-      'Every tool call reads its fresh `X-Exam-Challenge` header and hashes it with the normalized email.',
-      'Use the API dashboard MCP bench to verify initialize, tools/list, and multiple fresh challenges.',
-    ].join('\n'),
-  );
+  const url = ga1Url(email, '/mcp');
+  return apiAnswer(title, url,
+    'One tool, `solve_challenge`, hashes each call\'s fresh `X-Exam-Challenge` header with your email.');
 }
 ```
 
-Do not compute a challenge digest in the browser solver. The grader sends a new challenge header to the deployed endpoint each time; the service must compute each response live.
+Never compute the digest in the browser — the challenge is fresh per call.
 
-### Q15 — Ledger Agent
+## 5. Q15 — `q15-ledger-agent.js`
 
-In `q15-ledger-agent.js`, preserve its ID/title and use:
+`solve(email)` only receives the email, but Q15 needs the student's signed URL.
+Ask for it with `prompt()` (the exam page uses the same pattern for AI Pipe
+tokens), send it once to `/ga1/onboard`, and return the `submit_url`. Do not store
+the signed URL in `localStorage`, source, or logs.
 
 ```js
-import { buildT3Ga1Url, makeApiAnswer } from './api-client.js';
+import { normalizeEmail } from './utils.js';
+import { T3_GA1_API_ORIGIN } from './api-client.js';
+
+export const id = 'q-ledger-agent-server';
+export const title = 'Q15: The Ledger Agent';
+
+const DASHBOARD = `${T3_GA1_API_ORIGIN}/ga1/`;
+
+function guide(message) {
+  return {
+    type: 'guide',
+    answer: DASHBOARD,
+    variant: 'Signed Ledger URL required',
+    answerDisplay: [
+      `### ${title}`,
+      message,
+      '',
+      `Or open **${DASHBOARD}**, paste your email and the full Ledger \`questionData\` URL, and submit the Ledger URL it shows.`,
+    ].join('\n'),
+  };
+}
 
 export async function solve(email) {
-  const url = buildT3Ga1Url(email, '/ledger/answer');
-  return makeApiAnswer(
-    title,
-    url,
-    [
-      'Before testing, onboard this email and its full signed Ledger `questionData` URL in the API dashboard.',
-      'The grader POSTs JSON such as `{"question":"..."}` and expects JSON containing an `answer` field.',
-      'Use the dashboard to inspect the schema manifest and try revenue, refund, product, and customer questions.',
+  const norm = normalizeEmail(email);
+  const signed = typeof prompt === 'function'
+    ? (prompt('Paste your full Q15 Ledger URL (https://exam.sanand.workers.dev/questionData?...&questionId=q-ledger-agent-server&path=/)') || '').trim()
+    : '';
+  if (!signed) return guide('No Ledger URL was entered.');
+
+  let r, data;
+  try {
+    r = await fetch(`${T3_GA1_API_ORIGIN}/ga1/onboard`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: norm, question_data_url: signed }),
+    });
+    data = await r.json();
+  } catch (e) {
+    return guide(`The API is waking up or unreachable (${e.message}). Wait 30 s and run again.`);
+  }
+  if (!r.ok || !data.submit_url) {
+    const reason = data?.upstream_status === 403 || data?.upstream_status === 401
+      ? 'The exam rejected that signature — copy a fresh Ledger URL from your exam page.'
+      : `Onboarding failed: ${data?.error || r.status}.`;
+    return guide(reason);
+  }
+  return {
+    type: 'solved',
+    answer: data.submit_url,
+    variant: `Ledger agent endpoint for ${norm}`,
+    answerDisplay: [
+      `### ${title}`,
+      '**Submit this URL:**',
+      '```text', data.submit_url, '```',
+      '',
+      'It contains your exam signature in URL-safe form — keep it private like the original link.',
+      'Open the API `/health` once before pressing Check so Render is awake.',
     ].join('\n'),
-  );
+  };
 }
 ```
 
-The browser solver must not fetch or embed the private Ledger dataset or signed questionData URL. The API hub fetches data server-side using the signature stored during onboarding; the route returned by the solver is only the public answer endpoint.
+Make sure `runtime.js`/`wrapSolverModule` accepts `type: 'guide'` as well as
+`'solved'` (it already does for other guide questions). Update the `registry.js`
+comments for q06/q14/q15 from "separate API project handoff" to "live API"; the
+`apiHandoffQuestions` metadata can stay.
 
-## 3. Keep the normal registry and runtime flow
+## 6. What the Ledger engine handles (for the guide text / debugging)
 
-`solvers/T32026/ga1/registry.js` imports these modules and wraps them with `wrapSolverModule`. Do not bypass that wrapper: it validates the learner email, checks the result shape, measures duration, and converts thrown failures into a visible structured error. Each API module should return the wrapper's supported shape (`type: 'solved'`, a non-empty string `answer`, optional `guide`/`debug`).
+Learned per student from their own data: products, regions, customer ids, currencies, rates.
 
-Do not return `makeGuideResult(...)` for a completed API handoff; it sets `type: 'guide'` and presents the answer as pending. Keep guide text for setup details, but return the endpoint URL in `answer` so the solver can copy/submit it like T2.
+- Duplicate order ids → the row with the latest `updated_at` wins (compared as instants; the feed mixes `Z` and `+05:30`).
+- Business dates in Asia/Kolkata (orders at `2026-03-31T20:00Z` count in April).
+- Revenue = `paid` only; refunds = `refunded`; amounts × `usd_per_unit`, summed with Decimal, rounded to cents at the end.
+- Measures: revenue, refund amount/count, units, order count, distinct customers/products, average/largest/smallest order, percentage share, top-N/least by product/customer/region/month/currency.
+- Filters: region(s) (incl. "Northern", "excluding West"), product names (plural, hyphen/space variants), customer ids, non-USD currency (`EUR orders`, `paid in INR`), dates (month±year, `2026-03`, ISO days, `March 5`, Q1–Q4, halves, year, `between … and …`, `since`, `before`, `until`).
+- Ambiguity choices: unqualified "how many orders" counts every status; "how many customers" counts every status unless the question says bought/paid/purchased/spent.
 
-## 4. Live test bench procedure
+## 7. Verify before submitting
 
-Open the deployed API hub's `/ga1/` dashboard, enter the same email, paste that student's full signed Ledger `questionData` URL, and run each service-specific check:
-
-- **Q6:** run the config override check. Confirm the response contains all five expected keys, with integer `port`/`workers`, boolean `debug`, and masked `api_key`.
-- **Q14:** run the MCP handshake. Confirm exactly one tool named `solve_challenge`, then verify the response against a fresh header challenge.
-- **Q15:** discover the Ledger schema, then try more than the dashboard's example question. Check date/region filters and compare totals against the discovered records; do not accept a plausible-looking total without checking the source rows.
-
-After changing solver modules, run the browser-solver regression checks from that repository:
-
-```powershell
-node check.mjs --t3-ga1-only
-node check.mjs --t3-ga1-scale
+```bash
+curl -s "https://tds-roe-solver-api-t12026.onrender.com/ga1/student%40ds.study.iitm.ac.in/effective-config?set=port=9000&set=debug=true"
 ```
 
-Then open the T3 GA1 solver in the app, confirm each module displays a `solved` result with the correct live endpoint, and submit through the official exam verifier. Local checks do not replace live grading or a concurrent-load test.
+```bash
+curl -s -X POST "<Q15 submit_url>" -H "Content-Type: application/json" -d '{"question":"What was the total revenue in USD from the North region in March 2026?"}'
+```
+
+The `/ga1/` dashboard runs the same checks (config override, Ledger sample question, full MCP handshake with a fresh challenge). After editing the solver repo, run its usual `node check.mjs --t3-ga1-only`.
 
 ## Common mistakes
 
-- Returning the API's `/onboard` URL instead of the question-specific endpoint.
-- Omitting `/ga1/{encoded-email}` from the route.
-- Hardcoding one email, quiz signature, or MCP challenge.
-- Adding a fixed config query string to Q6's URL.
-- Returning a guide-only result after the API is deployed.
-- Treating successful URL construction or an HTTP 200 as proof that hidden Ledger questions are correct.
-- Editing the current user's API origin in three separate question modules instead of the shared helper.
+- Submitting the HF Space URL for Q15 (its egress to the exam server times out).
+- Submitting `/ga1/{email}/ledger/answer` (stored-signature route) instead of the keyed `submit_url`; it breaks whenever Render restarts and loses its SQLite file.
+- Submitting the `/onboard` or dashboard URL as an answer.
+- Not encoding `@` in the email, or adding `?set=` to Q6.
+- Pressing Check while Render is asleep.
