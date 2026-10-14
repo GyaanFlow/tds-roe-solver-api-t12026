@@ -319,3 +319,89 @@ def test_stateless_ledger_key_round_trips_and_routes_through_gateway(monkeypatch
         # Unknown GA1 segments must not crash the gateway (previously NameError -> 500).
         assert client.post("/ga1/student%40example.com/not-a-route", json={}).status_code in (404, 405)
     assert set(seen) == {sign}
+
+
+# ---------------------------------------------------------------- remaining GA1 answers
+
+def test_cosine_answer_matches_node_seedrandom_golden_values():
+    from T32026.GA1.answers import cosine_answer
+    result = cosine_answer("23f1000805@ds.study.iitm.ac.in")
+    # Golden values produced by the exam's JS algorithm with the real npm seedrandom.
+    assert result["Q001"] == ["D000111", "D000106", "D000026", "D000221", "D000161"]
+    assert result["Q002"] == ["D000002", "D000132", "D000097", "D000147", "D000157"]
+    assert result["Q010"] == ["D000005", "D000120", "D000065", "D000140", "D000100"]
+    assert len(result) == 10 and all(len(ids) == 5 for ids in result.values())
+    assert cosine_answer("  23F1000805@ds.study.iitm.ac.in ") == result  # normalised like the exam
+
+
+def _fi(*parts: str) -> bytes:
+    return "".join(parts).encode()
+
+
+def test_git_fastimport_finds_commit_that_introduced_token_not_the_one_that_removed_it():
+    token = "stg_abc123_DEF-9"
+    blob = lambda mark, text: f"blob\nmark :{mark}\ndata {len(text.encode())}\n{text}\n"
+    commit = lambda mark, msg, ops, parent=None: (
+        f"commit refs/heads/main\nmark :{mark}\ncommitter A <a@b.c> 1700000000 +0000\n"
+        f"data {len(msg.encode())}\n{msg}\n" + (f"from :{parent}\n" if parent else "") + ops + "\n")
+    stream = _fi(
+        blob(1, "name: app\n"), blob(2, f"api_key={token}\n"), blob(3, "name: app\nkey: none\n"),
+        commit(10, "Initial", "M 100644 :1 config.yml\n"),
+        commit(11, "Add staging deploy token", "M 100644 :2 config.yml\n", 10),
+        commit(12, "Unrelated tidy", "M 100644 :2 notes.txt\n", 11),
+        commit(13, "Rotate and revoke leaked token", "M 100644 :3 config.yml\nD notes.txt\n", 12),
+    )
+    from T32026.GA1.answers import find_git_token
+    found = find_git_token(stream)
+    assert found["token"] == token and found["commit_subject"] == "Add staging deploy token"
+    import pytest
+    with pytest.raises(ValueError):
+        find_git_token(_fi(blob(1, "nothing\n"), commit(10, "Only", "M 100644 :1 a.txt\n")))
+
+
+def test_git_data_counts_bytes_not_characters_and_viewer_page_is_unwrapped():
+    import base64
+    from T32026.GA1.answers import extract_fastimport, find_git_token
+    text = "café ✓ token stg_unicode_ok\n"
+    raw = (f"blob\nmark :1\ndata {len(text.encode())}\n{text}\n"
+           f"commit refs/heads/main\nmark :2\ncommitter A <a@b.c> 1 +0000\ndata 4\nAdd\n\nM 100644 :1 f.txt\n\n").encode()
+    page = f'<html><a download="history.fastimport" href="data:application/octet-stream;base64,{base64.b64encode(raw).decode()}">x</a></html>'
+    assert extract_fastimport(page.encode()) == raw
+    assert find_git_token(extract_fastimport(page.encode()))["token"] == "stg_unicode_ok"
+
+
+def test_answer_routes_via_gateway_use_url_signature_and_do_not_leak_it(monkeypatch):
+    import base64
+    from hf_space.app import app as gateway
+    body = b"key=stg_route_ok_1\n"
+    raw = (b"blob\nmark :1\ndata %d\n" % len(body) + body + b"\n"
+           b"commit refs/heads/main\nmark :2\ncommitter A <a@b.c> 1 +0000\ndata 7\nAdd tok\n\nM 100644 :1 f\n\n")
+    page = f'<a download="history.fastimport" href="data:application/octet-stream;base64,{base64.b64encode(raw).decode()}">x</a>'
+    seen = []
+
+    def upstream(request):
+        seen.append((request.url.params.get("questionId"), request.url.params.get("quizSign")))
+        if request.url.params.get("questionId") == "q-http-headers-server":
+            return httpx.Response(200, text="body", headers={"X-Exam-Code": "ABC123XY"})
+        return httpx.Response(200, text=page, headers={"content-type": "text/html"})
+
+    client_type = httpx.AsyncClient
+    monkeypatch.setattr(main.httpx, "AsyncClient", lambda **kwargs: client_type(**{**kwargs, "transport": httpx.MockTransport(upstream)}))
+    monkeypatch.setattr(main, "get_config", lambda email: {})
+    url = "https://exam.sanand.workers.dev/questionData?email=s%40example.com&quizSign=private-sentinel&questionId={}"
+    with TestClient(gateway) as client:
+        r = client.post("/ga1/s%40example.com/answers/git-forensics", json={"question_data_url": url.format("q-git-forensics-token-server")})
+        assert r.status_code == 200, r.text
+        assert r.json()["answer"] == {"token": "stg_route_ok_1", "commit_subject": "Add tok"}
+        assert "private-sentinel" not in r.text
+        r = client.post("/ga1/s%40example.com/answers/headers", json={"question_data_url": url.format("q-http-headers-server")})
+        assert r.json()["answer"] == "ABC123XY" and r.headers["cache-control"] == "no-store"
+        # Wrong email / unrelated question / no signature available -> clean 4xx, no upstream call.
+        before = len(seen)
+        assert client.post("/ga1/other%40example.com/answers/headers", json={"question_data_url": url.format("q-http-headers-server")}).status_code == 400
+        assert client.post("/ga1/s%40example.com/answers/headers", json={"question_data_url": url.format("q-other")}).status_code == 400
+        assert client.post("/ga1/s%40example.com/answers/headers", json={}).status_code == 409
+        assert len(seen) == before
+        r = client.get("/ga1/s%40example.com/answers/cosine")
+        assert r.status_code == 200 and len(r.json()["answer"]) == 10
+    assert {sign for _, sign in seen} == {"private-sentinel"}

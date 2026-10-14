@@ -209,3 +209,48 @@ The `/ga1/` dashboard runs the same checks (config override, Ledger sample quest
 - Submitting the `/onboard` or dashboard URL as an answer.
 - Not encoding `@` in the email, or adding `?set=` to Q6.
 - Pressing Check while Render is asleep.
+
+## 8. Computed-answer endpoints — Q2 headers, Q10 git forensics, Q11 cosine search
+
+These three are graded by `/backendVerify` on a pasted **answer**, not a submitted URL. The API computes the answer from the student's own data so the solver does not need to parse git streams or reproduce the seeded embeddings in the browser. Same exam signature as Q15, so one pasted `questionData` URL (any GA1 question) is enough.
+
+| Q | Exam id | Call | Returns |
+|---|---|---|---|
+| Q11 | `q-cosine-similarity-server` | `GET {ORIGIN}/ga1/{email}/answers/cosine` | `answer_text` = JSON `{"Q001":["D000111",…5],…10 queries}`; no private URL needed |
+| Q10 | `q-git-forensics-token-server` | `POST {ORIGIN}/ga1/{email}/answers/git-forensics` body `{"question_data_url":"…"}` | `answer_text` = `{"token":"stg_…","commit_subject":"…"}` |
+| Q2 | `q-http-headers-server` | `POST {ORIGIN}/ga1/{email}/answers/headers` body `{"question_data_url":"…"}` | `answer_text` = the `X-Exam-Code` value |
+
+`question_data_url` is validated (host `exam.sanand.workers.dev`, email must match, question must be a GA1 id, `path` optional); if omitted the signature saved by `/onboard` is used. Errors: `400 VALID_QUESTION_DATA_URL_REQUIRED`, `409 POST_YOUR_QUESTION_DATA_URL_OR_ONBOARD_FIRST`, `502 UPSTREAM_REJECTED` with `upstream_status` 401/403 (expired signature), `422 NO_STG_TOKEN_IN_HISTORY` / `NO_X_EXAM_CODE_HEADER`. Responses are `Cache-Control: no-store`.
+
+Notes:
+- The headers code **rotates every hour**; call the endpoint right before pressing Check.
+- Git forensics replays the fast-import stream byte-exactly and returns the commit that *introduced* the token (not the later one that revoked it). Verified against real `git fast-import` + `git log -S`.
+- Cosine: ties break by smaller `doc_id`; the dataset uses seed `tds-2026-05-ga3-cosine-sim-client-v1#{email}#` and is verified bit-for-bit against Node `seedrandom`.
+
+Solver module pattern (Q11 shown; the others differ only in call and prompt for the URL):
+
+```js
+import { normalizeEmail } from './utils.js';
+import { T3_GA1_API_ORIGIN } from './api-client.js';
+
+export const id = 'q-cosine-similarity-server';
+export const title = 'Q11: Cosine Similarity Search (VecSearch Labs)';
+
+export async function solve(email) {
+  const norm = normalizeEmail(email);
+  const r = await fetch(`${T3_GA1_API_ORIGIN}/ga1/${encodeURIComponent(norm)}/answers/cosine`);
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+  return { type: 'solved', answer: data.answer_text, variant: 'Computed from your seeded corpus',
+           answerDisplay: ['### ' + title, '```json', data.answer_text, '```'].join('
+') };
+}
+```
+
+For Q10/Q2 use `prompt()` for the signed URL exactly like Q15 (section 5), `POST` it as `{question_data_url}`, and return `data.answer_text`. Keep the URL out of storage and logs.
+
+## 9. Not implemented on purpose
+
+- **Faking exam checks in the browser.** Some public helpers patch `window.fetch` on the exam page to answer `/effective-config`, the GitHub-Pages proxy, or the AI Pipe model calls locally. The result is a green check that the real grader never gave. These are not ported here.
+- **Q13 termlog automation.** Producing the signed recording on a server means handing it the student's Google login (`auth.json`), and the recording is the proof that the student ran the commands. Use the guided manual flow in `Q13_IMPLEMENTATION_GUIDE.md`.
+- **Q1/Q3/Q4/Q5/Q7/Q8/Q9/Q12/Q16.** These are local-tool, file or live-model tasks with no server component; they stay in the browser solver.

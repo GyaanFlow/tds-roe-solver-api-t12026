@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse, Response
 from T32026.GA1.shared.tenant import get_config, normalize_email, set_config
 from T32026.GA1.solvers import answer_ledger_question, challenge_digest, effective_config, mcp_tool_definition
 from T32026.GA1.termlog import decode_termlog
+from T32026.GA1 import answers
 
 router = APIRouter()
 EXAM_ORIGIN = "https://exam.sanand.workers.dev"
@@ -72,6 +73,32 @@ def decode_ledger_key(key: str) -> str | None:
     if not key or len(key) > 4096 or not re.fullmatch(r"[A-Za-z0-9_-]+", key):
         return None
     return key.replace("-", "+").replace("_", "/") + "=" * (-len(key) % 4)
+
+
+SIGNED_QUESTION_IDS = {LEDGER_QUESTION_ID, answers.GIT_QUESTION_ID, answers.HEADERS_QUESTION_ID, "q-termlog-rec-server"}
+
+
+def _quiz_sign_for_any_question(value: Any, email: str) -> str | None:
+    """Like the Ledger validator, but for any GA1 questionData URL (path is optional).
+
+    The exam signs a student once; the same quizSign opens every GA1 resource.
+    """
+    if not isinstance(value, str) or len(value) > 8192:
+        return None
+    try:
+        parsed = urlsplit(value.strip())
+        params = parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
+    except ValueError:
+        return None
+    if (parsed.scheme != "https" or parsed.netloc.lower() != "exam.sanand.workers.dev"
+            or parsed.path != "/questionData" or parsed.fragment or parsed.username or parsed.password):
+        return None
+    if any(len(params.get(key, [])) != 1 for key in ("email", "quizSign", "questionId")):
+        return None
+    if normalize_email(params["email"][0]) != email or params["questionId"][0] not in SIGNED_QUESTION_IDS:
+        return None
+    quiz_sign = params["quizSign"][0]
+    return quiz_sign if quiz_sign and len(quiz_sign) <= 4096 else None
 
 
 def _quiz_sign_from_question_data_url(value: Any, email: str) -> str | None:
@@ -427,6 +454,99 @@ async def ledger_answer_keyed(request: Request, key: str, email: str | None = No
     if not quiz_sign:
         return JSONResponse(status_code=400, content={"error": "INVALID_LEDGER_KEY"})
     return await _answer(request, _email(request, email), quiz_sign)
+
+
+@router.get("/{email}/answers/cosine")
+@router.get("/answers/cosine")
+@router.get("/answers/cosine/", include_in_schema=False)
+@router.get("/{email}/answers/cosine/", include_in_schema=False)
+async def answer_cosine(request: Request, email: str | None = None, version: str = ""):
+    """Top-5 documents per query for the student's seeded corpus (no private URL needed)."""
+    student = _email(request, email)
+    if not student or "@" not in student:
+        return JSONResponse(status_code=400, content={"error": "EMAIL_REQUIRED"})
+    result = await asyncio.to_thread(answers.cosine_answer, student, version)
+    return JSONResponse(content={
+        "question_id": answers.COSINE_QUESTION_ID, "email": student,
+        "answer": result, "answer_text": json.dumps(result, separators=(",", ":")),
+    }, headers={"Cache-Control": "no-store"})
+
+
+async def _signed_resource(request: Request, student: str, question_id: str):
+    """Fetch the student's own questionData resource; returns (response, error)."""
+    body, error = await _json_body(request)
+    if error:
+        return None, error
+    body = body if isinstance(body, dict) else {}
+    quiz_sign = None
+    if body.get("question_data_url") is not None:
+        quiz_sign = _quiz_sign_for_any_question(body.get("question_data_url"), student)
+        if not quiz_sign:
+            return None, JSONResponse(status_code=400, content={"error": "VALID_QUESTION_DATA_URL_REQUIRED"})
+    else:
+        try:
+            quiz_sign = (await asyncio.to_thread(get_config, student)).get("quiz_sign")
+        except Exception:
+            quiz_sign = None
+    if not quiz_sign:
+        return None, JSONResponse(status_code=409, content={"error": "POST_YOUR_QUESTION_DATA_URL_OR_ONBOARD_FIRST"})
+    params = {"email": student, "quizSign": quiz_sign, "questionId": question_id}
+    try:
+        async with _upstream_client() as client:
+            async with _UPSTREAM_LIMIT:
+                response = await client.get(f"{EXAM_ORIGIN}/questionData", params=params)
+        response.raise_for_status()
+        if len(response.content) > answers.MAX_STREAM_BYTES:
+            return None, JSONResponse(status_code=502, content={"error": "RESOURCE_TOO_LARGE"})
+        return response, None
+    except httpx.TimeoutException:
+        return None, JSONResponse(status_code=504, content={"error": "UPSTREAM_TIMEOUT"})
+    except httpx.HTTPStatusError as exc:
+        content = {"error": "UPSTREAM_REJECTED", "upstream_status": exc.response.status_code}
+        if exc.response.status_code in (401, 403):
+            content["action"] = "Copy a fresh questionData URL from your exam page."
+        return None, JSONResponse(status_code=502, content=content)
+    except httpx.HTTPError:
+        return None, JSONResponse(status_code=502, content={"error": "UPSTREAM_CONNECTION_FAILED"})
+
+
+@router.post("/{email}/answers/git-forensics")
+@router.post("/answers/git-forensics")
+@router.post("/answers/git-forensics/", include_in_schema=False)
+@router.post("/{email}/answers/git-forensics/", include_in_schema=False)
+async def answer_git_forensics(request: Request, email: str | None = None):
+    student = _email(request, email)
+    response, error = await _signed_resource(request, student, answers.GIT_QUESTION_ID)
+    if error:
+        return error
+    try:
+        found = await asyncio.to_thread(lambda: answers.find_git_token(answers.extract_fastimport(response.content)))
+    except ValueError as exc:
+        return JSONResponse(status_code=422, content={"error": str(exc)})
+    result = {"token": found["token"], "commit_subject": found["commit_subject"]}
+    return JSONResponse(content={
+        "question_id": answers.GIT_QUESTION_ID, "email": student, "commits_replayed": found["commits"],
+        "answer": result, "answer_text": json.dumps(result, ensure_ascii=False),
+    }, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/{email}/answers/headers")
+@router.post("/answers/headers")
+@router.post("/answers/headers/", include_in_schema=False)
+@router.post("/{email}/answers/headers/", include_in_schema=False)
+async def answer_headers(request: Request, email: str | None = None):
+    student = _email(request, email)
+    response, error = await _signed_resource(request, student, answers.HEADERS_QUESTION_ID)
+    if error:
+        return error
+    try:
+        code = answers.headers_code(response.headers)
+    except ValueError as exc:
+        return JSONResponse(status_code=422, content={"error": str(exc)})
+    # The code rotates hourly; never cache it.
+    return JSONResponse(content={"question_id": answers.HEADERS_QUESTION_ID, "email": student,
+                                 "answer": code, "answer_text": code},
+                        headers={"Cache-Control": "no-store"})
 
 
 async def _mcp_response(request: Request, email: str):

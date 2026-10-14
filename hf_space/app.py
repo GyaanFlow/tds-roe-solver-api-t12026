@@ -58,7 +58,7 @@ class MultiTenantASGIMiddleware:
                 known_prefixes = {
                     "q1", "q2", "q3", "q4", "q5", "q6", "q7", "q8", "q9", "q10", "q11", "q12", "q13",
                     "solve", "health", "onboard", "status", "config", "docs", "redoc", "cache-stats",
-                    "effective-config", "ledger", "mcp",
+                    "effective-config", "ledger", "mcp", "answers",
                     "answer-image", "extract", "dynamic-extract", "answer-audio", "rank",
                     "grounded-answer", "vector-search", "extract-graph", "graph-query", "community-summary",
                     "proration", "guardrail", "skill-scan", "budget-guard", "mcp", "guardrail-redteam", "mailroom", "a2a", "v2", "scrape-books",

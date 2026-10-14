@@ -37,3 +37,7 @@ It enumerates all six ROT13/hex/reversal undo orders and reports readable
 candidates rather than guessing when ambiguous. Q13 still requires a genuine
 signed terminal recording archive, not this endpoint URL. See
 [Q13_IMPLEMENTATION_GUIDE.md](Q13_IMPLEMENTATION_GUIDE.md).
+
+## Computed answers (Q2, Q10, Q11)
+
+`GET /ga1/{email}/answers/cosine`, `POST /ga1/{email}/answers/git-forensics` and `POST /ga1/{email}/answers/headers` return ready-to-paste answers (`answer_text`). See `SOLVER_INTEGRATION_GUIDE.md` section 8.
