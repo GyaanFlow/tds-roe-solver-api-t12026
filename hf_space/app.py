@@ -63,7 +63,8 @@ class MultiTenantASGIMiddleware:
                     "grounded-answer", "vector-search", "extract-graph", "graph-query", "community-summary",
                     "proration", "guardrail", "skill-scan", "budget-guard", "mcp", "guardrail-redteam", "mailroom", "a2a", "v2", "scrape-books",
                     "release-gate", "action-firewall", "terraform", "sanitize-output", "corroborate",
-                    "build-corpus", "bqml", "promote", "adapt", "quantize", "pipeline", "verify-bundle"
+                    "build-corpus", "bqml", "promote", "adapt", "quantize", "pipeline", "verify-bundle",
+                    "stats", "verify", "hit", "count", "healthz", "work", "metrics", "logs", "stream.json", "docker.json", "s"
                 }
                 if parts and (parts[0].startswith("sess_") or parts[0] not in known_prefixes):
                     possible_session_or_token = parts[0]

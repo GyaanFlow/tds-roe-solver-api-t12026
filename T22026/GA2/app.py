@@ -20,6 +20,7 @@ from T22026.GA2.Q07_llm_tunnel.main    import router as q7_router
 from T22026.GA2.Q08_llm_extract.main   import router as q8_router
 from T22026.GA2.Q09_orders.main        import router as q9_router
 from T22026.GA2.Q10_middleware.main    import router as q10_router
+from T22026.GA2.main                   import router as api_router
 
 app = FastAPI(
     title="IITM TDS 2026-05 GA2 — Multi-Tenant API Hub",
@@ -65,6 +66,7 @@ app.include_router(q7_router,  prefix="/q7")
 app.include_router(q8_router,  prefix="/q8")
 app.include_router(q9_router,  prefix="/q9")
 app.include_router(q10_router, prefix="/q10")
+app.include_router(api_router)
 
 
 # ---------------------------------------------------------------------------
