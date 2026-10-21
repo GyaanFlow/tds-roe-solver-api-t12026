@@ -704,6 +704,9 @@ async def choose_effect(root_cause: str, effect_tools: List[str], tool_catalog: 
         raise  # propagate immediately
     except Exception:
         fallback_effect = _override_wrong_effect(root_cause, _safest_effect_fallback(effect_tools), effect_tools)
+        # The scaling-limit rule must hold even when the model is unreachable.
+        if fallback_effect == "scale_service" and at_scaling_limit(root_cause, incident.get("transcript"), incident.get("title")):
+            fallback_effect = _page_owner_tool(effect_tools) or fallback_effect
         return {"chosenEffect": fallback_effect, "arguments": _derive_tool_arguments(fallback_effect, tool_catalog, incident, root_cause)}
 
 
@@ -983,7 +986,10 @@ async def create_incident(body: Dict[str, Any], email: str, token: Optional[str]
                 and token
             )
             if not can_rediagnose:
-                return _with_headers(existing["lastResponse"], existing)
+                # "The same request ... must return the same JSON": replay the
+                # response this request originally got, not the run's latest
+                # state (GET serves that).
+                return _with_headers(existing.get("createResponse") or existing["lastResponse"], existing)
         else:
             raise MailroomError(409, f"runId '{run_id}' already used with different content")
 
@@ -1077,6 +1083,8 @@ async def create_incident(body: Dict[str, Any], email: str, token: Optional[str]
                 sensitive_vals.append(v.strip())
     run["_sensitive_values"] = sensitive_vals
     run["lastResponse"] = _sanitize_response(response, sensitive_vals)
+    run["createResponse"] = run["lastResponse"]
+    run["receiptResponses"] = {}
     store.put(run_id, run)
     return _with_headers(run["lastResponse"], run)
 
@@ -1105,7 +1113,8 @@ async def submit_receipts(run_id: str, body: Dict[str, Any], email: str, token: 
     prior_fp = run["receiptFingerprints"].get(receipt_id)
     if prior_fp is not None:
         if prior_fp == receipt_fp:
-            return _with_headers(run["lastResponse"], run)
+            # Identical receipt replay -> the exact JSON that receipt produced.
+            return _with_headers((run.get("receiptResponses") or {}).get(receipt_id) or run["lastResponse"], run)
         raise MailroomError(409, f"receiptId '{receipt_id}' already used with different content")
 
     if run["state"] in ("COMPLETED", "FAILED"):
@@ -1119,6 +1128,7 @@ async def submit_receipts(run_id: str, body: Dict[str, Any], email: str, token: 
     sensitive_vals = run.get("_sensitive_values", [])
     response = _sanitize_response(response, sensitive_vals)
     run["receiptFingerprints"][receipt_id] = receipt_fp
+    run.setdefault("receiptResponses", {})[receipt_id] = response
     run["lastResponse"] = response
     store.put(run_id, run)
     return _with_headers(response, run)

@@ -61,6 +61,7 @@ async def _fake_choose_effect(root_cause, effect_tools, tool_catalog, token, *ar
 
 
 incident_agent.diagnose_incident = _fake_diagnose_incident
+incident_agent._real_choose_effect = incident_agent.choose_effect  # for tests needing the real one
 incident_agent.choose_effect = _fake_choose_effect
 
 

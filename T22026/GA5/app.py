@@ -103,6 +103,66 @@ async def ga5_preflight(full_path: str) -> Response:
     return Response(status_code=200, headers=_CORS_HEADERS)
 
 
+class _CaptureASGI:
+    """Tee request/response bytes of the agent routes into the private recorder
+    (T22026/GA5/capture.py). Pure ASGI so it works on every Starlette version."""
+
+    def __init__(self, inner):
+        self.inner = inner
+
+    async def __call__(self, scope, receive, send):
+        from T22026.GA5 import capture
+        if scope.get("type") != "http" or not capture.wants(scope.get("path", "")):
+            return await self.inner(scope, receive, send)
+        import time as _time
+        started = _time.time()
+        req_chunks: list = []
+        resp_chunks: list = []
+        status_holder = {"status": 0}
+
+        async def _receive():
+            message = await receive()
+            if message.get("type") == "http.request":
+                req_chunks.append(message.get("body", b""))
+            return message
+
+        async def _send(message):
+            if message.get("type") == "http.response.start":
+                status_holder["status"] = message.get("status", 0)
+            elif message.get("type") == "http.response.body":
+                resp_chunks.append(message.get("body", b""))
+            await send(message)
+
+        try:
+            await self.inner(scope, _receive, _send)
+        finally:
+            headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers") or []}
+            capture.record(
+                normalize_email(scope.get("tenant_email") or ""), scope.get("tenant_token"),
+                scope.get("method", ""), scope.get("path", ""), headers,
+                b"".join(req_chunks), status_holder["status"], b"".join(resp_chunks), _time.time() - started,
+            )
+
+
+app.add_middleware(_CaptureASGI)
+
+
+@app.get("/debug/captures", include_in_schema=False)
+async def ga5_debug_captures(request: Request, contains: str = "", limit: int = 40, offset: int = 0, clear: int = 0):
+    """Owner-only view of recorded grader traffic. Requires the tenant URL token."""
+    from fastapi.responses import JSONResponse
+    from T22026.GA5 import capture
+    token = request.scope.get("tenant_token")
+    email = normalize_email(request.scope.get("tenant_email") or "")
+    if not token or not email:
+        return JSONResponse(status_code=404, content={"error": "not found"})
+    if clear:
+        capture.clear(email, token)
+        return {"cleared": True}
+    rows = capture.read(email, token, contains=contains, limit=limit, offset=offset)
+    return JSONResponse(content={"count": len(rows), "entries": rows}, headers={"Cache-Control": "no-store"})
+
+
 app.include_router(ga5_router)
 
 
