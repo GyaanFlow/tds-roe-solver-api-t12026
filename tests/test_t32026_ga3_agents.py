@@ -117,3 +117,14 @@ def test_recorder_redacts_and_is_private_to_the_tenant_url():
     assert rows[0]["request"]["sensitive"] == "[REDACTED]"
     assert capture.read(email, "other-token") == []
     capture.clear(email, token)
+
+
+def test_recorder_survives_unicode_line_separators():
+    email, token = "rec2@example.com", "tok_" + uuid.uuid4().hex
+    capture.clear(email, token)
+    tricky = "a" + chr(0x2028) + "b" + chr(0x2029) + "c" + chr(0x85) + "d"
+    capture.record(email, token, "POST", "/ga5/mailroom", {}, json.dumps({"t": tricky}, ensure_ascii=False).encode(), 200, b"{}", 0.0)
+    capture.record(email, token, "POST", "/ga5/mailroom", {}, b'{"n":2}', 200, b"{}", 0.0)
+    rows = capture.read(email, token)
+    assert [r["request"].get("n") for r in rows] == [2, None] and rows[1]["request"]["t"] == tricky
+    capture.clear(email, token)

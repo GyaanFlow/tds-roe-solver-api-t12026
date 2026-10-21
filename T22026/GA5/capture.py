@@ -81,11 +81,11 @@ def record(email: str, token: Optional[str], method: str, path: str, headers: Di
             "request": _redact(req, secrets),
             "response": _redact(_parse(response_body), secrets),
         }
-        line = json.dumps(entry, ensure_ascii=False)
+        line = json.dumps(entry, ensure_ascii=True)  # no raw U+2028 etc. inside a line
         path_ = _ROOT / f"{_key(email, token)}.jsonl"
         with _LOCK:
             _ROOT.mkdir(parents=True, exist_ok=True)
-            lines = path_.read_text(encoding="utf-8").splitlines() if path_.exists() else []
+            lines = [x for x in path_.read_text(encoding="utf-8").split("\n") if x.strip()] if path_.exists() else []
             lines.append(line)
             lines = lines[-MAX_ENTRIES:]
             while len(lines) > 1 and sum(len(x) for x in lines) > 40_000_000:
@@ -102,8 +102,14 @@ def read(email: str, token: Optional[str], contains: str = "", limit: int = 40, 
     if not path_.exists():
         return []
     with _LOCK:
-        lines = path_.read_text(encoding="utf-8").splitlines()
-    rows = [json.loads(x) for x in lines if x.strip()]
+        lines = path_.read_text(encoding="utf-8").split("\n")
+    rows = []
+    for x in lines:
+        if x.strip():
+            try:
+                rows.append(json.loads(x))
+            except ValueError:
+                continue
     if contains:
         rows = [r for r in rows if contains in r.get("path", "")]
     rows = rows[::-1]  # newest first
