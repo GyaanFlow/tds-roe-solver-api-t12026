@@ -107,8 +107,8 @@ class _CaptureASGI:
     """Tee request/response bytes of the agent routes into the private recorder
     (T22026/GA5/capture.py). Pure ASGI so it works on every Starlette version."""
 
-    def __init__(self, inner):
-        self.inner = inner
+    def __init__(self, app):  # Starlette passes this as app=... (keyword)
+        self.inner = app
 
     async def __call__(self, scope, receive, send):
         from T22026.GA5 import capture
