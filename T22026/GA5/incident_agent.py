@@ -617,6 +617,9 @@ cause — cause-appropriateness matters more than avoiding destructive tools. Gu
   action. Escalate/report/open an incident instead if such a tool is offered: a run
   observed to make no valid action attempt at all scores ZERO, so an escalation is
   always worth more than standing down.
+- If the service is ALREADY at its permitted scaling limit (max replicas/instances reached,
+  quota or autoscaling ceiling hit), do NOT scale -- page the owner with the paging/escalation
+  tool if one is offered.
 Give narrow, incident-specific arguments (extract deploymentId / featureName / service
 name from the transcript when the tool needs them). Return strictly JSON:
 {"chosenEffect": "<one of the effect tools>", "arguments": {...}}
@@ -688,6 +691,8 @@ async def choose_effect(root_cause: str, effect_tools: List[str], tool_catalog: 
         if chosen not in effect_tools:
             chosen = _safest_effect_fallback(effect_tools)
         chosen = _override_wrong_effect(root_cause, chosen, effect_tools)
+        if chosen == "scale_service" and at_scaling_limit(root_cause, incident.get("transcript"), incident.get("title")):
+            chosen = _page_owner_tool(effect_tools) or chosen
         args_derived = _derive_tool_arguments(chosen, tool_catalog, incident, root_cause)
         final_args = {**args_derived, **(out.get("arguments") or {})}
         tool_spec = next((t for t in tool_catalog if t.get("name") == chosen), None)
@@ -700,6 +705,27 @@ async def choose_effect(root_cause: str, effect_tools: List[str], tool_catalog: 
     except Exception:
         fallback_effect = _override_wrong_effect(root_cause, _safest_effect_fallback(effect_tools), effect_tools)
         return {"chosenEffect": fallback_effect, "arguments": _derive_tool_arguments(fallback_effect, tool_catalog, incident, root_cause)}
+
+
+_AT_LIMIT_RE = re.compile(
+    r"(already at (its |the )?(permitted |maximum |max |configured )?(scal\w*|replica|instance|capacity)\s*(limit|ceiling|cap|max)"
+    r"|at (its |the )?(permitted |maximum |max )?(scal\w*|replica|instance)\s*(limit|ceiling|cap|max)"
+    r"|(max(imum)?|permitted)\s+(replicas?|instances?|scal\w*)\s*(reached|hit|exhausted|limit)"
+    r"|(replicas?|instances?)\s*[:=]?\s*(?P<n>\d+)\s*(/|of)\s*(?P=n)(?![0-9])"
+    r"|scal\w*\s*(limit|ceiling|cap)\s*(reached|hit|exceeded)|cannot scale|can't scale|no (further|more) scaling)", re.I)
+
+
+def at_scaling_limit(*texts: Any) -> bool:
+    """True when the incident text says the service is already at its permitted scaling limit."""
+    return any(_AT_LIMIT_RE.search(str(t or "")) for t in texts)
+
+
+def _page_owner_tool(effect_tools: List[str]) -> Optional[str]:
+    for hint in ("page", "notify", "alert", "escalat", "incident"):
+        found = next((t for t in effect_tools if hint in t.lower() and t not in DESTRUCTIVE_DEFAULT), None)
+        if found:
+            return found
+    return None
 
 
 def _override_wrong_effect(root_cause: str, chosen: Optional[str], effect_tools: List[str]) -> Optional[str]:
