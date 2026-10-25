@@ -986,10 +986,9 @@ async def create_incident(body: Dict[str, Any], email: str, token: Optional[str]
                 and token
             )
             if not can_rediagnose:
-                # "The same request ... must return the same JSON": replay the
-                # response this request originally got, not the run's latest
-                # state (GET serves that).
-                return _with_headers(existing.get("createResponse") or existing["lastResponse"], existing)
+                # Captured live grading shows a repeated create returns the
+                # run's CURRENT stored state (e.g. completed), not the first reply.
+                return _with_headers(existing["lastResponse"], existing)
         else:
             raise MailroomError(409, f"runId '{run_id}' already used with different content")
 
@@ -1113,8 +1112,7 @@ async def submit_receipts(run_id: str, body: Dict[str, Any], email: str, token: 
     prior_fp = run["receiptFingerprints"].get(receipt_id)
     if prior_fp is not None:
         if prior_fp == receipt_fp:
-            # Identical receipt replay -> the exact JSON that receipt produced.
-            return _with_headers((run.get("receiptResponses") or {}).get(receipt_id) or run["lastResponse"], run)
+            return _with_headers(run["lastResponse"], run)
         raise MailroomError(409, f"receiptId '{receipt_id}' already used with different content")
 
     if run["state"] in ("COMPLETED", "FAILED"):

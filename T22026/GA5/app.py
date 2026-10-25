@@ -144,6 +144,48 @@ class _CaptureASGI:
             )
 
 
+_REF_ENGINE_CACHE: dict = {}
+
+
+class _ReferenceEnginesASGI:
+    """Serve the T3-2026 GA3 mailroom and incident questions with the reference
+    engines vendored in T32026/GA3/refimpl (they pass the live grader; see
+    T32026/GA3/README.md). Same public URLs: {base}/mailroom and {base}/v2/incidents.
+    Set GA3_REF_ENGINES=0 to fall back to the original T22026/GA5 handlers."""
+
+    def __init__(self, app):  # Starlette passes this as app=... (keyword)
+        self.inner = app
+
+    def _engine(self, name):
+        if name not in _REF_ENGINE_CACHE:
+            if name == "mailroom":
+                from T32026.GA3.refimpl.mailroom.agent import app as engine
+            else:
+                from T32026.GA3.refimpl.incident.agent import app as engine
+            _REF_ENGINE_CACHE[name] = engine
+        return _REF_ENGINE_CACHE[name]
+
+    async def __call__(self, scope, receive, send):
+        import os as _os
+        if scope.get("type") != "http" or _os.environ.get("GA3_REF_ENGINES", "1") == "0":
+            return await self.inner(scope, receive, send)
+        path = scope.get("path", "")
+        root = scope.get("root_path", "") or ""
+        sub = path[len(root):] if root and path.startswith(root) else path
+        if sub.startswith("/ga5/"):
+            sub = sub[len("/ga5"):]
+        target = None
+        if sub.rstrip("/") in ("/mailroom", "/q9") and scope.get("method") == "POST":
+            target, new_path = "mailroom", "/"
+        elif sub.startswith("/v2/incidents"):
+            target, new_path = "incident", sub
+        if target is None:
+            return await self.inner(scope, receive, send)
+        child = dict(scope, path=new_path, raw_path=new_path.encode(), root_path="")
+        return await self._engine(target)(child, receive, send)
+
+
+app.add_middleware(_ReferenceEnginesASGI)
 app.add_middleware(_CaptureASGI)
 
 

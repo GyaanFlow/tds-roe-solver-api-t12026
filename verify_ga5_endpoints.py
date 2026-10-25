@@ -1,3 +1,5 @@
+import os as _os
+_os.environ["GA3_REF_ENGINES"] = "0"  # this suite exercises the legacy T2 GA5 handlers
 """Smoke tests for the GA5 agent-safety/infra hub, mounted at /ga5/{email}/...
 
 Covers the GA5 questions implemented as live endpoints: Q2 (proration), Q3
