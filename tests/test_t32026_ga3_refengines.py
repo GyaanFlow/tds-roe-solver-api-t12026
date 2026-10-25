@@ -150,3 +150,15 @@ def test_replays_real_grader_incident_traffic(client):
             if isinstance(ref_sem.get("diagnosis"), dict):
                 pass
             assert sem(ours) == ref_sem, (row["method"], path)
+
+
+def test_reference_routes_still_prime_the_agent_card(client):
+    from T22026.GA5 import a2a_agent
+    token = "tok_" + uuid.uuid4().hex
+    base = f"/ga5/prime%40example.com/{token}"
+    client.post(base + "/mailroom", json={"profile": PROFILE, "operation": "explode"})
+    urls = [i["url"] for i in a2a_agent.agent_card_json()["supportedInterfaces"]]
+    assert f"http://testserver{base}/a2a/" in urls
+    # Same string the A2A routes themselves register (no duplicate variants).
+    client.get(base + "/a2a/tasks", headers={"A2A-Version": "1.0", "Authorization": "Bearer x"})
+    assert [i["url"] for i in a2a_agent.agent_card_json()["supportedInterfaces"]].count(f"http://testserver{base}/a2a/") == 1

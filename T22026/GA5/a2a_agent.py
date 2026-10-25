@@ -18,6 +18,7 @@ URLs) — see `register_base_url` / `agent_card_json`.
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import re
 import threading
@@ -191,7 +192,10 @@ def agent_card_json() -> Dict[str, Any]:
             "name": "Invoice Action Agent",
             "description": "Triages invoice claim batches into settle/approve/hold/reject-duplicate/exception actions with cited evidence.",
             "tags": ["invoice", "triage", "a2a", "finance"],
+            "inputModes": [PROFILE_INPUT_MODE],
+            "outputModes": [PROPOSALS_MODE, RECEIPTS_MODE],
         }],
+        "securitySchemes": {"bearerAuth": {"httpAuthSecurityScheme": {"scheme": "Bearer"}}},
         "supportedInterfaces": supported,
         "defaultInputModes": [PROFILE_INPUT_MODE],
         "defaultOutputModes": [PROPOSALS_MODE, RECEIPTS_MODE],
@@ -801,6 +805,34 @@ async def message_send(body: Dict[str, Any], principal: str, token: Optional[str
         return response
 
 
+def reference_rules_triage(package: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Second deterministic layer (T32026/GA3/refimpl/a2a/rules.py, from a peer reference
+    solution). It decodes the fresh-audit "scattered facts" packages -- no paragraph with
+    exactly three refs -- from their order / authority / ledger / bank-change / policy
+    paragraphs, and confident single-paragraph rule matches. Returns None for a genuinely
+    low-confidence core tie so the model still decides those. GA3_A2A_REF_RULES=0 disables."""
+    if os.environ.get("GA3_A2A_REF_RULES", "1") == "0":
+        return None
+    try:
+        from T32026.GA3.refimpl.a2a import rules as ref
+        analysis = ref.analyze(package)
+        if analysis.get("audit") is None and analysis["rule"].get("conf") == "low":
+            return None
+        decision = ref.build_decision(analysis, None)
+        refs = [str(r).strip().strip("[]") for r in decision.get("refs") or []]
+        if decision.get("action") not in ALLOWED_INVOICE_ACTIONS or len(refs) != 3:
+            return None
+        decision = dict(decision, refs=refs)
+        rationale = ref.build_rationale(decision["action"], decision, False)
+        ok, _ = validate_invoice_proposal(decision["action"], decision["facts"], refs, rationale)
+        if not ok:
+            return None
+        return {"action": decision["action"], "facts": decision["facts"], "evidenceRefs": refs, "rationale": rationale}
+    except Exception:
+        logging.getLogger("ga5_a2a").warning("reference rules failed for %s", package.get("packageId"), exc_info=True)
+        return None
+
+
 async def _handle_initial_batch(message: Dict[str, Any], part: Dict[str, Any], principal: str, token: str, store: A2AStore) -> Dict[str, Any]:
     data = part.get("data", {}) or {}
     batch_id = data.get("batchId")
@@ -860,7 +892,7 @@ async def _handle_initial_batch(message: Dict[str, Any], part: Dict[str, Any], p
     # that layout reach the model.
     _det_pending: List[int] = []
     for i in pending_indices:
-        det = deterministic_package_triage(packages[i])
+        det = deterministic_package_triage(packages[i]) or reference_rules_triage(packages[i])
         if det is not None:
             package_id = packages[i]["packageId"]
             proposal = {

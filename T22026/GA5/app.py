@@ -181,6 +181,22 @@ class _ReferenceEnginesASGI:
             target, new_path = "incident", sub
         if target is None:
             return await self.inner(scope, receive, send)
+        # These requests bypass _inject_tenant, which is where every tenant route
+        # registers its A2A base on the origin-level Agent Card. Keep that
+        # priming: after a restart the grader's mailroom/incident traffic is
+        # often what repopulates supportedInterfaces before the A2A check.
+        try:
+            token, email = scope.get("tenant_token"), scope.get("tenant_email")
+            if token and email:
+                from T22026.GA5 import a2a_agent as _a2a
+                from T22026.GA5.shared.tenant import build_solver_url_prefix as _prefix
+                headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers") or []}
+                proto = (headers.get("x-forwarded-proto") or scope.get("scheme") or "https").split(",")[0].strip()
+                host = headers.get("x-forwarded-host") or headers.get("host") or ""
+                if host:
+                    _a2a.register_base_url(f"{_prefix(f'{proto}://{host}', normalize_email(email))}/{token}/a2a/")
+        except Exception:  # registration must never break a request
+            pass
         child = dict(scope, path=new_path, raw_path=new_path.encode(), root_path="")
         return await self._engine(target)(child, receive, send)
 

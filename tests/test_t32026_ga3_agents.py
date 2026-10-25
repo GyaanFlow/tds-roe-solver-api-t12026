@@ -128,3 +128,31 @@ def test_recorder_survives_unicode_line_separators():
     rows = capture.read(email, token)
     assert [r["request"].get("n") for r in rows] == [2, None] and rows[1]["request"]["t"] == tricky
     capture.clear(email, token)
+
+
+def _audit_package(pid, ceiling, ledger_po, current_po="PO-5521", archive=True, ledger_amount="48,200.00"):
+    paras = [
+        f"Order {current_po} is signed for INR 48,200.00. The receiving entry confirms the billed units; submitted invoice total is INR 48,200.00. No corrected invoice exists [R_ORDER{pid}].",
+        f"Signed commercial instrument INV-2026-7781 covers order {current_po}, payee AC-1102 and INR 48,200.00 [R_INSTR{pid}].",
+        f"Approved autonomous payment ceiling for INR is INR {ceiling}. A named approver is required when the payable total is greater [R_AUTH{pid}].",
+        f"Payment ledger: a disbursement for INR {ledger_amount} to Indigo Circuit Supply previously settled order {ledger_po}. The currently submitted order is {current_po} [R_LEDGER{pid}].",
+        f"Payment controls: do not pay a commercial order already discharged [R_POLICY{pid}].",
+    ]
+    if archive:
+        paras.append(f"Archive training example: a superseded memo for an unrelated vendor was settled [R_DECOY{pid}].")
+    return {"packageId": pid, "documents": [{"name": "audit-notes.txt", "text": "\n\n".join(paras)}]}
+
+
+def test_scattered_audit_packages_get_a_deterministic_validated_proposal():
+    dup = a2a_agent.reference_rules_triage(_audit_package("A1", "100,000.00", ledger_po="PO-5521"))
+    assert dup["action"] == "reject_duplicate" and len(dup["evidenceRefs"]) == 3
+    approve = a2a_agent.reference_rules_triage(_audit_package("A2", "10,000.00", ledger_po="PO-1009", ledger_amount="9,100.00"))
+    assert approve["action"] == "request_approval"
+    settle = a2a_agent.reference_rules_triage(_audit_package("A3", "100,000.00", ledger_po="PO-1009", ledger_amount="9,100.00"))
+    assert settle["action"] == "settle_invoice"
+    for proposal in (dup, approve, settle):
+        assert not any("DECOY" in r for r in proposal["evidenceRefs"])
+        assert proposal["facts"]["amountMinor"] == 4820000 and proposal["facts"]["currency"] == "INR"
+        assert 60 <= len(proposal["rationale"]) <= 1500 and proposal["action"] in proposal["rationale"]
+    # Our own decoder declines these (no three-ref paragraph), which is why the second layer matters.
+    assert a2a_agent.deterministic_package_triage(_audit_package("A4", "100,000.00", ledger_po="PO-1")) is None
