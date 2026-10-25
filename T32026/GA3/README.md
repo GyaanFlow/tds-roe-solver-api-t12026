@@ -23,7 +23,7 @@ Set `GA3_REF_ENGINES=0` to fall back to the original T22026/GA5 handlers.
 ## Verification
 
 `tests/test_t32026_ga3_refengines.py` replays 43 requests captured from a live Check
-(`tests/fixtures/t3ga3_incident_grader_capture.jsonl.gz`) through the gateway, remapping grader IDs, and
+(`tests/fixtures/t3ga3_incident_grader_capture.jsonl`) through the gateway, remapping grader IDs, and
 requires identical diagnoses, tools, arguments, evidence, approvals, effects and states. Run the suites with the
 deployed pins too (`fastapi==0.115.0`), see `hf_space/requirements.txt`.
 

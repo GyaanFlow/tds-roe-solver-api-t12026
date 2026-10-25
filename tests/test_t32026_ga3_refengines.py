@@ -111,8 +111,8 @@ def test_replays_real_grader_incident_traffic(client):
     Grader IDs are remapped onto ours, then decisions/arguments/states compared."""
     import gzip
     from pathlib import Path
-    fixture = Path(__file__).parent / "fixtures" / "t3ga3_incident_grader_capture.jsonl.gz"
-    rows = [json.loads(line) for line in gzip.open(fixture, "rt", encoding="utf8") if line.strip()]
+    fixture = Path(__file__).parent / "fixtures" / "t3ga3_incident_grader_capture.jsonl"
+    rows = [json.loads(line) for line in open(fixture, encoding="utf8") if line.strip()]
     idmap = {}
 
     def remap(o):
