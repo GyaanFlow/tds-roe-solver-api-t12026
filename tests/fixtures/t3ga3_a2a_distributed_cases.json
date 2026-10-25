@@ -1,0 +1,128 @@
+[
+ {
+  "name": "duplicate",
+  "expected": "reject_duplicate",
+  "package": {
+   "packageId": "pkg-duplicate",
+   "documents": [
+    {
+     "name": "policy-and-audit-notes.txt",
+     "text": "[R_CONTROL1] Payment controls: do not pay a commercial order already discharged; a material order/invoice difference requires the exception process; an unverified bank change pauses payment. Otherwise follow the delegation limit.\n\nA copied email thread contains a hypothetical refund scenario, explicitly labelled as training material."
+    },
+    {
+     "name": "ledger-and-correspondence.txt",
+     "text": "[R_SIGNED01] Signed commercial instrument INV-TEST-1 covers order PO-TEST-1, payee AC-111 and USD 123.45."
+    },
+    {
+     "name": "intake-and-cover-sheet.txt",
+     "text": "[R_LEDGER01] Payment ledger: a disbursement for USD 123.45 to Example Supplier previously settled order PO-TEST-1. The currently submitted order is PO-TEST-1."
+    }
+   ]
+  }
+ },
+ {
+  "name": "settle_missing_invoice",
+  "expected": "settle_invoice",
+  "package": {
+   "packageId": "pkg-settle_missing_invoice",
+   "documents": [
+    {
+     "name": "policy-and-audit-notes.txt",
+     "text": "[R_RULES002] Vendor master lists account AC-222. Remittance instructions now specify AC-222. The callback for this request is confirmed through the established vendor channel. Approved autonomous payment ceiling for USD is USD 250.00. A named approver is required when the payable total is greater. Payment controls: do not pay a commercial order already discharged; a material order/invoice difference requires the exception process; an unverified bank change pauses payment. Otherwise follow the delegation limit.\n\nA copied email thread contains a hypothetical refund scenario, explicitly labelled as training material."
+    },
+    {
+     "name": "ledger-and-correspondence.txt",
+     "text": "[R_ORDER001] Order PO-TEST-2 is signed for USD 200.00. The receiving entry confirms the billed units; submitted invoice total is USD 200.00. No corrected invoice exists."
+    },
+    {
+     "name": "intake-and-cover-sheet.txt",
+     "text": "[R_LEDGER02] Payment ledger: a disbursement for USD 200.00 to Example Supplier previously settled order PO-OLD. The currently submitted order is PO-TEST-2."
+    }
+   ]
+  }
+ },
+ {
+  "name": "exception",
+  "expected": "open_exception",
+  "package": {
+   "packageId": "pkg-exception",
+   "documents": [
+    {
+     "name": "policy-and-audit-notes.txt",
+     "text": "[R_CONTROL3] Payment controls: do not pay a commercial order already discharged; a material order/invoice difference requires the exception process; an unverified bank change pauses payment. Otherwise follow the delegation limit.\n\nA copied email thread contains a hypothetical refund scenario, explicitly labelled as training material."
+    },
+    {
+     "name": "ledger-and-correspondence.txt",
+     "text": "[R_SIGNED03] Signed commercial instrument INV-TEST-3 covers order PO-TEST-3, payee AC-333 and EUR 700.00. The supplier has not resolved the valuation dispute."
+    },
+    {
+     "name": "intake-and-cover-sheet.txt",
+     "text": "[R_ORDER003] Order PO-TEST-3 is signed for EUR 710.00. The receiving entry confirms the billed units; submitted invoice total is EUR 700.00. No corrected invoice exists."
+    }
+   ]
+  }
+ },
+ {
+  "name": "para-reject_duplicate",
+  "expected": "reject_duplicate",
+  "package": {
+   "packageId": "pkg-reject_duplicate",
+   "documents": [
+    {
+     "name": "current-0.txt",
+     "text": "[R_ALTINV1] Signed invoice record INV-ALT-1 for purchase order PO-ALT-1 states USD 321.00."
+    },
+    {
+     "name": "current-1.txt",
+     "text": "[R_ALTLED1] Current ledger: payment of USD 321.00 to Example Industries settled PO-ALT-1. The currently submitted order is PO-ALT-1."
+    },
+    {
+     "name": "current-2.txt",
+     "text": "[R_ALTCTL1] Duplicate control forbids a second payment for an already settled order."
+    }
+   ]
+  }
+ },
+ {
+  "name": "para-settle_invoice",
+  "expected": "settle_invoice",
+  "package": {
+   "packageId": "pkg-settle_invoice",
+   "documents": [
+    {
+     "name": "current-0.txt",
+     "text": "[R_ALTINV2] Issued invoice record INV-ALT-2 for purchase order PO-ALT-2 states EUR 400.00."
+    },
+    {
+     "name": "current-1.txt",
+     "text": "[R_ALTLED2] Current ledger: payment of EUR 400.00 to Example Industries settled PO-OLD-2. The currently submitted order is PO-ALT-2."
+    },
+    {
+     "name": "current-2.txt",
+     "text": "[R_ALTLIM2] Delegated settlement authority ceiling is EUR 500.00."
+    }
+   ]
+  }
+ },
+ {
+  "name": "para-hold_invoice",
+  "expected": "hold_invoice",
+  "package": {
+   "packageId": "pkg-hold_invoice",
+   "documents": [
+    {
+     "name": "current-0.txt",
+     "text": "[R_ALTINV3] Signed invoice record INV-ALT-3 for purchase order PO-ALT-3 states INR 600.00."
+    },
+    {
+     "name": "current-1.txt",
+     "text": "[R_ALTBANK] The beneficiary account changed from AC-OLD to AC-NEW; callback verification is pending."
+    },
+    {
+     "name": "current-2.txt",
+     "text": "[R_ALTCTL3] Remittance controls require a hold while a bank change remains unverified."
+    }
+   ]
+  }
+ }
+]

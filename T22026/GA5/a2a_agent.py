@@ -806,28 +806,43 @@ async def message_send(body: Dict[str, Any], principal: str, token: Optional[str
 
 
 def reference_rules_triage(package: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Second deterministic layer (T32026/GA3/refimpl/a2a/rules.py, from a peer reference
-    solution). It decodes the fresh-audit "scattered facts" packages -- no paragraph with
-    exactly three refs -- from their order / authority / ledger / bank-change / policy
-    paragraphs, and confident single-paragraph rule matches. Returns None for a genuinely
-    low-confidence core tie so the model still decides those. GA3_A2A_REF_RULES=0 disables."""
+    """Second deterministic layer for packages our decoder declines, chiefly the
+    fresh-audit "distributed" packages whose facts sit in several one-ref records
+    (signed instrument / order / ledger / bank / ceiling / controls), in any order and
+    sometimes paraphrased. Uses the provider-free readers from
+    T32026/GA3/refimpl/a2a/hypemonk_q10.py (HypeMonk/TDS-GA5): duplicate only when the
+    ledger settled the SAME order ("a payment for a different invoice is not a
+    duplicate"), and missing identities stay "unknown" instead of being invented.
+    Returns None when no reader applies, so the model still decides those.
+    GA3_A2A_REF_RULES=0 disables."""
     if os.environ.get("GA3_A2A_REF_RULES", "1") == "0":
         return None
     try:
-        from T32026.GA3.refimpl.a2a import rules as ref
-        analysis = ref.analyze(package)
-        if analysis.get("audit") is None and analysis["rule"].get("conf") == "low":
+        from T32026.GA3.refimpl.a2a import hypemonk_q10 as hm
+        decision = hm.distributed_decision(package) or hm.semantic_distributed_decision(package)
+        if decision is None:
+            paragraph = hm.decisive_paragraph(package)
+            if not paragraph:
+                return None
+            refs = hm.BRACKET_REF.findall(paragraph)
+            facts = hm.cover_facts(package)
+            action = hm.classify_decisive(paragraph)
+            action = hm.apply_authority_rule(paragraph, facts, action) if facts else action
+            if len(refs) != 3 or action not in ALLOWED_INVOICE_ACTIONS or not facts:
+                return None
+            decision = {"action": action, "facts": facts, "evidenceRefs": refs,
+                        "rationale": hm.build_rationale(action, refs, facts, paragraph)}
+        facts = {k: decision["facts"].get(k) for k in ("vendorName", "invoiceNumber", "amountMinor", "currency")}
+        refs = [str(r).strip().strip("[]") for r in decision.get("evidenceRefs") or []]
+        if decision.get("action") not in ALLOWED_INVOICE_ACTIONS or len(refs) != 3 or len(set(refs)) != 3:
             return None
-        decision = ref.build_decision(analysis, None)
-        refs = [str(r).strip().strip("[]") for r in decision.get("refs") or []]
-        if decision.get("action") not in ALLOWED_INVOICE_ACTIONS or len(refs) != 3:
+        if not isinstance(facts["amountMinor"], int) or not facts["currency"]:
             return None
-        decision = dict(decision, refs=refs)
-        rationale = ref.build_rationale(decision["action"], decision, False)
-        ok, _ = validate_invoice_proposal(decision["action"], decision["facts"], refs, rationale)
+        rationale = decision.get("rationale") or ""
+        ok, _ = validate_invoice_proposal(decision["action"], facts, refs, rationale)
         if not ok:
             return None
-        return {"action": decision["action"], "facts": decision["facts"], "evidenceRefs": refs, "rationale": rationale}
+        return {"action": decision["action"], "facts": facts, "evidenceRefs": refs, "rationale": rationale}
     except Exception:
         logging.getLogger("ga5_a2a").warning("reference rules failed for %s", package.get("packageId"), exc_info=True)
         return None
