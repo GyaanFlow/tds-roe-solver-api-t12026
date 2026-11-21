@@ -47,7 +47,7 @@ class MultiTenantASGIMiddleware:
             from urllib.parse import unquote
             raw_path = scope.get("path", "")
             path = unquote(raw_path)
-            match = re.match(r"^/(ga1|ga2|ga3|ga4|ga5|ga6|ga7|ga8)/([^/]+@[^/]+)(/.*)?$", path)
+            match = re.match(r"^/(ga1|ga2|ga3|ga4|ga5|ga6|ga7|ga8|t3ga5)/([^/]+@[^/]+)(/.*)?$", path)
             if match:
                 ga_version = match.group(1)
                 email = match.group(2).strip()
@@ -66,7 +66,8 @@ class MultiTenantASGIMiddleware:
                     "build-corpus", "bqml", "promote", "adapt", "quantize", "pipeline", "verify-bundle",
                     "stats", "verify", "hit", "count", "healthz", "work", "metrics", "logs", "stream.json", "docker.json", "s"
                 }
-                if parts and (parts[0].startswith("sess_") or parts[0] not in known_prefixes):
+                # t3ga5 has no tenant tokens: every segment after the email is a real route.
+                if ga_version != "t3ga5" and parts and (parts[0].startswith("sess_") or parts[0] not in known_prefixes):
                     possible_session_or_token = parts[0]
                     if ga_version == "ga1":
                         # GA1 has no session tokens.
@@ -97,7 +98,7 @@ class ConditionalCORSMiddleware(CORSMiddleware):
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http":
             path = scope.get("path", "")
-            if path.startswith(("/ga1", "/ga2", "/ga3", "/ga4", "/ga5", "/ga6", "/ga7", "/ga8")):
+            if path.startswith(("/ga1", "/ga2", "/ga3", "/ga4", "/ga5", "/ga6", "/ga7", "/ga8", "/t3ga5")):
                 await self.app(scope, receive, send)
                 return
         await super().__call__(scope, receive, send)
@@ -358,6 +359,19 @@ def home() -> str:
       </div>
     </div>
 
+    <!-- T3-2026 GA5 -->
+    <div class="hub-card ga5">
+      <div>
+        <div class="hub-meta c-ga5">T3-2026 · Graded Assignment 5</div>
+        <div class="hub-title">GA5 API Service Bench</div>
+        <div class="hub-desc">RAG Colosseum, harness safety router, Ollama rank-correlation helper and ball tracker.</div>
+      </div>
+      <div class="btn-stack">
+        <a href="/t3ga5/" class="btn b-ga5">Open GA5 Dashboard</a>
+        <a href="/t3ga5/docs" class="btn btn-secondary">API Reference</a>
+      </div>
+    </div>
+
     <!-- T3-2026 GA1 -->
     <div class="hub-card ga5">
       <div>
@@ -499,4 +513,8 @@ app.mount("/ga8", ga8)
 # Mount the T3-2026 GA1 API service and its request test bench.
 ga1 = load_app("ga1_app", BASE / "T32026" / "GA1" / "app.py")
 app.mount("/ga1", ga1)
+
+# Mount the T3-2026 GA5 hub (RAG gauntlet, harness safety router, Ollama helper, ball tracker).
+t3ga5 = load_app("t3ga5_app", BASE / "T32026" / "GA5" / "app.py")
+app.mount("/t3ga5", t3ga5)
 
