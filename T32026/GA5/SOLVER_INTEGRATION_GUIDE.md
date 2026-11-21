@@ -104,15 +104,9 @@ documents, Spearman rho) without needing FAISS or SciPy; its rank and rho math i
 
 ## 5. Q3 Track the red ball
 
-No hosted service can answer this one: the exam serves a binary frames file at `/questionData?...&questionId=q-ball-tracker-server`
-that only the signed-in student can fetch (layout: big-endian uint32 fps, frame count, three target frame numbers, then
-length-prefixed PNG frames), and the student reports the final number on their ball plus the ball centre at the three target frames
-(`number; x,y; x,y; x,y`).
-
-The portal ships `solvers/T32026/ga5/q03-ball-tracker.js`: the student saves the frames file once, opens it in an in-browser viewer
-(frame stepping, zoom, "find my red ball" in frame 0, click-to-mark with exact pixel mapping) and gets the answer line built for them.
-It also offers a small `ball_frames.py` that unpacks the file into PNGs for anyone who wants to write an automatic tracker. There is no
-server-side tracker because no real frames file was available to build and validate one.
+Not implemented yet. The exam serves binary frames at `/questionData?...&questionId=q-ball-tracker-server` (header: fps,
+frame count, three target frame numbers, then length-prefixed PNG frames; the student reports the final number on their ball and
+the ball centre at the three target frames). It needs the student's own frames file to build and test a tracker.
 
 ## 6. Verification
 

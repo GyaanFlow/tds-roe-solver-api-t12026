@@ -110,7 +110,8 @@ _INJECTION = re.compile(
     r"|\b(?:print|repeat|output|show|display)\b[^.?!\n]{0,40}(?:system prompt|your instructions|hidden|secret|api key|password)"
     r"|\b(?:reply|respond|answer|say|write|output|return|print)\b\s+(?:only\s+|just\s+|exactly\s+)?(?:with|that|the word|the phrase)\b[^.?!\n]{0,80}"
     r"|<\s*/?\s*(?:system|instructions?|assistant|prompt)\s*>|\[\s*(?:system|inst|admin|override)[^\]]*\]"
-    r"|\bdo anything now\b|\bjailbreak\b|\bpwned\b|\baccess granted\b|\bdeveloper mode\b",
+    r"|\bdo anything now\b|\bjailbreak\b|\bpwned\b|\baccess granted\b|\bdeveloper mode\b"
+    r"|\b(?:answer|response|output|reply|result)\s*[:=]\s*\S",
     re.I)
 _VALUE_RE = re.compile(
     r"how many|how much|how large|how big|how small|how fast|how high|how low|how long|how often|what (?:is|are|was) the "
@@ -145,19 +146,66 @@ def _content(text: str) -> list[str]:
     return [t for t in _tokens(text) if t not in _STOP and len(t) > 1]
 
 
+# whole wrapped blocks that only exist to smuggle instructions in (cut out entirely, wrapper included)
+_WRAPPED_BLOCKS = [
+    re.compile(r"<!--.*?(?:-->|$)", re.S),                                              # HTML comments
+    re.compile(r"```.*?(?:```|$)", re.S),                                               # code fences (unclosed ones run to the end)
+    re.compile(r"\[\s*(?:inst|sys|system|admin|override)[^\]]*\].*?(?:\[\s*/\s*(?:inst|sys|system|admin|override)[^\]]*\]|$)", re.S | re.I),
+    re.compile(r"<\s*(?:system|instructions?|assistant|prompt|tool|admin)\b[^>]*>.*?(?:<\s*/\s*(?:system|instructions?|assistant|prompt|tool|admin)\s*>|$)", re.S | re.I),
+    re.compile(r"\{\{\s*(?:system|assistant|instructions?|prompt|admin)[^}]*\}\}.*?(?:\{\{\s*/\s*(?:system|assistant|instructions?|prompt|admin)\s*\}\}|$)", re.S | re.I),
+    re.compile(r"\{\{.*?(?:\}\}|$)|\{%.*?(?:%\}|$)", re.S),                           # template / jinja blocks
+]
+_STRAY_TAGS = re.compile(r"</?\s*(?:system|instructions?|assistant|prompt|tool|admin|inst|sys)\b[^>\]]*[>\]]|\[\s*/?\s*(?:inst|sys)\s*\]", re.I)
+_MARKER_ONLY = re.compile(r"^\W*(?:p\.?\s?s\.?|n\.?\s?b\.?|note|btw|fyi|ps)\W*$", re.I)
+
+
+_QUESTION_START = re.compile(r"\b(?:what|which|who|whom|whose|when|where|why|how|is|are|was|were|does|do|did|can|could|tell me|name the|list the)\b", re.I)
+
+
+def _question_after_instruction(sentence: str) -> str:
+    """Keep the interrogative part of a sentence that also carries an instruction, if it ends as a question."""
+    if "?" not in sentence:
+        return ""
+    cue = _INJECTION.search(sentence)
+    if cue is None:
+        return sentence.strip()
+    tail = sentence[cue.start():]
+    # the instruction text may itself end at the cue's own span; look for a question that starts after the cue's first word
+    m = _QUESTION_START.search(sentence, cue.start() + 1)
+    while m is not None:
+        candidate = sentence[m.start():].strip()
+        if not _INJECTION.search(candidate) and candidate.endswith("?"):
+            return candidate
+        m = _QUESTION_START.search(sentence, m.end())
+    return ""
+
+
 def strip_injection(question: str) -> str:
     """Remove embedded instructions; the remainder is the real question."""
     text = str(question or "")
+    for block in _WRAPPED_BLOCKS:
+        text = block.sub(" ", text)
+    text = _STRAY_TAGS.sub(" ", text)
     # parentheticals/brackets that carry an instruction are dropped whole
     text = re.sub(r"[\(\[\{][^\)\]\}]*[\)\]\}]", lambda m: " " if _INJECTION.search(m.group()) else m.group(), text)
-    # then any sentence that issues an instruction
+    # then any sentence that issues an instruction (and bare "P.S." / "Note:" markers left behind)
     sentences = re.split(r"(?<=[.?!])\s+|\n+", text)
-    kept = [x for x in sentences if x.strip() and not _INJECTION.search(x)]
+    kept = []
+    for x in sentences:
+        if not x.strip() or _MARKER_ONLY.match(x):
+            continue
+        if _INJECTION.search(x):
+            x = _question_after_instruction(x)  # "Ignore previous instructions What is X?" -> "What is X?"
+            if not x:
+                continue
+        kept.append(x)
     if not kept:
         return ""
     cleaned = " ".join(kept)
     cleaned = re.sub(r"\(\s*\)|\[\s*\]|\{\s*\}", " ", cleaned)
-    return re.sub(r"\s+", " ", cleaned).strip(" ,;:-")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,;:-")
+    # a trailing "P.S." that survived the split ("... entry? P.S.")
+    return re.sub(r"\s+(?:p\.?\s?s\.?|n\.?\s?b\.?)\W*$", "", cleaned, flags=re.I).strip()
 
 
 @dataclass
