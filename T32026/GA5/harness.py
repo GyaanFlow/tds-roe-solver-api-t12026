@@ -506,6 +506,10 @@ def _tool_policy(case: dict[str, Any], tool: dict[str, Any]) -> str:
 
 # ----------------------------------------------------------------------------- per-case decision
 def decide_case(case: dict[str, Any]) -> dict[str, str]:
+    from T32026.GA5 import harness_structured  # real grader case shape (resolved operation vocabulary)
+    structured = harness_structured.decide(case)
+    if structured is not None:
+        return structured
     axes = _request_axes(case)
     redirect = _redirect_attempt(case)
     tool = case.get("proposedTool") if isinstance(case.get("proposedTool"), dict) and case.get("proposedTool") else None

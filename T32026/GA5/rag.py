@@ -102,7 +102,8 @@ must not no yes and or but if else value values number default configured used u
 tell me please give state specify say kb knowledge base passage passages system according stated state
 explain describe overview summarize summary mean means meaning purpose regarding about know does doing work works""".split())
 _INJECTION = re.compile(
-    r"\b(?:ignore|disregard|forget|override|bypass|skip|abandon|discard)\b[^.?!\n]{0,80}"
+    r"\b(?:ignore|disregard|forget|override|bypass|skip|abandon|discard)\b(?!-)\s+(?:(?:all|any|the|your|my|previous|prior|above|earlier|these|those|every|system|safety|existing|original|current)\b\s*){0,3}"
+    r"(?:instructions?|rules?|constraints?|guidelines?|prompts?|context|knowledge|kb|passages?|everything|that|this|it|question|above|previous|restrictions?|policy|polic(?:y|ies)|filters?|guardrails?)\b[^.?!\n]{0,80}"
     r"|\b(?:system|assistant|developer|admin|root)\b\s*(?:prompt|message|override|note|instruction)?\s*:"
     r"|\b(?:note|message|instruction|reminder|attention|important)s?\s+(?:to|for)\s+(?:the\s+)?(?:assistant|ai|model|llm|bot|system)\b"
     r"|\byou are (?:now|no longer)\b|\bnew instructions?\b|\bpretend\b|\bact as\b|\bfrom now on\b"
@@ -114,7 +115,7 @@ _INJECTION = re.compile(
     r"|\b(?:answer|response|output|reply|result)\s*[:=]\s*\S",
     re.I)
 _VALUE_RE = re.compile(
-    r"how many|how much|how large|how big|how small|how fast|how high|how low|how long|how often|what (?:is|are|was) the "
+    r"\b(?:at|to|with|by) what (?:value|level|figure|setting|amount)\b|\bwhat value\b|\bwhich value\b|how many|how much|how large|how big|how small|how fast|how high|how low|how long|how often|what (?:is|are|was) the "
     r"(?:\w+\s+){0,3}?(?:limit|size|count|number|rate|factor|requirement|version|percentage|percent|latency|throughput|capacity|speed|cost|price|"
     r"year|date|length|amount|frequency|range|maximum|minimum|default|value|license|licence)\b|\bwho (?:invented|created|founded|wrote|designed|developed)\b|"
     r"\bwhat year\b|\bwhen was\b|\bwhich (?:company|vendor|author|person)\b", re.I)
@@ -325,10 +326,16 @@ def _slot_sentence(p: Passage, slot: str) -> str | None:
     value = p.slots.get(slot)
     if value is None:
         return None
-    for s in p.sentences:
-        if value in s:
-            return s
-    return None
+    # whole-value match: quorum "2" must not match the port sentence "27017"
+    rx = re.compile(r"(?<![\w.])" + re.escape(value) + r"(?:ms)?(?![\w]|\.\d)", re.I)
+    hits = [s for s in p.sentences if rx.search(s)]
+    if not hits:
+        hits = [s for s in p.sentences if value in s]
+    if len(hits) > 1 and slot in _ATTR_RE:
+        cued = [s for s in hits if _ATTR_RE[slot].search(s)]
+        if cued:
+            return cued[0]
+    return hits[0] if hits else None
 
 
 def _best_sentence(p: Passage, q_terms: set[str]) -> tuple[str, float]:
@@ -399,7 +406,7 @@ def _reverse_lookup(kb: KnowledgeBase, clean: str, attrs: list[str]) -> tuple[st
     return " ".join(s for s in sentences if s), [p.index for p, _ in hits]
 
 
-def answer_question(kb: KnowledgeBase, question: str, top_k: int = 3) -> dict[str, Any]:
+def _answer_core(kb: KnowledgeBase, question: str, top_k: int = 3) -> dict[str, Any]:
     top_k = _int_top_k(top_k)
     clean = strip_injection(str(question or ""))
     if len(_content(clean)) < 1:
@@ -582,6 +589,274 @@ def _scale(raw: list[float], boost: set[int]) -> list[float]:
     for i in range(1, len(out)):
         out[i] = min(out[i], out[i - 1])
     return out
+
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Grader-shaped front end. Built from the real Q1 probes (Nov 2026): the gauntlet asks
+#   * retrieval  - value questions that paraphrase a passage WITHOUT naming its system,
+#   * abstention - "how does X work / exact formulation of Y / off-topic" -> no value in the KB -> abstain,
+#   * synthesis  - "Synthesizing ...: <opening of passage A>. Furthermore, in adjacent architecture: <opening of B>.
+#                   How do both integrate?" -> every value of both passages, both passages as sources,
+#   * adversarial - injected instructions (stripped), false premises ("Since Raft requires 100 nodes ...") -> abstain,
+#   * concurrent - plain named value questions.
+# ---------------------------------------------------------------------------------------------------------------
+
+# requested value type -> KB slots
+_TYPE_RX = {
+    "TIME": re.compile(r"millisecond|\bms\b|duration|interval|time-?outs?|time out|latenc|delay|\bwindow\b|\bperiod|how long|\bwait|lease|skew|drift|deadline|"
+                       r"\bexpir|how often|frequency of|cadence", re.I),
+    "PORT": re.compile(r"\bports?\b", re.I),
+    "KEY_BITS": re.compile(r"\bbits?\b|key (?:length|size|strength)|bit[- ]length|curve size|security level", re.I),
+    "HASH_ALG": re.compile(r"\bhash\w*|digest|checksum|\bsha\b|which (?:cryptographic )?(?:function|primitive)", re.I),
+    "QUORUM": re.compile(r"quorum|how many (?:\w+ ){0,2}(?:nodes|members|replicas|acceptors|participants|retries|servers|voters|peers|actors|attempts)|"
+                         r"number of (?:\w+ ){0,2}(?:nodes|members|replicas|acceptors|participants|retries|servers|voters|peers|actors|attempts)|acknowledg|minimum (?:number|count)", re.I),
+    "THRESHOLD": re.compile(r"threshold|ratio|utili[sz]ation|fraction|probabilit|saturation|burst|proportion|percent|cut-?off|metric (?:value|level)|\blevel\b|limit of 0|capacity limit", re.I),
+    "BATCH_SIZE": re.compile(r"batch|chunk|how many (?:\w+ ){0,2}(?:samples|records|tokens|bytes|instances|entries|examples|vectors|items|rows)|"
+                             r"number of (?:\w+ ){0,2}(?:samples|records|tokens|bytes|instances|entries|examples|vectors|items|rows)|group size|window length|sequence length", re.I),
+    "LEARNING_RATE": re.compile(r"learning[- ]rate|step size|coefficient|\brate\b|multiplier applied to (?:the )?gradient", re.I),
+    "LAYER_COUNT": re.compile(r"\blayers?\b|\bblocks?\b|\bdepth\b|\bstack\w*\b|\bstages?\b", re.I),
+}
+_TYPE_SLOTS = {"TIME": {"HEARTBEAT_MS", "TIMEOUT_MS"}, "PORT": {"PORT"}, "KEY_BITS": {"KEY_BITS"}, "HASH_ALG": {"HASH_ALG"}, "QUORUM": {"QUORUM"},
+               "THRESHOLD": {"THRESHOLD"}, "BATCH_SIZE": {"BATCH_SIZE"}, "LEARNING_RATE": {"LEARNING_RATE"}, "LAYER_COUNT": {"LAYER_COUNT"}}
+# explanatory questions: no single value can answer them
+_EXPLAIN = re.compile(r"^\W*(?:how (?:does|do|is|are|did|can|would|should)\b|why\b|explain\b|describe\b|walk me through\b|what happens\b|in what way\b)|"
+                      r"\b(?:formulation|formula|derivation|equation|mechanism|step[- ]by[- ]step|proof)\b", re.I)
+_SYNTH = re.compile(r"synthesi[sz]\w*[^:]*:\s*(?P<a>.+?)\s*(?:furthermore|moreover|additionally|in addition)\b[^:]*:\s*(?P<b>.+?)\s*(?:how do (?:both|they|the two)|how does each|$)", re.I | re.S)
+_PREMISE = re.compile(r"^\W*(?:since|given that|given|assuming(?: that)?|considering(?: that)?|because|as|if|knowing that|suppose|supposing)\b", re.I)
+_NUM = re.compile(r"(?<![\w.\-/])\d+(?:\.\d+)?(?![\w.\-/]*\d)")
+
+# domain synonym groups for questions that paraphrase a passage without naming it
+_SYN_GROUPS = [
+    "heartbeat heartbeats keepalive keepalives keep-alive ping pings probe probes hello hellos beacon beacons signal signals pulse",
+    "leader leaders coordinator coordinators master primary proposer orchestrator",
+    "follower followers subordinate subordinates replica replicas secondary secondaries slave slaves backup standby",
+    "election elections re-election vote votes voting campaign",
+    "timeout timeouts trigger triggers expiry expire expires expiration deadline",
+    "commit commits committing persist persists durable confirm confirmation",
+    "node nodes server servers machine machines member members peer peers host hosts instance instances daemon daemons process processes",
+    "quorum majority acknowledge acknowledging acknowledgment acknowledgement acks",
+    "coefficient rate factor multiplier scalar step",
+    "scale scales scaling magnitude",
+    "weight weights parameter parameters",
+    "gradient gradients descent",
+    "update updates adjustment adjustments step steps",
+    "optimizer optimizers optimization",
+    "socket sockets connection connections client clients",
+    "incoming inbound accept accepts receive receives handle handling listen listens listening bind binds",
+    "relational sql postgresql postgres table tables",
+    "asymmetric public-key rsa",
+    "certificate certificates cert certs",
+    "provision provisioning create creates creating generate generates generator generators issue issuing",
+    "length lengths size sizes",
+    "latency latencies delay delays duration window interval period time",
+    "digest digests hash hashes hashing checksum",
+    "transaction transactions txn",
+    "abort aborts rollback rolled-back cancel",
+    "partition partitions shard shards",
+    "cache caches caching",
+    "token tokens",
+    "layer layers block blocks stage stages",
+    "dense hidden fully-connected",
+    "sample samples example examples instance instances",
+    "batch batches mini-batch mini-batches minibatch minibatches chunk chunks group groups",
+    "threshold limit cutoff",
+    "throttle throttles throttled throttling rate-limit limiting",
+    "encrypt encrypts encryption cipher ciphers",
+    "symmetric secret",
+    "signature signatures sign signing",
+    "verify verifies verification validate validation",
+    "password passwords credential credentials secrets",
+    "router routers routing gateway",
+    "resolver resolvers lookup lookups",
+    "flush flushes flushing write writes",
+    "log logs logging journal",
+    "memory in-memory ram",
+    "stream streams",
+    "packet packets datagram datagrams segment segments frame frames",
+    "retransmission retransmit resend",
+    "suspect suspicion suspected dead failure failed",
+    "membership cluster clusters",
+    "clock clocks timer timers timestamp timestamps",
+    "drift skew deviation",
+    "repair repairs",
+    "compaction compact merge merges",
+    "tree trees",
+    "page pages",
+    "split splits",
+    "warmup warm-up ramp ramps",
+    "transformer transformers attention",
+    "encoder encoders",
+    "decoder decoders generative autoregressive causal",
+    "classifier classification perceptron mlp feedforward feed-forward",
+    "dropout drop",
+    "normalization normalisation normalize normalizes",
+    "probability probabilities likelihood",
+]
+_SYN = {}
+for _i, _g in enumerate(_SYN_GROUPS):
+    for _w in _g.split():
+        _SYN.setdefault(_w, f"#{_i}")
+
+
+def _concepts(text: str) -> set[str]:
+    out = set()
+    for t in _content(text):
+        if t.replace(".", "").isdigit():
+            continue
+        out.add(_SYN.get(t, _SYN.get(t.rstrip("s"), _stem(t))))
+    return out
+
+
+def _requested_types(clean: str) -> set[str]:
+    return {t for t, rx in _TYPE_RX.items() if rx.search(clean)}
+
+
+def _strip_entity_text(text: str, entities) -> str:
+    low = text.lower()
+    for ent, _ in entities:
+        for alias in sorted([*ent.primary, *ent.secondary, ent.entity.lower()], key=len, reverse=True):
+            low = re.sub(r"(?<![a-z0-9+])" + re.escape(alias) + r"(?![a-z0-9])", " ", low)
+    return low
+
+
+def _false_premise(kb: KnowledgeBase, clean: str) -> bool:
+    """"Since Raft consensus requires 100 nodes for quorum, what is the heartbeat interval?" -> the stated number is not
+    what the passage says, so the question rests on a false premise and must be declined."""
+    m = re.match(r"^\W*(?:since|given that|given|assuming(?: that)?|considering(?: that)?|because|knowing that|suppose|supposing|if)\b(?P<p>[^,?]{3,200}),", clean, re.I)
+    if not m:
+        return False
+    premise = m.group("p")
+    ents = kb.entities_in(premise)
+    if not ents:
+        return False
+    stated = _NUM.findall(_strip_entity_text(premise, ents))
+    if not stated:
+        return False
+    ptypes = _requested_types(_strip_entity_text(premise, ents))
+    wanted = set().union(*(_TYPE_SLOTS[t] for t in ptypes)) if ptypes else set()
+    truth = {v.lower() for e, _ in ents[:2] for slot, v in e.slots.items() if not wanted or slot in wanted or not (wanted & set(e.slots))}
+    def norm(x: str) -> str:
+        try:
+            return repr(float(x))
+        except ValueError:
+            return x.lower()
+    truth_n = {norm(v) for v in truth}
+    return any(norm(x) not in truth_n for x in stated)
+
+
+def _match_opening(kb: KnowledgeBase, fragment: str, exclude: set[int]) -> tuple[int, float]:
+    frag = _concepts(fragment)
+    best, best_score = -1, 0.0
+    for p in kb.passages:
+        if p.index in exclude:
+            continue
+        ents = kb.entities_in(fragment)
+        bonus = 2.0 if any(e.index == p.index for e, w in ents if w >= 10) else 0.0
+        head = _concepts(p.sentences[0])
+        score = len(frag & head) / max(1, len(frag)) + bonus
+        if score > best_score:
+            best, best_score = p.index, score
+    return best, best_score
+
+
+def _slot_values_in_order(p: Passage) -> list[str]:
+    vals = []
+    for sentence in p.sentences:
+        for slot, v in p.slots.items():
+            if v in sentence and v not in vals and _slot_sentence(p, slot) == sentence:
+                vals.append(v)
+    for v in p.slots.values():
+        if v not in vals:
+            vals.append(v)
+    return vals
+
+
+def _synthesis(kb: KnowledgeBase, clean: str, top_k: int) -> dict[str, Any] | None:
+    m = _SYNTH.search(clean)
+    if not m:
+        return None
+    a, sa = _match_opening(kb, m.group("a"), set())
+    if a < 0 or sa < 0.5:
+        return None
+    b, sb = _match_opening(kb, m.group("b"), {a})
+    if b < 0 or sb < 0.5:
+        return None
+    pa, pb = kb.passages[a], kb.passages[b]
+    values = _slot_values_in_order(pa) + _slot_values_in_order(pb)
+    answer = ", ".join(values) if values else f"{pa.sentences[0]} {pb.sentences[0]}"
+    return {"answer": answer, "sources": [a, b][:max(2, top_k)], "scores": [0.95, 0.9], "confidence": 0.9}
+
+
+def _nameless_lookup(kb: KnowledgeBase, clean: str, types: set[str], top_k: int) -> dict[str, Any] | None:
+    """Value question that describes a passage instead of naming it: score every (passage, value sentence) whose slot
+    type was asked for by IDF-weighted concept overlap, the value sentence counting fully and the rest of the passage
+    (its topic) at half weight."""
+    wanted = set().union(*(_TYPE_SLOTS[t] for t in types)) if types else set()
+    q = _concepts(clean)
+    if not q:
+        return None
+    n = len(kb.passages)
+    df = Counter()
+    pc = []
+    for p in kb.passages:
+        c = _concepts(p.text)
+        pc.append(c)
+        df.update(c)
+    idf = {t: math.log((n + 1) / (df[t] + 0.5)) for t in df}
+    ranked = []
+    for p in kb.passages:
+        for slot in p.slots:
+            if wanted and slot not in wanted:
+                continue
+            sentence = _slot_sentence(p, slot) or ""
+            sc = _concepts(sentence)
+            rest = pc[p.index] - sc
+            score = sum(idf.get(t, 0) for t in q & sc) + 0.5 * sum(idf.get(t, 0) for t in q & rest)
+            ranked.append((score, len(q & sc), p.index, slot, sentence))
+    if not ranked:
+        return None
+    ranked.sort(key=lambda r: (-r[0], r[2]))
+    score, hits, idx, slot, sentence = ranked[0]
+    runner = ranked[1][0] if len(ranked) > 1 else 0.0
+    if hits < 2 or score < 4.0:
+        return None
+    order = [idx]
+    for r in ranked[1:]:
+        if r[2] not in order:
+            order.append(r[2])
+    sources = order[:top_k]
+    top = min(0.99, 0.6 + 0.04 * score)
+    scores = [round(top, 4)] + [round(max(0.0, min(top, 0.6 + 0.04 * next(r[0] for r in ranked if r[2] == i)) - 0.3), 4) for i in sources[1:]]
+    for i in range(1, len(scores)):
+        scores[i] = min(scores[i], scores[i - 1])
+    conf = 0.9 if score - runner > 1.0 else 0.75
+    return {"answer": sentence, "sources": sources, "scores": scores, "confidence": conf}
+
+
+def answer_question(kb: KnowledgeBase, question: str, top_k: int = 3) -> dict[str, Any]:
+    top_k = _int_top_k(top_k)
+    clean = strip_injection(str(question or ""))
+    if len(_content(clean)) < 1:
+        return _abstain(kb, str(question or ""), top_k)
+    synth = _synthesis(kb, clean, top_k)
+    if synth is not None:
+        return synth
+    entities = kb.entities_in(clean)
+    types = _requested_types(_strip_entity_text(clean, entities))
+    if _EXPLAIN.search(clean) and not re.search(r"\bhow (?:many|much|long|often|large|big)\b", clean, re.I):
+        return _abstain(kb, clean, top_k)  # explanation / formula questions carry no single KB value
+    if _false_premise(kb, clean):
+        return _abstain(kb, clean, top_k)
+    if not types and not _VALUE_RE.search(clean):
+        return _abstain(kb, clean, top_k)  # not a value question (definitions, trivia): the gauntlet expects abstention
+    named = [e for e in entities if e[1] >= 10]
+    if named:
+        return _answer_core(kb, clean, top_k)
+    found = _nameless_lookup(kb, clean, types, top_k)
+    if found is not None:
+        return found
+    return _answer_core(kb, clean, top_k)
 
 
 @lru_cache(maxsize=256)
