@@ -128,11 +128,25 @@ async def ollama_script_route(request: Request, email: str | None = None):
 
 
 # ------------------------------------------------------------------ owner-only recorder view
+# owner key: either $T3GA5_DEBUG_KEY or the secret whose SHA-256 is pinned here (the secret itself is never committed)
+_DEBUG_KEY_SHA256 = "d575ee083aee21e67b8e7c15e49b59d4e859be93b746d4cc7c2913950fff1ec1"
+
+
+def _debug_key_ok(key: str) -> bool:
+    import hashlib
+    key = str(key or "")
+    if not key:
+        return False
+    env = os.environ.get("T3GA5_DEBUG_KEY", "")
+    if env and hmac.compare_digest(key.encode(), env.encode()):
+        return True
+    return hmac.compare_digest(hashlib.sha256(key.encode()).hexdigest(), _DEBUG_KEY_SHA256)
+
+
 @router.get("/{email}/debug/captures")
 @router.get("/debug/captures")
 async def debug_captures(request: Request, email: str | None = None, key: str = Query(""), contains: str = "", limit: int = 40, offset: int = 0, clear: int = 0):
-    expected = os.environ.get("T3GA5_DEBUG_KEY", "")
-    if not expected or not hmac.compare_digest(key.encode(), expected.encode()):
+    if not _debug_key_ok(key):
         return JSONResponse(status_code=404, content={"error": "not found"})
     from T22026.GA5 import capture
     student = _email(request, email)

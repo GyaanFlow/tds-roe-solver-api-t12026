@@ -14,8 +14,7 @@ app = FastAPI(title="T3-2026 GA5 API Hub", version="1.0.0")
 
 class _Recorder:
     """Pure-ASGI tee of the two graded POST routes into T22026/GA5/capture.py (private, redacted,
-    bounded). Read it with GET /t3ga5/{email}/debug/captures?key=$T3GA5_DEBUG_KEY. A no-op unless that
-    variable is set, so nothing is stored on hosts that do not opt in."""
+    bounded, temp dir only). Read it with GET /t3ga5/{email}/debug/captures?key=<owner key>. Turn off with T3GA5_CAPTURE=0."""
 
     def __init__(self, app):  # Starlette passes the wrapped app as app=...
         self.inner = app
@@ -23,7 +22,7 @@ class _Recorder:
     async def __call__(self, scope, receive, send):
         import os
         path = scope.get("path", "")
-        if scope.get("type") != "http" or not os.environ.get("T3GA5_DEBUG_KEY") or not (path.rstrip("/").endswith(("/query", "/harness"))):
+        if scope.get("type") != "http" or os.environ.get("T3GA5_CAPTURE", "1") == "0" or not (path.rstrip("/").endswith(("/query", "/harness"))):
             return await self.inner(scope, receive, send)
         from T22026.GA5 import capture
         started = time.time()
