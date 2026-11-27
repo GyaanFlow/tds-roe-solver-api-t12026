@@ -52,7 +52,10 @@ class MultiTenantASGIMiddleware:
                 ga_version = match.group(1)
                 email = match.group(2).strip()
                 rest = match.group(3) or "/"
-                
+                if ga_version == "t3ga5":
+                    # a base URL saved with a trailing slash makes graders call ".../{email}//query"
+                    rest = re.sub(r"/{2,}", "/", rest)
+
                 parts = [p for p in rest.split("/") if p]
                 token = None
                 known_prefixes = {
