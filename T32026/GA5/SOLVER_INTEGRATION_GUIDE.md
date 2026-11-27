@@ -10,6 +10,7 @@ Exam source: `exam-tds-2026-09-ga5.js` (snapshot in this folder). All weights be
 | Q2 | `q-ollama-faiss-rank-correlation-server` | 2 | local compute (real Ollama models), paste a 10x7 matrix | script + dataset from the hub |
 | Q3 | `q-ball-tracker-server` | 2 | binary PNG frames from the student's signed URL | **not built yet** (needs a real frames file) |
 | Q4 | `q-harness-safety-router-server` | 1 | live server, grader calls the exact POST route | submit `{ORIGIN}/t3ga5/{email}/harness` |
+| Q5 | `q-time-use-review-server` | 2 | **manual** poster review (added to the exam in Nov 2026) | nothing to serve: student pastes the signed receipt |
 
 `{email}` is the trimmed, lower-cased exam email, URL-encoded (`@` becomes `%40`): the exam seeds Q1 and Q2 with exactly that
 form. Use **Render** as the origin (`https://tds-roe-solver-api-t12026.onrender.com`). The free tier sleeps, so call
@@ -28,14 +29,38 @@ export function t3ga5Url(email, suffix = '') {
   return `${T3_API_ORIGIN}/t3ga5/${encodeURIComponent(norm)}${suffix}`;
 }
 
-export async function wakeApi() {
-  for (let i = 0; i < 6; i++) {            // Render can take ~30-50 s to wake
-    try { const r = await fetch(`${T3_API_ORIGIN}/t3ga5/health`, { cache: 'no-store' }); if (r.ok) return true; } catch {}
-    await new Promise(res => setTimeout(res, 8000));
+// Render's free tier sleeps; the first request after sleep takes ~30-60 s, far over the grader's 8 s limit.
+// Call this before showing the Q1/Q4 answers and tell the student to press Check only after it returns true.
+export async function wakeApi(onStatus = () => {}) {
+  for (let i = 1; i <= 8; i++) {
+    onStatus(`Waking the GA5 server (attempt ${i}/8)…`);
+    try {
+      const r = await fetch(`${T3_API_ORIGIN}/t3ga5/health`, { cache: 'no-store', signal: AbortSignal.timeout(15000) });
+      if (r.ok && (await r.json()).ok === true) { onStatus('GA5 server is awake.'); return true; }
+    } catch { /* still asleep or network error: retry */ }
+    await new Promise(res => setTimeout(res, 5000));
   }
+  onStatus('GA5 server did not wake. Open the health link manually, then retry.');
   return false;
 }
 ```
+
+`GET /t3ga5/health` returns `{"ok": true, ...}` with CORS `*`, so it can be called straight from the static page.
+
+### Module list (`ga5/index.js`)
+
+```js
+import * as q1 from './q01-rag-colosseum.js';
+import * as q2 from './q02-ollama-faiss.js';
+import * as q3 from './q03-ball-tracker.js';      // placeholder until Q3 is built
+import * as q4 from './q04-harness-safety-router.js';
+import * as q5 from './q05-time-use-review.js';
+export const questions = [q1, q2, q3, q4, q5];
+```
+
+Each module exports `id`, `title` and `async solve(email)`, which returns the usual result object
+(`{type: 'solved' | 'guide' | 'manual', answer?, answerDisplay}`). Use `window.tdsPatchAnswer(id, answer)` to fill a field,
+the same as T3 GA1. Run `await wakeApi(...)` once before Q1 and Q4.
 
 ## 2. Q1 RAG Colosseum: `q01-rag-colosseum.js`
 
@@ -107,6 +132,33 @@ documents, Spearman rho) without needing FAISS or SciPy; its rank and rho math i
 Not implemented yet. The exam serves binary frames at `/questionData?...&questionId=q-ball-tracker-server` (header: fps,
 frame count, three target frame numbers, then length-prefixed PNG frames; the student reports the final number on their ball and
 the ball centre at the three target frames). It needs the student's own frames file to build and test a tracker.
+Until then, register a placeholder:
+
+```js
+export const id = 'q-ball-tracker-server';
+export const title = 'Q3: Track the red ball';
+export async function solve() {
+  return { type: 'manual', answerDisplay: '### Q3: Track the red ball\nNot automated yet. Answer format: `number; x,y; x,y; x,y`.' };
+}
+```
+
+## 5b. Q5 Time Use poster review: `q05-time-use-review.js` (manual)
+
+This one has no API. The student opens the review link inside Q5 on the exam page, compares at least eight poster pairs
+(choose A, B or "about equal", with a short reason), then copies the **signed review receipt** and pastes it into the Q5 field.
+Marks reward taking part, not agreeing with others. The solver should only show instructions and never generate or alter the receipt.
+
+```js
+export const id = 'q-time-use-review-server';
+export const title = 'Q5: Time Use Charts: which data story would you share?';
+export async function solve() {
+  return { type: 'manual', answerDisplay: [
+    '### Q5: Poster review (manual)',
+    '1. Open the review link in Q5 on the exam page.',
+    '2. Compare at least 8 poster pairs, each with a short reason.',
+    '3. Copy the signed receipt and paste it into the Q5 field, then Check and Save.'].join('\n') };
+}
+```
 
 ## 6. Verification
 
@@ -134,7 +186,9 @@ returns 404. Render's free tier wipes the recording on every restart, so read it
 
 ## Common mistakes
 
-- Appending `/query` to the Q1 answer (the grader adds it itself).
+- Appending `/query` to the Q1 answer (the grader adds it itself). A trailing slash (`…/t3ga5/{email}/`) is harmless: the hub
+  collapses `//query` since commit 5a1d8c0.
+- Using up checks: each Check or Save counts against the exam's limited checks per time window. Keep one for Save.
 - Submitting Q4 without the `/harness` suffix.
 - Not encoding `@` in the email, or using a mixed-case email (the exam lower-cases it).
 - Pressing Check while Render is asleep: the Q1 gauntlet has an 8-second limit per request.
