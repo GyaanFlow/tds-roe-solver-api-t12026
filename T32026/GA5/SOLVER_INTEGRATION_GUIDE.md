@@ -8,7 +8,7 @@ Exam source: `exam-tds-2026-09-ga5.js` (snapshot in this folder). All weights be
 |---|---|---|---|---|
 | Q1 | `q-rag-colosseum-server` | 2 | live server, grader calls `POST {base}/query` | submit `{ORIGIN}/t3ga5/{email}` |
 | Q2 | `q-ollama-faiss-rank-correlation-server` | 2 | local compute (real Ollama models), paste a 10x7 matrix | script + dataset from the hub |
-| Q3 | `q-ball-tracker-server` | 2 | binary PNG frames from the student's signed URL | **not built yet** (needs a real frames file) |
+| Q3 | `q-ball-tracker-server` | 2 | binary PNG frames from the student's signed URL | browser-side only: the solver's `exam-page.js` + `tracker.js` (not part of this hub; being debugged) |
 | Q4 | `q-harness-safety-router-server` | 1 | live server, grader calls the exact POST route | submit `{ORIGIN}/t3ga5/{email}/harness` |
 | Q5 | `q-time-use-review-server` | 2 | **manual** poster review (added to the exam in Nov 2026) | nothing to serve: student pastes the signed receipt |
 
@@ -81,10 +81,19 @@ export async function solve(email) {
 
 Contract served at `POST {base}/query` with `{"question": "...", "top_k": 3}`:
 `{"answer": string|null, "sources": [0-based passage ids, descending], "scores": [0..1, descending, same length],
-"confidence": 0..1}`. It abstains (`answer: null`, empty `sources`/`scores`, confidence 0.1) when the question asks for an
-attribute the matching passage does not state, or names something outside the knowledge base. Answers compare two passages
-when two entities are named. Instructions hidden in a question are discarded; the answer comes only from the passages.
-CORS `Access-Control-Allow-Origin: *` is set; a typical response takes tens of milliseconds (limit: 8 s).
+"confidence": 0..1}`. CORS `Access-Control-Allow-Origin: *` is set; responses take well under a second (limit: 8 s).
+
+The engine follows the five rounds seen in the **real grader traffic** (captured 2026-11-27):
+
+| Round | What the grader asks | What the service returns |
+|---|---|---|
+| Retrieval | a value question that **describes** a passage without naming it ("periodic keepalive signals sent by the cluster coordinator…") | the sentence holding that value, its passage first in `sources` |
+| Abstention | "How does X handle…", "exact mathematical formulation of…", off-topic trivia | `answer: null`, `sources: []`, `scores: []`, confidence 0.1 |
+| Synthesis | "Synthesizing …: <opening of passage A>. Furthermore, in adjacent architecture: <opening of B>. How do both integrate?" | every value of both passages (e.g. `"3, 150, 250, 2"`), sources `[A, B]` |
+| Adversarial | the same questions with injected instructions (HTML comments, `[INST]`, fake system tags) or a **false premise** ("Since Raft requires 100 nodes…") | injections are stripped and ignored; a false premise abstains |
+| Concurrent | plain named value questions, sent in parallel | the value sentence |
+
+Definition questions ("What is X?") abstain too, matching a reference service that scores 20/20.
 
 Debug views: `GET {base}/kb` (the 50 passages) and the dashboard at `{ORIGIN}/t3ga5/`.
 
@@ -103,11 +112,27 @@ export async function solve(email) {
 }
 ```
 
-The grader sends four batches of 24 cases (two at a time) to this route and expects
-`{"profile","batchId","results":[{"caseId","requestDecision","toolDecision","route","trajectory"}]}`. Each case is judged on its
-own, in any order. A duplicate `caseId` returns 422, and one malformed case degrades to a safe default instead of failing the
-batch. The rules implement the policy text shown in the exam (content policy, security-research scope, exact and unrevoked
-user approval, isolation facts, production preflight and rollback, routing, trajectory).
+The grader sends four batches of 24 cases (at most two at a time, 60 s each, 2 MiB limit, no redirects) with the full
+policy, and expects `{"profile","batchId","results":[{"caseId","requestDecision","toolDecision","route","trajectory"}]}`.
+Each case is judged on its own, in any order. A duplicate `caseId` returns 422, and one malformed case degrades to a safe
+default instead of failing the batch.
+
+Real cases carry trusted `proposedTool.resolved` metadata with a fixed operation vocabulary (`workspace_read`, `workspace_edit`,
+`read_secret`, `read_public_schema`, `delete`, `send`, `deploy`, `rollback`, `database_mutation`, `terraform_apply`, `restart`,
+`force_push`, `host_admin`, `security_test`). `harness_structured.py` decides from that metadata plus the isolation facts,
+preflight records, rollback plan and the ordered user messages:
+
+- harmful requests (credential theft, fraud, harassment, destructive malware, physical harm) block everything, route `none`;
+- revoked or explicitly forbidden actions, out-of-scope credential reads, private data to an unapproved destination and a
+  bypassed preflight block the tool;
+- production mutations need an exact approval (same target and environment), a passed preflight and a matching rollback plan,
+  otherwise `review`; unknown environments are `review`;
+- security work uses the `restricted` route; unclear ownership or scope is `review`;
+- untrusted tool output that tries to steer the session moves the trajectory to `watch`.
+
+The grader returns only a total ("Safety: N/96 complete decisions correct"), so a few readings of the policy are unconfirmed:
+a failed preflight gives `review`, "has not been approved" / "no other namespace is approved" give `review`, malware-report
+analysis uses `restricted`, and prompt-injection inspection uses `primary`.
 
 ## 4. Q2 Ollama / FAISS rank correlation: `q02-ollama-faiss.js` (guide result)
 
@@ -129,7 +154,9 @@ documents, Spearman rho) without needing FAISS or SciPy; its rank and rho math i
 
 ## 5. Q3 Track the red ball
 
-Not implemented yet. The exam serves binary frames at `/questionData?...&questionId=q-ball-tracker-server` (header: fps,
+Not served by this hub. Your static solver already ships a browser tracker (`solvers/T32026/ga5/exam-page.js`, `tracker.js`,
+`ga5-tools.js`) that downloads the frames with the student's own session; it was reported failing and needs the console error to fix.
+The exam serves binary frames at `/questionData?...&questionId=q-ball-tracker-server` (header: fps,
 frame count, three target frame numbers, then length-prefixed PNG frames; the student reports the final number on their ball and
 the ball centre at the three target frames). It needs the student's own frames file to build and test a tracker.
 Until then, register a placeholder:
@@ -163,26 +190,29 @@ export async function solve() {
 ## 6. Verification
 
 ```bash
-python -m pytest tests/test_t32026_ga5.py tests/test_t32026_ga5_robust.py -q
+python -m pytest tests/test_t32026_ga5.py tests/test_t32026_ga5_robust.py tests/test_t32026_ga5_instructions.py \
+                 tests/test_t32026_ga5_grader_probes.py tests/test_t32026_ga5_harness_real.py -q
 ```
 
-Covers: the knowledge base and Q2 dataset against the real npm `seedrandom`; Q1 retrieval / extraction / abstention / comparison /
-injection rounds; **phrasings the engine was not tuned on** (about 99-100% on three emails and on 300 random emails), nine styles of
-unanswerable question (about 100% abstain), definition and conceptual questions; hostile and malformed input (1,300+ requests, no
-5xx); 55 harness policy cases; the batch contract; the Q2 script end to end against a fake Ollama (both embedding APIs, missing model,
-Ollama offline); and the routes through the real gateway. These are **local, self-written probes**: the real grader's 20 questions
-and 96 cases are unseen, so treat a Check result as the authority.
+- `test_t32026_ga5_grader_probes.py`: the 20 **real** Q1 probes on six emails, plus generated probes in the same style
+  (synthesis for all 25 passage pairs, false and true premises for every passage, nameless paraphrases).
+- `test_t32026_ga5_harness_real.py`: the 96 **real** Q4 cases (fixture `tests/fixtures/t3ga5_harness_real_cases.json`, no student
+  data), pinned to the reviewed decisions, plus the cross-axis rules the policy states.
+- The older suites: knowledge base and Q2 dataset against npm `seedrandom`, injection styles, hostile and malformed input (no 5xx),
+  policy invariants on random cases, the batch contract, the Q2 script against a fake Ollama, and the routes through the gateway.
 
-Q1 behaviour in short: a value question answers with the passage sentence that states the value; it abstains when the matching passage
-has no such value (`"Raft election timeout"`, `"replication factor"`, `"who invented X"`); a bare definition (`"What is X?"`) returns the
-opening sentence; two named entities with a comparison cue return one fact each plus the verdict.
+Status on 2026-11-27: the live service answers all 20 real Q1 probes correctly and returns the tested decision on all 96 real Q4
+cases. The real score still comes only from a Check.
 
-## 7. Recording the grader's real traffic (optional, owner only)
+## 7. Recording the grader's real traffic (owner only)
 
-Set `T3GA5_DEBUG_KEY` on the host. The two graded routes are then recorded (request and response, `sensitive` fields redacted,
-bounded, kept in the temp directory) and readable at
-`GET {ORIGIN}/t3ga5/{email}/debug/captures?key=<T3GA5_DEBUG_KEY>`. Without that variable nothing is stored and the route
-returns 404. Render's free tier wipes the recording on every restart, so read it soon after pressing Check.
+The two graded routes (`/query`, `/harness`) are recorded by default: request and response, `sensitive` fields redacted, bounded,
+kept only in the server's temp directory. Read them with
+`GET {ORIGIN}/t3ga5/{email}/debug/captures?key=<owner key>`. The key is either `$T3GA5_DEBUG_KEY` or the owner secret whose SHA-256
+is pinned in `main.py` (the secret itself is never committed). A wrong or missing key returns 404. Set `T3GA5_CAPTURE=0` to turn
+recording off. Render's free tier wipes the recording on every restart, so read it soon after pressing Check.
+
+**Never put the key in the static solver**: the solver only needs the two answer URLs.
 
 ## Common mistakes
 

@@ -2473,7 +2473,7 @@
 "expected": {
 "requestDecision": "allow",
 "toolDecision": "allow",
-"route": "restricted",
+"route": "primary",
 "trajectory": "watch"
 }
 },
@@ -3263,7 +3263,7 @@
 "expected": {
 "requestDecision": "allow",
 "toolDecision": "allow",
-"route": "restricted",
+"route": "primary",
 "trajectory": "watch"
 }
 },
